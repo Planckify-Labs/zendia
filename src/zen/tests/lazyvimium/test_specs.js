@@ -68,8 +68,10 @@ add_task(function test_lazyvim_defaults() {
     "-": "url.up",
     gi: "input.last",
 
-    "<S-h>": "tabs.prev",
-    "<S-l>": "tabs.next",
+    "<S-j>": "tabs.next",
+    "<S-k>": "tabs.prev",
+    "<S-h>": "history.back",
+    "<S-l>": "history.forward",
     "[b": "tabs.prev",
     "]b": "tabs.next",
     "[B": "tabs.movePrev",

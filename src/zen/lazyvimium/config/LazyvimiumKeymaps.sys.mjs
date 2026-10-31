@@ -34,8 +34,9 @@ export const LazyvimiumKeymapsSpec = {
     ["n", "<C-f>", "scroll.pageDown"],
     ["n", "<C-b>", "scroll.pageUp"],
 
-    ["n", "<S-h>", "tabs.prev"],
-    ["n", "<S-l>", "tabs.next"],
+    // Tabs sit in a vertical list, so J and K move down and up it.
+    ["n", "<S-j>", "tabs.next"],
+    ["n", "<S-k>", "tabs.prev"],
     ["n", "[b", "tabs.prev"],
     ["n", "]b", "tabs.next"],
     ["n", "[B", "tabs.movePrev"],
@@ -59,6 +60,8 @@ export const LazyvimiumKeymapsSpec = {
     ["n", "u", "tabs.undoClose"],
     ["n", "<leader>fn", "tabs.new"],
 
+    ["n", "<S-h>", "history.back"],
+    ["n", "<S-l>", "history.forward"],
     ["n", "<C-o>", "history.back"],
     ["n", "<C-i>", "history.forward"],
     ["n", "r", "page.reload"],

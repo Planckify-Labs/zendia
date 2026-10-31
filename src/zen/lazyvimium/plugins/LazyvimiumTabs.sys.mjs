@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-// Vim buffers are browser tabs: <S-h>/<S-l>, <leader>b*.
+// Vim buffers are browser tabs: <S-j>/<S-k>, <leader>b*.
 
 const lazy = {};
 

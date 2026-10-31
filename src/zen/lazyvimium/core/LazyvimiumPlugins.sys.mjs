@@ -10,7 +10,7 @@
 //     actions: (plugin, opts) => ({
 //       "tabs.next": { desc: "Next Tab", run: ctx => ... },
 //     }),
-//     keys: [["n", "<S-l>", "tabs.next", { desc: "Next Tab" }]],
+//     keys: [["n", "<S-j>", "tabs.next", { desc: "Next Tab" }]],
 //     groups: [["n", "<leader>b", "buffer"]],
 //   }
 //

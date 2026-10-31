@@ -137,7 +137,7 @@ const RESERVED_TOKENS = new Set(
  *   {
  *     "extras": ["ublock"],
  *     "plugins": [{ "name": "scroll", "opts": { "step": 80 } }],
- *     "keymaps": [["n", "J", "tabs.next"], ["n", "<S-l>", false]]
+ *     "keymaps": [["n", "<C-n>", "tabs.next"], ["n", "<S-l>", false]]
  *   }
  *
  * @param {*} data
