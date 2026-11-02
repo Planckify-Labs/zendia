@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import { LazyvimiumCaptcha } from "resource:///modules/lazyvimium/core/LazyvimiumCaptcha.sys.mjs";
 import { LazyvimiumControls } from "resource:///modules/lazyvimium/core/LazyvimiumControls.sys.mjs";
 import { LazyvimiumDom } from "resource:///modules/lazyvimium/core/LazyvimiumDom.sys.mjs";
 import {
@@ -11,6 +12,13 @@ import {
 import { LazyvimiumPageText } from "resource:///modules/lazyvimium/core/LazyvimiumPageText.sys.mjs";
 import { LazyvimiumKeys } from "resource:///modules/lazyvimium/core/LazyvimiumKeys.sys.mjs";
 import { hintLabels } from "resource:///modules/lazyvimium/ui/LazyvimiumHints.sys.mjs";
+import { LABELS } from "resource:///modules/lazyvimium/ui/LazyvimiumPicker.sys.mjs";
+import {
+  askFrame,
+  captchaAreas,
+  PointerPad,
+  plainRect,
+} from "resource:///modules/lazyvimium/plugins/LazyvimiumPointerContent.sys.mjs";
 import { reveal } from "resource:///modules/lazyvimium/plugins/LazyvimiumVisualContent.sys.mjs";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -21,6 +29,14 @@ const PARAGRAPH_BACKGROUND = "#3d59a1";
 const LABEL_TEXT = "#eef5ff";
 const MATCH_BACKGROUND = "rgba(255, 199, 119, 0.4)";
 const TARGET_OUTLINE = "rgba(162, 87, 114, 0.55)";
+
+// A CAPTCHA challenge stays open between clicks. It is read again this long
+// after one, for the images that change, and then at this pace, for a new
+// challenge after a failed check; it is over when it has been gone for
+// VACANT_POLLS reads in a row.
+const CHALLENGE_SETTLE_MS = 350;
+const CHALLENGE_POLL_MS = 900;
+const VACANT_POLLS = 3;
 
 const MAX_SEGMENTS = 3000;
 const MAX_MATCHES = 500;
@@ -55,34 +71,24 @@ function center(window) {
  * @property {(options: {newTab: boolean}) => void} pick Goes to the target.
  */
 
-// A frame that does not answer is left out rather than waited for.
-const FRAME_TIMEOUT_MS = 1000;
-
 // The controls this frame last offered, by the ids a press asks for.
 const gPressable = new WeakMap();
 
-function plainRect(left, top, width, height) {
-  return {
-    left,
-    top,
-    width,
-    height,
-    right: left + width,
-    bottom: top + height,
-  };
-}
+// A control keeps its id for as long as it lives, wherever the others move
+// to: a label that is tied to the id would otherwise change hands when a
+// control appears before it.
+const gIds = new WeakMap();
+let gNextId = 0;
 
-// A message to another frame of the page, through the parent, which only
-// passes it to frames of this page. Null if it does not answer.
-function askFrame(actor, window, bcId, name, data) {
-  return Promise.race([
-    actor
-      .sendQuery("Lazyvimium:FrameQuery", { bcId, name, data })
-      .catch(() => null),
-    new Promise(resolve =>
-      window.setTimeout(() => resolve(null), FRAME_TIMEOUT_MS)
-    ),
-  ]);
+const WIDGETS = LazyvimiumCaptcha.WIDGETS;
+
+function idOf(element) {
+  let id = gIds.get(element);
+  if (!id) {
+    id = `c${gNextId++}`;
+    gIds.set(element, id);
+  }
+  return id;
 }
 
 // What a frame sends is not to be trusted: it may be another site's.
@@ -117,6 +123,13 @@ async function collectFrames(actor, window) {
         .map(item => ({
           id: item.id,
           text: item.text.slice(0, 200),
+          // From the address of the frame it is in, or of one above it.
+          challenge:
+            LazyvimiumCaptcha.isChallenge(frame.src) || item.challenge === true,
+          captcha:
+            LazyvimiumCaptcha.nameOf(frame.src) !== null ||
+            item.captcha === true,
+          drag: item.drag === true,
           frame: [frame.browsingContext.id, ...item.frame],
           rect: plainRect(
             item.rect.left + left,
@@ -149,14 +162,17 @@ async function collectFrames(actor, window) {
  */
 export async function collectControls(actor, window) {
   const pressable = new Map();
-  const own = LazyvimiumControls.find(window).map((element, i) => {
-    const id = `c${i}`;
+  const own = LazyvimiumControls.find(window).map(element => {
+    const id = idOf(element);
     pressable.set(id, new WeakRef(element));
     const { left, top, width, height } = element.getBoundingClientRect();
     return {
       id,
       text: LazyvimiumControls.textOf(element),
       rect: { left, top, width, height },
+      // Part of a CAPTCHA the page draws itself, and what to drag.
+      captcha: !!element.closest(LazyvimiumCaptcha.WIDGETS),
+      drag: LazyvimiumControls.isDraggable(window, element),
       frame: [],
     };
   });
@@ -170,6 +186,8 @@ export async function collectControls(actor, window) {
  * @param {object} actor
  * @param {Window} window
  * @param {{frame: number[], id: string, newTab: boolean}} target
+ * @returns {Promise<boolean|null>} Whether it was a field, which took the
+ *   focus rather than a press. Null if its frame did not answer.
  */
 export async function pressControl(actor, window, target) {
   const { frame, id, newTab } = target ?? {};
@@ -178,62 +196,98 @@ export async function pressControl(actor, window, target) {
     !frame.every(each => Number.isSafeInteger(each)) ||
     typeof id != "string"
   ) {
-    return;
+    return false;
   }
   if (frame.length) {
-    await askFrame(actor, window, frame[0], "Lazyvimium:PressControl", {
+    return askFrame(actor, window, frame[0], "Lazyvimium:PressControl", {
       frame: frame.slice(1),
       id,
       newTab: !!newTab,
     });
-    return;
   }
   const element = gPressable.get(window)?.get(id)?.deref();
   if (element?.isConnected) {
-    pressElement(window, element, { newTab: !!newTab });
+    return pressElement(window, element, { newTab: !!newTab });
   }
+  return false;
 }
 
-async function controlsSource(window, actor) {
+// A picture to point at, as the one of an icon CAPTCHA, is a control only
+// because it is listened to: a click on its middle is never what is asked.
+function isPicture(rect) {
+  return rect.width >= 150 && rect.height >= 100;
+}
+
+// The controls of the page, or with `scope`:
+//   "challenge" just those of a CAPTCHA that asks for clicks,
+//   "captcha" those of any part of a CAPTCHA, a checkbox and a badge too.
+async function controlsSource(window, actor, { scope = "all" } = {}) {
   const from = center(window);
-  const local = LazyvimiumControls.find(window).map(element => ({
-    key: element,
-    text: LazyvimiumControls.textOf(element),
-    rect: element.getBoundingClientRect(),
-    pick: options => pressElement(window, element, options),
-  }));
-  const remote = (await collectFrames(actor, window)).map(item => ({
-    key: `${item.frame.join(".")}:${item.id}`,
-    text: item.text,
-    rect: item.rect,
-    pick: ({ newTab }) =>
-      askFrame(actor, window, item.frame[0], "Lazyvimium:PressControl", {
-        frame: item.frame.slice(1),
-        id: item.id,
-        newTab,
-      }),
-  }));
+  // What is part of a CAPTCHA stays labeled between picks, can be held and
+  // dragged, and, if it is a picture, is clicked at a point of it.
+  const local = LazyvimiumControls.find(window).flatMap(element => {
+    const inCaptcha = !!element.closest(WIDGETS);
+    if (scope != "all" && !inCaptcha) {
+      return [];
+    }
+    const rect = element.getBoundingClientRect();
+    return [
+      {
+        key: element,
+        text: LazyvimiumControls.textOf(element),
+        rect,
+        challenge: inCaptcha,
+        drag: inCaptcha && LazyvimiumControls.isDraggable(window, element),
+        picture: inCaptcha && isPicture(rect),
+        pick: options => pressElement(window, element, options),
+      },
+    ];
+  });
+  const remote = (await collectFrames(actor, window))
+    .filter(
+      item =>
+        scope == "all" || (scope == "challenge" ? item.challenge : item.captcha)
+    )
+    .map(item => ({
+      key: `${item.frame.join(".")}:${item.id}`,
+      text: item.text,
+      rect: item.rect,
+      challenge: scope == "captcha" || item.challenge,
+      drag: item.drag && (item.challenge || item.captcha),
+      picture: (item.challenge || item.captcha) && isPicture(item.rect),
+      pick: ({ newTab }) =>
+        askFrame(actor, window, item.frame[0], "Lazyvimium:PressControl", {
+          frame: item.frame.slice(1),
+          id: item.id,
+          newTab,
+        }),
+    }));
   const items = [...local, ...remote];
   return {
     isText: false,
     // With nothing typed every control is a target, to be seen but not yet
     // labeled.
     matches(pattern) {
-      return items.flatMap(({ key, text, rect, pick }) => {
-        const found = findMatches(text, pattern);
-        if (pattern && !found.length) {
-          return [];
+      return items.flatMap(
+        ({ key, text, rect, challenge, drag, picture, pick }) => {
+          const found = findMatches(text, pattern);
+          if (pattern && !found.length) {
+            return [];
+          }
+          return [
+            {
+              id: key,
+              rect,
+              nexts: found.map(match => match.next),
+              distance: distance(rect, from),
+              challenge,
+              drag,
+              picture,
+              pick,
+            },
+          ];
         }
-        return [
-          {
-            id: key,
-            rect,
-            nexts: found.map(match => match.next),
-            distance: distance(rect, from),
-            pick,
-          },
-        ];
-      });
+      );
     },
   };
 }
@@ -441,10 +495,11 @@ function moveCaret(window, actor, node, offset, extend = true) {
   reveal(window);
 }
 
+// Whether it was a field, which takes the focus rather than a press.
 function pressElement(window, element, { newTab }) {
   if (LazyvimiumDom.isEditable(element)) {
     element.focus();
-    return;
+    return true;
   }
   const rect = element.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
@@ -460,6 +515,7 @@ function pressElement(window, element, { newTab }) {
       modifiers,
     });
   }
+  return false;
 }
 
 /**
@@ -467,6 +523,10 @@ function pressElement(window, element, { newTab }) {
  * contain them and labels what is left; typing a label (with Shift: in a new
  * tab) goes there. In `hints` mode every target is labeled at once and keys
  * only pick a label, as in the browser's own pickers.
+ *
+ * With `challengeSource` (hints mode), picking a control of a CAPTCHA
+ * challenge does not end the jump: the labels stay, on the challenge alone,
+ * for as many picks as it takes, until <Esc> or until the challenge is gone.
  */
 class JumpSession {
   #window;
@@ -482,12 +542,46 @@ class JumpSession {
   #done = false;
   #redraw = 0;
   #generation = 0;
+  #challengeSource;
+  #actor;
+  // Whether a pick in a challenge has made this a jump that stays.
+  #staying = false;
+  // Until the labels follow the challenge, the keys wait: they would pick
+  // from labels that are about to change.
+  #switching = false;
+  #pollTimer = 0;
+  #vacant = 0;
+  #signature = "";
+  // The label of each target of a jump that stays, kept for as long as the
+  // target is there: the labels the user has seen are not to change.
+  #kept = new Map();
+  // The mouse for the keyboard, while it has the keys.
+  #pad = null;
+  #passes = false;
+  // The board of a gobang CAPTCHA, once found.
+  #board = null;
 
-  constructor(window, makeSource, source, { hints = false } = {}) {
+  constructor(
+    window,
+    makeSource,
+    source,
+    {
+      hints = false,
+      challengeSource = null,
+      staying = false,
+      actor = null,
+    } = {}
+  ) {
     this.#window = window;
     this.#makeSource = makeSource;
     this.#source = source;
     this.#hints = hints;
+    this.#challengeSource = challengeSource;
+    this.#actor = actor;
+    this.#staying = staying && hints;
+    if (this.#staying) {
+      this.#makeSource = challengeSource ?? makeSource;
+    }
     window.addEventListener("pagehide", this);
     window.addEventListener("resize", this);
     // Labels follow the page as it scrolls.
@@ -495,11 +589,19 @@ class JumpSession {
     this.#update();
     if (this.#hints && !this.#shown.length) {
       this.finish();
+    } else if (this.#staying) {
+      this.#schedulePoll(CHALLENGE_POLL_MS);
     }
   }
 
   get done() {
     return this.#done;
+  }
+
+  // Whether the key last given was not for this jump but for the keymap: the
+  // jump is over, and the key goes on.
+  get passesKey() {
+    return this.#passes;
   }
 
   handleEvent(event) {
@@ -515,8 +617,29 @@ class JumpSession {
     if (!token) {
       return;
     }
+    if (this.#pad) {
+      this.#pad.handleKey(event);
+      return;
+    }
+    if (
+      this.#staying &&
+      !this.#shown.length &&
+      !this.#switching &&
+      token != "<Esc>"
+    ) {
+      // The challenge is over and the labels with it: the key is the user's
+      // again, not this jump's.
+      this.#passes = true;
+      this.finish();
+      return;
+    }
     if (token == "<Esc>") {
       this.finish();
+    } else if (this.#switching) {
+      // Not yet.
+    } else if (this.#challengeSource && (token == "." || token == ",")) {
+      // "." clicks anywhere in the CAPTCHA, "," drags from anywhere in it.
+      this.#point(token == ",");
     } else if (token == "<CR>") {
       this.#pickAt(0, { newTab: false });
     } else if (token == "<BS>") {
@@ -538,6 +661,10 @@ class JumpSession {
       this.#window.removeEventListener("resize", this);
       this.#window.removeEventListener("scroll", this, true);
       this.#window.cancelAnimationFrame(this.#redraw);
+      this.#window.clearTimeout(this.#pollTimer);
+      const pad = this.#pad;
+      this.#pad = null;
+      pad?.finish();
       this.#root?.remove();
     } catch {
       // The window is already gone.
@@ -591,8 +718,212 @@ class JumpSession {
 
   #pickAt(index, options) {
     const target = this.#shown[index];
+    if (target?.challenge && this.#challengeSource) {
+      this.#pickInChallenge(target, options);
+      return;
+    }
     this.finish();
     target?.pick(options);
+  }
+
+  // A pick that leaves the labels up for the next one: a CAPTCHA asks for
+  // several images, and a check that fails asks again.
+  async #pickInChallenge(target, options) {
+    const first = !this.#staying;
+    if (first) {
+      // The labels the user has seen go with the challenge when the page is
+      // left out, so that the one they type is the one they read.
+      this.#kept = new Map(
+        this.#shown.flatMap((each, i) =>
+          each.challenge && this.#labels[i] ? [[each.id, this.#labels[i]]] : []
+        )
+      );
+    }
+    this.#staying = true;
+    this.#typed = "";
+    this.#switching = first;
+    this.#makeSource = this.#challengeSource;
+    // A slider's handle, a piece, a button to hold: the mouse is pressed on
+    // it and the keys move it. It is known by its cursor and name, or said
+    // by the label's last letter, typed as a capital.
+    // So is a piece on a board with empty places: it is moved onto one. A
+    // grid with no place to spare is of images to pick, and they are clicked.
+    const board = this.#boardOf(target);
+    const hold =
+      target.drag ||
+      options.newTab ||
+      (board && board.places.length > board.pieces);
+    if (hold || target.picture) {
+      this.#switching = false;
+      if (hold) {
+        await this.#point(true, {
+          grab: LazyvimiumCaptcha.middle(target.rect),
+          lattice: board?.places ?? null,
+        });
+      } else {
+        // A picture to point at: the grid goes over it alone.
+        await this.#point(false, { areas: [target.rect] });
+      }
+      return;
+    }
+    let field = false;
+    try {
+      field = (await target.pick(options)) === true;
+    } catch {
+      // The frame is gone: the next read finds it so.
+    }
+    if (field) {
+      // A field of the challenge has the focus now, for the user to type in.
+      this.finish();
+      return;
+    }
+    if (this.#done) {
+      return;
+    }
+    // The click moved focus into the frame, where the keys would not reach
+    // this jump.
+    this.#refocus();
+    if (first) {
+      await this.#read(true);
+      this.#switching = false;
+    }
+    this.#schedulePoll(CHALLENGE_SETTLE_MS);
+  }
+
+  // The mouse for the keyboard over the CAPTCHAs of the page: to click
+  // where nothing has a label, or, with `drag`, to press the mouse at `grab`
+  // (or at a point to choose) and move it with the keys.
+  async #point(drag, { grab = null, areas = null, lattice = null } = {}) {
+    this.#switching = true;
+    if (!areas) {
+      try {
+        areas = await captchaAreas(this.#actor, this.#window);
+      } catch {
+        // The frames do not answer: the whole page will do.
+        areas = [];
+      }
+    }
+    this.#switching = false;
+    if (this.#done) {
+      return;
+    }
+    this.#refocus();
+    if (!areas.length) {
+      const { innerWidth, innerHeight } = this.#window;
+      areas = [plainRect(0, 0, innerWidth, innerHeight)];
+    }
+    this.#root?.remove();
+    this.#root = null;
+    this.#pad = new PointerPad(this.#actor, this.#window, {
+      areas,
+      drag,
+      grab,
+      lattice,
+      onFinish: () => this.#resume(),
+    });
+    this.#vacant = 0;
+  }
+
+  // The places of the board a piece sits on, found from the pieces that are
+  // like it (a gobang CAPTCHA moves them onto its empty places), or null.
+  #boardOf(target) {
+    const { width, height } = target.rect;
+    const alike = this.#shown
+      .filter(
+        each =>
+          each.challenge &&
+          !each.picture &&
+          Math.abs(each.rect.width - width) <= width * 0.15 &&
+          Math.abs(each.rect.height - height) <= height * 0.15
+      )
+      .map(each => each.rect);
+    let places = LazyvimiumCaptcha.lattice(alike);
+    // The board seen when most pieces were on it is kept: pieces that have
+    // all moved to one side would show a smaller one.
+    const near = (place, rect) =>
+      Math.abs(place.left - rect.left) < rect.width / 2 &&
+      Math.abs(place.top - rect.top) < rect.height / 2;
+    if (
+      this.#board &&
+      alike.length &&
+      alike.every(rect => this.#board.some(place => near(place, rect)))
+    ) {
+      places = this.#board;
+    } else if (places) {
+      this.#board = places;
+    }
+    return places ? { places, pieces: alike.length } : null;
+  }
+
+  // The mouse is let go of: the labels are back, as the clicks and drags
+  // have left the page.
+  #resume() {
+    this.#pad = null;
+    if (this.#done) {
+      return;
+    }
+    this.#signature = "";
+    if (this.#staying) {
+      this.#schedulePoll(CHALLENGE_SETTLE_MS);
+    } else {
+      this.#queueUpdate();
+    }
+    this.#draw();
+  }
+
+  #refocus() {
+    const window = this.#window;
+    try {
+      const focused = window.document.activeElement;
+      if (focused?.browsingContext) {
+        focused.blur();
+      }
+      window.focus();
+    } catch {
+      // The window is already gone.
+    }
+  }
+
+  #schedulePoll(delay) {
+    const window = this.#window;
+    window.clearTimeout(this.#pollTimer);
+    this.#pollTimer = window.setTimeout(async () => {
+      // Not while the mouse is held: nothing to relabel, and the pad is
+      // what the keys are for.
+      if (!this.#pad) {
+        await this.#read(false);
+      }
+      if (!this.#done) {
+        this.#schedulePoll(CHALLENGE_POLL_MS);
+      }
+    }, delay);
+  }
+
+  // The challenge as it is now: new images, a new challenge after a failed
+  // check, or none, once it was passed. Drawn again only if it changed.
+  async #read(force) {
+    const latest = ++this.#generation;
+    const source = await this.#makeSource();
+    if (this.#done || latest != this.#generation) {
+      return;
+    }
+    const targets = source.matches("");
+    this.#vacant = targets.length ? 0 : this.#vacant + 1;
+    if (this.#vacant >= VACANT_POLLS) {
+      this.finish();
+      return;
+    }
+    const signature = targets
+      .map(
+        ({ id, rect }) =>
+          `${id}@${Math.round(rect.left)},${Math.round(rect.top)}`
+      )
+      .join(" ");
+    if (force || signature != this.#signature) {
+      this.#signature = signature;
+      this.#source = source;
+      this.#update();
+    }
   }
 
   #queueUpdate() {
@@ -618,7 +949,19 @@ class JumpSession {
           Math.round(a.rect.top / 8) - Math.round(b.rect.top / 8) ||
           a.rect.left - b.rect.left
       );
-      this.#labels = hintLabels(this.#shown.length);
+      if (this.#staying) {
+        // Labels that stay with their targets, as a CAPTCHA changes.
+        this.#labels = LazyvimiumCaptcha.stickyLabels(
+          this.#shown.map(target => target.id),
+          this.#kept,
+          LABELS
+        );
+        this.#shown.forEach((target, i) =>
+          this.#kept.set(target.id, this.#labels[i])
+        );
+      } else {
+        this.#labels = hintLabels(this.#shown.length);
+      }
     } else {
       this.#shown = targets;
       // Labels wait for the first character: until then every key would be
@@ -637,6 +980,9 @@ class JumpSession {
   }
 
   #draw() {
+    if (this.#pad) {
+      return;
+    }
     const window = this.#window;
     const document = window.document;
     this.#root?.remove();
@@ -686,7 +1032,13 @@ class JumpSession {
       }
     });
     if (!this.#hints) {
-      root.append(this.#prompt());
+      root.append(this.#prompt(`› ${this.#pattern}`));
+    } else if (this.#staying) {
+      root.append(
+        this.#prompt(
+          "captcha · label clicks · Label (capital) holds · . click anywhere · , drag · Esc leave"
+        )
+      );
     }
     this.#root = root;
     document.documentElement.append(root);
@@ -728,9 +1080,9 @@ class JumpSession {
     return tag;
   }
 
-  #prompt() {
+  #prompt(text) {
     const tag = this.#window.document.createElementNS(HTML_NS, "span");
-    tag.textContent = `› ${this.#pattern}`;
+    tag.textContent = text;
     style(tag, {
       position: "absolute",
       left: "50%",
@@ -770,7 +1122,34 @@ const labelControls = (id, options) => async context => {
     focused.blur();
     window.focus();
   }
-  await begin(actor, window, () => controlsSource(window, actor), options);
+  const { stayInChallenges, captcha, ...rest } = options ?? {};
+  const makeSource = () =>
+    controlsSource(window, actor, { scope: captcha ? "captcha" : "all" });
+  const source = await makeSource();
+  if (captcha && !source.matches("").length) {
+    // Nothing to label: a picture drawn in a canvas, say. What is left is
+    // the mouse.
+    let areas = await captchaAreas(actor, window);
+    if (!areas.length) {
+      areas = [plainRect(0, 0, window.innerWidth, window.innerHeight)];
+    }
+    actor.startCapture(new PointerPad(actor, window, { areas, drag: false }));
+    return;
+  }
+  actor.startCapture(
+    new JumpSession(window, makeSource, source, {
+      ...rest,
+      actor,
+      staying: !!captcha,
+      challengeSource:
+        stayInChallenges || captcha
+          ? () =>
+              controlsSource(window, actor, {
+                scope: captcha ? "captcha" : "challenge",
+              })
+          : null,
+    })
+  );
 };
 
 const labelWords =
@@ -784,8 +1163,21 @@ export const actions = {
   // Type some of a control's text, then its label.
   "jump.controls": labelControls("jump.controls"),
 
-  // Every control labeled at once.
-  "jump.hints": labelControls("jump.hints", { hints: true }),
+  // Every control labeled at once. In a CAPTCHA challenge the labels stay for
+  // each image to be picked, and for the button that checks them.
+  "jump.hints": labelControls("jump.hints", {
+    hints: true,
+    stayInChallenges: true,
+  }),
+
+  // Only the CAPTCHAs of the page, for solving one with the keys alone: its
+  // controls are labeled and stay labeled between picks (an image, a check,
+  // a new challenge); `.` clicks and `,` drags anywhere in it, for what
+  // nothing labels, like a slider or a picture to point at.
+  "jump.captcha": labelControls("jump.captcha", {
+    hints: true,
+    captcha: true,
+  }),
 
   "jump.text": ({ actor, window }) =>
     begin(actor, window, () => textSource(window, actor)),

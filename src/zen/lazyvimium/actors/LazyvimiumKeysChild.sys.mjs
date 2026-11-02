@@ -18,6 +18,9 @@ let gCached = null;
 const JUMP_MODULE =
   "resource:///modules/lazyvimium/plugins/LazyvimiumJumpContent.sys.mjs";
 
+const POINTER_MODULE =
+  "resource:///modules/lazyvimium/plugins/LazyvimiumPointerContent.sys.mjs";
+
 // A page that keeps refocusing its field gets it after this many refusals,
 // rather than a focus fight.
 const MAX_REFUSED_FOCUS = 3;
@@ -122,6 +125,19 @@ export class LazyvimiumKeysChild extends JSWindowActorChild {
         );
       case "Lazyvimium:PressControl":
         return ChromeUtils.importESModule(JUMP_MODULE).pressControl(
+          this,
+          this.contentWindow,
+          message.data
+        );
+      // The CAPTCHAs of this frame, and the mouse of a user who points with
+      // the keys.
+      case "Lazyvimium:CollectAreas":
+        return ChromeUtils.importESModule(POINTER_MODULE).captchaAreas(
+          this,
+          this.contentWindow
+        );
+      case "Lazyvimium:Pointer":
+        return ChromeUtils.importESModule(POINTER_MODULE).pointerAt(
           this,
           this.contentWindow,
           message.data
@@ -284,12 +300,21 @@ export class LazyvimiumKeysChild extends JSWindowActorChild {
     if (!engine || LazyvimiumDom.agentTyping) {
       return;
     }
+    // A jump can end on its own, when the challenge it stayed in is gone.
+    if (this.#capture?.done) {
+      this.#capture = null;
+    }
     if (this.#capture) {
       event.preventDefault();
       event.stopImmediatePropagation();
-      this.#capture.handleKey(event);
-      if (this.#capture.done) {
+      const capture = this.#capture;
+      capture.handleKey(event);
+      if (capture.done) {
         this.#capture = null;
+      }
+      // A jump that ended on this key leaves it to the keymap.
+      if (capture.passesKey) {
+        engine.feed(LazyvimiumKeys.fromEvent(event));
       }
       return;
     }

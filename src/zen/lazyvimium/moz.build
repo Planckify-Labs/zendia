@@ -34,6 +34,7 @@ EXTRA_JS_MODULES.lazyvimium.config += [
 
 EXTRA_JS_MODULES.lazyvimium.core += [
     "core/LazyvimiumActions.sys.mjs",
+    "core/LazyvimiumCaptcha.sys.mjs",
     "core/LazyvimiumControls.sys.mjs",
     "core/LazyvimiumDom.sys.mjs",
     "core/LazyvimiumJumpLabels.sys.mjs",
@@ -65,6 +66,7 @@ EXTRA_JS_MODULES.lazyvimium.plugins += [
     "plugins/LazyvimiumJumpContent.sys.mjs",
     "plugins/LazyvimiumLibrary.sys.mjs",
     "plugins/LazyvimiumNavigation.sys.mjs",
+    "plugins/LazyvimiumPointerContent.sys.mjs",
     "plugins/LazyvimiumScroll.sys.mjs",
     "plugins/LazyvimiumScrollContent.sys.mjs",
     "plugins/LazyvimiumSession.sys.mjs",

@@ -14,10 +14,12 @@ ChromeUtils.defineESModuleGetters(lazy, {
 // actions it may start in it.
 const FRAME_QUERIES = new Set([
   "Lazyvimium:CollectControls",
+  "Lazyvimium:CollectAreas",
   "Lazyvimium:PressControl",
+  "Lazyvimium:Pointer",
   "Lazyvimium:RunContent",
 ]);
-const FRAME_ACTIONS = new Set(["jump.controls", "jump.hints"]);
+const FRAME_ACTIONS = new Set(["jump.controls", "jump.hints", "jump.captcha"]);
 
 export class LazyvimiumKeysParent extends JSWindowActorParent {
   receiveMessage({ name, data }) {

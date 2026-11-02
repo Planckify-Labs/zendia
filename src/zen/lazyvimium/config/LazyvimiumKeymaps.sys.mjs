@@ -75,6 +75,9 @@ export const LazyvimiumKeymapsSpec = {
     // included; gs narrows them by typing some of their text first.
     ["n", "s", "jump.hints"],
     ["n", "gs", "jump.controls"],
+    // Only the CAPTCHA, to solve it with the keys: labels that stay while
+    // images are picked, `.` to click and `,` to drag anywhere in it.
+    ["n", "gc", "jump.captcha"],
 
     // Visual mode on the page's text, after vim's. The motions grow the
     // selection; the cursor is a bar at its moving end.

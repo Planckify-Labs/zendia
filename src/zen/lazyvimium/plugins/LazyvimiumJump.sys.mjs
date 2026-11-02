@@ -18,6 +18,8 @@ export const LazyvimiumJumpSpec = {
   actions: {
     "jump.controls": jump("Jump to a Link, Button or Field by its Text"),
     "jump.hints": jump("Label Every Link, Button and Field"),
+    // Solving a CAPTCHA with the keys alone.
+    "jump.captcha": jump("Label the CAPTCHA to Solve it with the Keys"),
     "jump.text": jump("Jump to a Word by its Letters"),
     "jump.words": jump("Label Every Word and Paragraph"),
     // Where visual mode starts, which `v` offers.

@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- Any copyright is dedicated to the Public Domain.
+   https://creativecommons.org/publicdomain/zero/1.0/ -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Captcha board</title>
+  <style>
+    .geetest_board { position: relative; width: 190px; height: 190px; margin-top: 20px; background: #ccd }
+    .cell { position: absolute; width: 50px; height: 50px; border-radius: 25px; background: #bbc }
+    .geetest_piece { position: absolute; inset: 0; border-radius: 25px; background: #36c; cursor: pointer }
+    .geetest_picture { width: 200px; height: 120px; margin-top: 20px; background: #fc9; cursor: pointer }
+  </style>
+</head>
+<body style="margin: 20px">
+  <!-- The gobang kind: pieces are moved onto the empty places of a board, and
+       the places are nothing a script could point at. -->
+  <div><button id="top">Top button</button></div>
+  <div class="geetest_board" id="board"></div>
+  <div class="geetest_picture" id="picture"></div>
+  <script>
+    const board = document.getElementById("board");
+    const cells = [];
+    for (let i = 0; i < 9; i++) {
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      cell.style.left = 10 + (i % 3) * 60 + "px";
+      cell.style.top = 10 + Math.floor(i / 3) * 60 + "px";
+      board.append(cell);
+      cells.push(cell);
+    }
+    // Pieces on the diagonal.
+    for (const i of [0, 4, 8]) {
+      const piece = document.createElement("div");
+      piece.className = "geetest_piece";
+      piece.dataset.at = i;
+      cells[i].append(piece);
+    }
+    let held = null;
+    document.addEventListener("mousedown", e => {
+      if (e.target.classList.contains("geetest_piece")) {
+        held = e.target;
+        board.dataset.held = held.dataset.at;
+      }
+    });
+    document.addEventListener("mouseup", e => {
+      if (!held) {
+        return;
+      }
+      const cell = document.elementFromPoint(e.clientX, e.clientY)?.closest(".cell");
+      const from = held.dataset.at;
+      if (cell && !cell.firstChild) {
+        cell.append(held);
+        held.dataset.at = cells.indexOf(cell);
+        board.dataset.moved = from + ">" + held.dataset.at;
+      }
+      held = null;
+      board.dataset.held = "";
+    });
+    document.getElementById("picture").addEventListener("click", e => {
+      document.getElementById("picture").dataset.click = Math.round(e.clientX) + "," + Math.round(e.clientY);
+    });
+  </script>
+</body>
+</html>

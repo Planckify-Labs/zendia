@@ -1,0 +1,43 @@
+<!doctype html>
+<!-- Any copyright is dedicated to the Public Domain.
+   https://creativecommons.org/publicdomain/zero/1.0/ -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Captcha slider</title>
+</head>
+<body style="margin: 8px">
+  <!-- A slider and a picture to click on, as GeeTest draws them: the handle is
+       a div that listens to the mouse, and the picture has nothing to label. -->
+  <div id="track" style="position: relative; width: 300px; height: 30px; background: #ddd">
+    <div id="btn" style="position: absolute; left: 0; top: 0; width: 30px; height: 30px; background: #36c; cursor: pointer"></div>
+  </div>
+  <div id="board" style="width: 200px; height: 100px; margin-top: 10px; background: #fc9"></div>
+  <script>
+    const handle = document.getElementById("btn");
+    const board = document.getElementById("board");
+    let down = false, startX = 0, base = 0;
+    handle.addEventListener("mousedown", e => {
+      down = true;
+      startX = e.clientX;
+      base = parseFloat(handle.style.left || 0);
+      handle.dataset.down = "yes";
+    });
+    document.addEventListener("mousemove", e => {
+      if (down) {
+        handle.style.left = Math.max(0, Math.min(270, base + e.clientX - startX)) + "px";
+      }
+    });
+    document.addEventListener("mouseup", () => {
+      if (down) {
+        down = false;
+        handle.dataset.down = "";
+        handle.dataset.released = Math.round(parseFloat(handle.style.left));
+      }
+    });
+    board.addEventListener("click", e => {
+      board.dataset.click = Math.round(e.clientX) + "," + Math.round(e.clientY);
+    });
+  </script>
+</body>
+</html>

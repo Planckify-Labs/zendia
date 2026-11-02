@@ -17,6 +17,7 @@ import {
   readEntry,
   replayOf,
 } from "resource:///modules/lazyvimium/agent/LazyvimiumAgentNetwork.sys.mjs";
+import { LazyvimiumCaptcha } from "resource:///modules/lazyvimium/core/LazyvimiumCaptcha.sys.mjs";
 import {
   pageFromArgs,
   tableFromArgs,
@@ -161,16 +162,8 @@ export function formatObservation(page, tab) {
 // CAPTCHAs are checks for a person, so the agent is told to hand them over
 // rather than shown their pieces to click. In dev testing it scrolled a page
 // up and down for minutes looking for the one inside an iframe.
-const CAPTCHAS = [
-  [/google\.com\/recaptcha\/|recaptcha\.net\//, "reCAPTCHA"],
-  [/hcaptcha\.com\//, "hCaptcha"],
-  [/challenges\.cloudflare\.com\//, "Cloudflare Turnstile"],
-  [/arkoselabs\.com\/|funcaptcha\.com\//, "Arkose"],
-  [/geetest\.com\//, "GeeTest"],
-];
-
 function captchaOf(url) {
-  return CAPTCHAS.find(([pattern]) => pattern.test(url))?.[1] ?? null;
+  return LazyvimiumCaptcha.nameOf(url);
 }
 
 // Frame ids are flat, nested ones included: a browsing context id is unique

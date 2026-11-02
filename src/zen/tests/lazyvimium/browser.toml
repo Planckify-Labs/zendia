@@ -25,6 +25,15 @@ support-files = [
 
 ["browser_lazyvimium_agent_ui.js"]
 
+["browser_lazyvimium_captcha.js"]
+support-files = [
+  "file_captcha_board.html",
+  "file_captcha_host.html",
+  "file_captcha_frame.html",
+  "file_captcha_slider.html",
+  "file_captcha_slider_host.html",
+]
+
 ["browser_lazyvimium_explorer.js"]
 
 ["browser_lazyvimium_internal_pages.js"]

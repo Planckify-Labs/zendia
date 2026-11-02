@@ -35,6 +35,51 @@ const CONTROLS = [
   "[onclick]",
 ].join(",");
 
+// The cursors that say an element can be pressed, or dragged: a slider's
+// handle has no markup to say so either.
+const DRAG_CURSORS = new Set([
+  "grab",
+  "grabbing",
+  "move",
+  "all-scroll",
+  "ew-resize",
+  "e-resize",
+  "w-resize",
+  "col-resize",
+]);
+const HANDS = new Set(["pointer", ...DRAG_CURSORS]);
+const DRAG_NAME =
+  /slider|handle|knob|thumb|drag|puzzle|jigsaw|press-?(?:and-?)?hold/i;
+
+// A slider's handle by its shape, as its markup and cursor can be anything:
+// a knob, flush with the end of a track that is much longer than it is thick.
+function sitsInATrack(element) {
+  const knob = element.getBoundingClientRect();
+  if (knob.height < 28 || knob.width < 28) {
+    return false;
+  }
+  let track = LazyvimiumDom.composedParent(element);
+  for (let level = 0; track && level < 3; level++) {
+    const box = track.getBoundingClientRect?.();
+    if (
+      box &&
+      box.width >= knob.width * 3 &&
+      box.height >= knob.height * 0.5 &&
+      box.height <= knob.height * 1.6 &&
+      (Math.abs(knob.left - box.left) < 12 ||
+        Math.abs(box.right - knob.right) < 12) &&
+      // A row of buttons is not a track: a track has the handle alone.
+      ![...track.querySelectorAll(CONTROLS)].some(
+        other => other !== element && !element.contains(other)
+      )
+    ) {
+      return true;
+    }
+    track = LazyvimiumDom.composedParent(track);
+  }
+  return false;
+}
+
 const MAX_ELEMENTS = 5000;
 const MIN_SIZE = 4;
 
@@ -90,12 +135,13 @@ export const LazyvimiumControls = {
       // A div with a click handler has no markup to say so, only a hand for
       // a cursor; its children share it.
       const parent = LazyvimiumDom.composedParent(element);
+      const cursor = isControl ? "" : window.getComputedStyle(element).cursor;
       const hasHand =
         !isControl &&
-        window.getComputedStyle(element).cursor == "pointer" &&
+        HANDS.has(cursor) &&
         !found.some(other => LazyvimiumDom.composedContains(other, element)) &&
         parent &&
-        window.getComputedStyle(parent).cursor != "pointer";
+        window.getComputedStyle(parent).cursor != cursor;
       if (
         (isControl || hasHand) &&
         !element.disabled &&
@@ -105,6 +151,26 @@ export const LazyvimiumControls = {
       }
     }
     return found;
+  },
+
+  /**
+   * Whether a control is dragged rather than clicked: a slider's handle, a
+   * puzzle piece, a button to hold. Told by its cursor, its role and its
+   * name, as there is no markup for it.
+   *
+   * @param {Window} window
+   * @param {Element} element
+   * @returns {boolean}
+   */
+  isDraggable(window, element) {
+    return (
+      DRAG_CURSORS.has(window.getComputedStyle(element).cursor) ||
+      element.matches("[role=slider], [draggable=true]") ||
+      DRAG_NAME.test(
+        `${element.getAttribute("class") ?? ""} ${element.id ?? ""}`
+      ) ||
+      sitsInATrack(element)
+    );
   },
 
   /**
