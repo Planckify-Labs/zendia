@@ -38,6 +38,8 @@ support-files = [
 
 ["browser_lazyvimium_internal_pages.js"]
 
+["browser_lazyvimium_key_delivery.js"]
+
 ["browser_lazyvimium_jump.js"]
 support-files = [
   "file_jump_frame_host.html",

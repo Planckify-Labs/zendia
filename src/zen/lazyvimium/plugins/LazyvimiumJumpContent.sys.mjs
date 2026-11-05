@@ -584,6 +584,7 @@ class JumpSession {
     }
     window.addEventListener("pagehide", this);
     window.addEventListener("resize", this);
+    window.addEventListener("mousedown", this, true);
     // Labels follow the page as it scrolls.
     window.addEventListener("scroll", this, true);
     this.#update();
@@ -607,6 +608,12 @@ class JumpSession {
   handleEvent(event) {
     if (event.type == "pagehide") {
       this.finish();
+    } else if (event.type == "mousedown") {
+      // A click elsewhere ends the jump, or its labels would go on taking
+      // the keys. A challenge is solved with clicks too, so it stays.
+      if (!this.#staying) {
+        this.finish();
+      }
     } else {
       this.#queueUpdate();
     }
@@ -619,6 +626,13 @@ class JumpSession {
     }
     if (this.#pad) {
       this.#pad.handleKey(event);
+      return;
+    }
+    // Labels are letters: <C-l> and the like are the keymap's, not this
+    // jump's.
+    if (!this.#staying && (event.ctrlKey || event.altKey || event.metaKey)) {
+      this.#passes = true;
+      this.finish();
       return;
     }
     if (
@@ -659,6 +673,7 @@ class JumpSession {
     try {
       this.#window.removeEventListener("pagehide", this);
       this.#window.removeEventListener("resize", this);
+      this.#window.removeEventListener("mousedown", this, true);
       this.#window.removeEventListener("scroll", this, true);
       this.#window.cancelAnimationFrame(this.#redraw);
       this.#window.clearTimeout(this.#pollTimer);

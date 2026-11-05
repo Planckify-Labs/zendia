@@ -148,10 +148,13 @@ function selectRelative(window, offset) {
   const { gBrowser } = window;
   const list = entries(window);
   const index = list.findIndex(tabs => tabs.includes(gBrowser.selectedTab));
-  if (list.length < 2 || index == -1) {
+  if (!list.length || (list.length < 2 && index != -1)) {
     return;
   }
-  const next = (((index + offset) % list.length) + list.length) % list.length;
+  // Zen's empty tab is not in the list: from it the next tab is the first
+  // and the previous one the last.
+  const from = index == -1 && offset < 0 ? 0 : index;
+  const next = (((from + offset) % list.length) + list.length) % list.length;
   gBrowser.selectedTab = lastUsed(list[next]);
 }
 

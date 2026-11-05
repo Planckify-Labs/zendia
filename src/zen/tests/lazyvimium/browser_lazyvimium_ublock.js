@@ -16,6 +16,10 @@ const { ExtensionTestCommon } = ChromeUtils.importESModule(
   "resource://testing-common/ExtensionTestCommon.sys.mjs"
 );
 
+const { AppUiTestDelegate } = ChromeUtils.importESModule(
+  "resource://testing-common/AppUiTestDelegate.sys.mjs"
+);
+
 const PREF = "lazyvimium.ublock.enabled";
 const GECKO = { gecko: { id: "uBlock0@raymondhill.net" } };
 
@@ -159,6 +163,8 @@ add_task(async function test_the_popup_has_labels() {
             browser.test.sendMessage("labels", labelsOf());
           }
         }, 50);
+        // Labels come within a second of the load, when there are any.
+        setTimeout(() => browser.test.sendMessage("settled", labelsOf()), 1500);
         document.getElementById("field").onfocus = () =>
           setTimeout(() => browser.test.sendMessage("focused", labelsOf()), 300);`,
     },
@@ -187,6 +193,25 @@ add_task(async function test_the_popup_has_labels() {
     await extension.awaitMessage("focused"),
     [],
     "a field in focus gets the typing, not labels"
+  );
+  Assert.deepEqual(
+    await extension.awaitMessage("settled"),
+    [],
+    "the field still has the focus, so the labels stay away"
+  );
+
+  // The same popup opened with the mouse has no labels to wait for.
+  const panel = document
+    .querySelector('browser[webextension-view-type="popup"]')
+    .closest("panel");
+  const hidden = BrowserTestUtils.waitForEvent(panel, "popuphidden");
+  await AppUiTestDelegate.closeBrowserAction(window, extension.id);
+  await hidden;
+  await AppUiTestDelegate.clickBrowserAction(window, extension.id);
+  Assert.deepEqual(
+    await extension.awaitMessage("settled"),
+    [],
+    "opened with the mouse, the popup has no labels"
   );
 
   await extension.unload();

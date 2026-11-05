@@ -258,24 +258,9 @@ const labelTexts = browser =>
 // Labels, then text jumps, visual motions and a yank into the ring.
 async function checkVisualKeys(browser, label, { isPopup = false } = {}) {
   await focusPage(browser);
-  if (isPopup) {
-    // A popup's labels are always on, and <Esc> closes it as it does any
-    // other: typing a label presses its control.
-    await TestUtils.waitForCondition(
-      async () => (await labelsShown(browser)) > 0,
-      `${label}: the controls have labels`
-    );
-    type((await labelTexts(browser))[0]);
-    await TestUtils.waitForCondition(
-      () =>
-        SpecialPowers.spawn(
-          browser,
-          [],
-          () => content.document.title == "pressed"
-        ),
-      `${label}: a label presses its control`
-    );
-  } else {
+  // <Esc> closes a popup's panel as well as dropping the labels, so a popup
+  // goes on without it; its labels are checked in the tests for them.
+  if (!isPopup) {
     for (const keys of ["s", "v"]) {
       type(keys);
       await TestUtils.waitForCondition(
@@ -296,7 +281,6 @@ async function checkVisualKeys(browser, label, { isPopup = false } = {}) {
     "resource:///modules/lazyvimium/plugins/LazyvimiumYank.sys.mjs"
   );
   (await yankRing({ persist: false })).clear();
-  // A popup has labels of its own already.
   const before = await labelTexts(browser);
   type("Salph");
   await TestUtils.waitForCondition(
@@ -392,11 +376,347 @@ add_task(async function test_keys_work_in_extension_popups() {
   );
   try {
     await checkScrollKeys(popupBrowser(), "an extension popup");
+    // It was not opened from the keys, so no labels have its letters.
     await checkVisualKeys(popupBrowser(), "an extension popup", {
       isPopup: true,
     });
   } catch (e) {
     ok(false, `an extension popup: ${e}`);
   }
+  await extension.unload();
+});
+
+const { Lazyvimium } = ChromeUtils.importESModule(
+  "resource:///modules/lazyvimium/Lazyvimium.sys.mjs"
+);
+const { AppUiTestDelegate, AppUiTestInternals } = ChromeUtils.importESModule(
+  "resource://testing-common/AppUiTestDelegate.sys.mjs"
+);
+
+const POPUP_NAME = "Popup Labels";
+
+// A popup with a button and a field. It notes the keys that reach the page,
+// and the button's press.
+function loadPopupExtension() {
+  return ExtensionTestUtils.loadExtension({
+    useAddonManager: "temporary",
+    manifest: {
+      name: POPUP_NAME,
+      browser_specific_settings: { gecko: { id: "popup-labels@example.com" } },
+      browser_action: { default_popup: "popup.html" },
+    },
+    files: {
+      "popup.html": `<!DOCTYPE html><meta charset="utf-8">
+        <body style="margin:0;width:240px;height:120px">
+        <button id="go" style="display:block">Go</button>
+        <input id="field" style="display:block">
+        <script src="popup.js"></script>`,
+      "popup.js": `
+        document.body.dataset.typed = "";
+        addEventListener("keydown", event => {
+          document.body.dataset.typed += event.key;
+        });
+        document.getElementById("go").onclick = () => {
+          document.title = "pressed";
+        };`,
+    },
+  });
+}
+
+// The popup's labels: the ones over its controls, and the ones `s` puts up,
+// which are drawn alike.
+const popupLabels = browser =>
+  SpecialPowers.spawn(browser, [], () =>
+    [...content.document.querySelectorAll("span[style*='ui-monospace']")].map(
+      span => span.textContent
+    )
+  );
+
+// What the page has seen: the keys that reached it and whether it was pressed.
+const popupState = browser =>
+  SpecialPowers.spawn(browser, [], () => ({
+    typed: content.document.body.dataset.typed,
+    pressed: content.document.title == "pressed",
+  }));
+
+// The label drawn over the button, found by where it is.
+const buttonLabel = browser =>
+  SpecialPowers.spawn(browser, [], () => {
+    const rect = content.document.getElementById("go").getBoundingClientRect();
+    const label = [
+      ...content.document.querySelectorAll("span[style*='ui-monospace']"),
+    ].find(span => {
+      const at = span.getBoundingClientRect();
+      return (
+        at.left >= rect.left &&
+        at.left <= rect.right &&
+        at.top >= rect.top &&
+        at.top <= rect.bottom
+      );
+    });
+    return label?.textContent ?? null;
+  });
+
+const popupButton = extension =>
+  AppUiTestInternals.getBrowserActionWidget(extension.id)
+    .forWindow(window)
+    .node.querySelector(".unified-extensions-item-action-button");
+
+// Wait for the popup to be on screen and loaded, so keys reach it.
+async function popupReady(browser) {
+  await TestUtils.waitForCondition(
+    async () =>
+      browser.closest("panel")?.state == "open" &&
+      (await SpecialPowers.spawn(
+        browser,
+        [],
+        () => content.document.readyState == "complete"
+      )),
+    "the popup has loaded"
+  );
+  return browser;
+}
+
+// <leader>x and a pick: the keys press the extension's button.
+async function pickWithKeys() {
+  const row = () =>
+    [...document.querySelectorAll(".lazyvimium-picker-item")].find(item =>
+      item
+        .querySelector(".lazyvimium-picker-label")
+        .textContent.includes(POPUP_NAME)
+    );
+  const done = Lazyvimium.run("extensions.pick");
+  await TestUtils.waitForCondition(row, "the picker lists the extension");
+  row().click();
+  await done;
+}
+
+async function openWithKeys(extension) {
+  const shown = AppUiTestDelegate.awaitExtensionPanel(window, extension.id);
+  await pickWithKeys();
+  return popupReady(await shown);
+}
+
+// A click on the toolbar button, as the mouse does it.
+async function openWithMouse(extension) {
+  const shown = AppUiTestDelegate.awaitExtensionPanel(window, extension.id);
+  await AppUiTestDelegate.clickBrowserAction(window, extension.id);
+  return popupReady(await shown);
+}
+
+// The pointer on the button, which makes the browser load the popup before
+// anything opens it.
+async function hover(extension) {
+  await AppUiTestInternals.showBrowserAction(window, extension.id);
+  popupButton(extension).dispatchEvent(
+    new MouseEvent("mouseover", { bubbles: true })
+  );
+  const preloaded = () =>
+    document.querySelector(
+      'browser.webextension-preload-browser[webextension-view-type="popup"]'
+    );
+  await TestUtils.waitForCondition(async () => {
+    const browser = preloaded();
+    return (
+      browser?.browsingContext?.currentWindowGlobal &&
+      (await SpecialPowers.spawn(
+        browser,
+        [],
+        () => content.document.readyState == "complete"
+      ))
+    );
+  }, "the popup is preloaded");
+  // Its load has been seen by the actor by now.
+  await new Promise(resolve => setTimeout(resolve, 500));
+}
+
+async function closePopup(extension, browser) {
+  const panel = browser.closest("panel");
+  const hidden = BrowserTestUtils.waitForEvent(panel, "popuphidden");
+  await AppUiTestDelegate.closeBrowserAction(window, extension.id);
+  await hidden;
+}
+
+// Labels would have been drawn within a second of the load.
+const settle = () => new Promise(resolve => setTimeout(resolve, 1200));
+
+async function checkHasLabels(browser, label) {
+  await TestUtils.waitForCondition(
+    async () => (await popupLabels(browser)).length == 2,
+    `${label}: the button and the field have labels`
+  );
+  Assert.deepEqual(
+    await popupLabels(browser),
+    ["a", "d"],
+    `${label}: they are letters vim leaves free`
+  );
+}
+
+async function checkNoLabels(browser, label) {
+  await settle();
+  Assert.deepEqual(await popupLabels(browser), [], `${label}: no labels`);
+  // The letter that would have been the button's label goes to the page.
+  const before = (await popupState(browser)).typed;
+  type("a");
+  await TestUtils.waitForCondition(
+    async () => (await popupState(browser)).typed == before + "a",
+    `${label}: a reaches the page`
+  );
+  Assert.ok(
+    !(await popupState(browser)).pressed,
+    `${label}: a does not press the button`
+  );
+}
+
+// The page loads again inside the same opening of the popup.
+async function reload(browser) {
+  await SpecialPowers.spawn(browser, [], () => {
+    content.document.documentElement.dataset.old = "1";
+    content.location.reload();
+  });
+  await TestUtils.waitForCondition(
+    () =>
+      SpecialPowers.spawn(
+        browser,
+        [],
+        () =>
+          content.document.readyState == "complete" &&
+          !content.document.documentElement.dataset.old
+      ),
+    "the popup has reloaded"
+  );
+}
+
+add_task(async function test_popup_labels_follow_how_it_was_opened() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["ui.popup.disable_autohide", true]],
+  });
+  const extension = loadPopupExtension();
+  await extension.startup();
+
+  // The keys: labels at once, a label presses its control.
+  let browser = await openWithKeys(extension);
+  await checkHasLabels(browser, "opened with the keys");
+  await focusPage(browser);
+  type("a");
+  await TestUtils.waitForCondition(
+    async () => (await popupState(browser)).pressed,
+    "a label presses its control"
+  );
+  // A page that loads again in the same popup keeps them.
+  await reload(browser);
+  await checkHasLabels(browser, "opened with the keys, reloaded");
+  await closePopup(extension, browser);
+
+  // The mouse: none, and every letter is the page's.
+  browser = await openWithMouse(extension);
+  await focusPage(browser);
+  await checkNoLabels(browser, "opened with the mouse");
+  await reload(browser);
+  await checkNoLabels(browser, "opened with the mouse, reloaded");
+  await closePopup(extension, browser);
+
+  // The mark of the keys is spent on one opening: the mouse that follows
+  // gets none, and the keys after it get them again.
+  browser = await openWithKeys(extension);
+  await checkHasLabels(browser, "opened with the keys again");
+  await closePopup(extension, browser);
+  browser = await openWithMouse(extension);
+  await checkNoLabels(browser, "opened with the mouse after the keys");
+  await closePopup(extension, browser);
+  await extension.unload();
+});
+
+add_task(async function test_s_labels_a_popup_opened_with_the_mouse() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["ui.popup.disable_autohide", true]],
+  });
+  const extension = loadPopupExtension();
+  await extension.startup();
+
+  const browser = await openWithMouse(extension);
+  // The popup took the focus on its own, so the key gets to it.
+  await TestUtils.waitForCondition(
+    () => SpecialPowers.spawn(browser, [], () => content.document.hasFocus()),
+    "the popup has the focus"
+  );
+  await checkNoLabels(browser, "before s");
+  type("s");
+  await TestUtils.waitForCondition(
+    async () => (await popupLabels(browser)).length > 0,
+    "s labels the controls of the popup"
+  );
+  const label = await buttonLabel(browser);
+  ok(label, "the button has a label");
+  type(label);
+  await TestUtils.waitForCondition(
+    async () => (await popupState(browser)).pressed,
+    "typing the label presses the button"
+  );
+  await closePopup(extension, browser);
+  await extension.unload();
+});
+
+add_task(async function test_a_popup_loaded_by_hover_follows_its_opening() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["ui.popup.disable_autohide", true]],
+  });
+  const extension = loadPopupExtension();
+  await extension.startup();
+
+  // The pointer is on the button, and it is the mouse that opens it.
+  await hover(extension);
+  let browser = await openWithMouse(extension);
+  await checkNoLabels(browser, "preloaded, opened with the mouse");
+  await closePopup(extension, browser);
+
+  // The pointer is on the button, and the keys open it.
+  await hover(extension);
+  browser = await openWithKeys(extension);
+  await checkHasLabels(browser, "preloaded, opened with the keys");
+  await closePopup(extension, browser);
+
+  // The keys leave nothing for a later mouse to find.
+  await hover(extension);
+  browser = await openWithMouse(extension);
+  await checkNoLabels(browser, "preloaded, opened with the mouse after");
+  await closePopup(extension, browser);
+  await extension.unload();
+});
+
+add_task(async function test_a_press_that_opens_nothing_leaves_no_mark() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["ui.popup.disable_autohide", true]],
+  });
+  const extension = loadPopupExtension();
+  await extension.startup();
+
+  // The keys press the button of a popup that is open: it closes, and the
+  // mouse that opens it next is not the keys.
+  let browser = await openWithKeys(extension);
+  const hidden = BrowserTestUtils.waitForEvent(
+    browser.closest("panel"),
+    "popuphidden"
+  );
+  await pickWithKeys();
+  await hidden;
+  browser = await openWithMouse(extension);
+  await checkNoLabels(
+    browser,
+    "opened with the mouse after the keys closed it"
+  );
+  await closePopup(extension, browser);
+
+  // <Esc> closes a popup that has labels, as it does any other.
+  browser = await openWithKeys(extension);
+  await checkHasLabels(browser, "opened with the keys");
+  await focusPage(browser);
+  const closed = BrowserTestUtils.waitForEvent(
+    browser.closest("panel"),
+    "popuphidden"
+  );
+  EventUtils.synthesizeKey("KEY_Escape");
+  await closed;
+  ok(true, "<Esc> closes the popup");
   await extension.unload();
 });

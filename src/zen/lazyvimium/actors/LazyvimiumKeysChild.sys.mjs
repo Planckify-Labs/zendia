@@ -142,6 +142,16 @@ export class LazyvimiumKeysChild extends JSWindowActorChild {
           this.contentWindow,
           message.data
         );
+      // A key typed while the browser UI had the focus, which took nothing
+      // from it.
+      case "Lazyvimium:Key":
+        if (!this.#capture) {
+          this.#ensureEngine()?.feed(message.data.token);
+        }
+        break;
+      case "Lazyvimium:LeaveField":
+        this.#leaveField();
+        break;
       // A frame sent its key's action up: the keys that follow come to the
       // page, not to the frame that had the focus.
       case "Lazyvimium:TakeFocus":
@@ -245,6 +255,22 @@ export class LazyvimiumKeysChild extends JSWindowActorChild {
     this.#engine.setMode(mode);
     this.#version = cached.config.version;
     return this.#engine;
+  }
+
+  // vim stays in normal mode when it moves to another window. A page reached
+  // with the keys does too, or the field it kept focused would turn the next
+  // <C-h> into a deleted character and the next J into a typed one. `gi` goes
+  // back to the field.
+  #leaveField() {
+    if (!this.document) {
+      return;
+    }
+    const active = LazyvimiumDom.deepActiveElement(this.document);
+    if (LazyvimiumDom.isEditable(active)) {
+      active.blur();
+    }
+    this.#explicitInsert = false;
+    this.#syncMode();
   }
 
   #syncMode() {

@@ -198,24 +198,24 @@ add_task(async function test_unmapped_keys_reach_the_page() {
   BrowserTestUtils.removeTab(tab);
 });
 
-add_task(async function test_shift_h_l_switch_tabs() {
+add_task(async function test_shift_j_k_switch_tabs() {
   const first = await openPage();
   const second = await openPage();
   const tabs = gBrowser.visibleTabs;
   const index = tabs.indexOf(second);
   const previous = tabs[(index - 1 + tabs.length) % tabs.length];
 
-  EventUtils.synthesizeKey("H", { shiftKey: true });
+  EventUtils.synthesizeKey("K", { shiftKey: true });
   await TestUtils.waitForCondition(
     () => gBrowser.selectedTab == previous,
-    "<S-h> selects the previous visible tab"
+    "<S-k> selects the previous visible tab"
   );
 
   previous.linkedBrowser.focus();
-  EventUtils.synthesizeKey("L", { shiftKey: true });
+  EventUtils.synthesizeKey("J", { shiftKey: true });
   await TestUtils.waitForCondition(
     () => gBrowser.selectedTab == second,
-    "<S-l> comes back"
+    "<S-j> comes back"
   );
 
   BrowserTestUtils.removeTab(first);
@@ -248,10 +248,10 @@ add_task(async function test_tab_keys_treat_a_split_as_one_tab() {
     );
     tab.linkedBrowser.focus();
   };
-  await press("L", right, "<S-l> goes to the split, on the pane used last");
-  await press("L", after, "<S-l> again leaves the split for the next tab");
-  await press("H", right, "<S-h> comes back to the split");
-  await press("H", before, "and <S-h> again skips its other pane");
+  await press("J", right, "<S-j> goes to the split, on the pane used last");
+  await press("J", after, "<S-j> again leaves the split for the next tab");
+  await press("K", right, "<S-k> comes back to the split");
+  await press("K", before, "and <S-k> again skips its other pane");
 
   pressLeader("`");
   await TestUtils.waitForCondition(
@@ -1000,4 +1000,441 @@ add_task(async function test_explorer_close_hides_sidebar_on_empty_tab() {
   gBrowser.selectedTab = tab;
   BrowserTestUtils.removeTab(tab);
   await setCompactMode(false);
+});
+
+// Split windows: panes are made, left, moved between and closed like vim
+// windows. The actions run directly so these tests do not depend on the
+// keys reaching the page.
+const { LazyvimiumWindowsSpec, splitWith } = ChromeUtils.importESModule(
+  "resource:///modules/lazyvimium/plugins/LazyvimiumWindows.sys.mjs"
+);
+
+const windowAction = name =>
+  LazyvimiumWindowsSpec.actions[name].run({ window, gBrowser });
+
+// Tabs ordered by when they were last used differ by at least a millisecond.
+const tick = () => new Promise(resolve => setTimeout(resolve, 5));
+
+async function select(tab) {
+  await tick();
+  gBrowser.selectedTab = tab;
+  await tick();
+}
+
+function pinnedToast() {
+  return document.querySelector(
+    "#zen-toast-container [data-l10n-id='lazyvimium-split-pinned-toast']"
+  );
+}
+
+function openNamedTabs(...names) {
+  return Promise.all(
+    names.map(name => openPage(`<title>${name}</title>${PAGE}`))
+  ).then(tabs => Object.fromEntries(names.map((name, i) => [name, tabs[i]])));
+}
+
+// The layout of the showing split, as row(a,column(b,c)) with tab titles.
+function layoutOf(group) {
+  const walk = node =>
+    node.children
+      ? `${node.direction}(${node.children.map(walk).join(",")})`
+      : node.tab.label;
+  return walk(group.layoutTree);
+}
+
+function groupWith(tab) {
+  return gZenViewSplitter._data.find(group => group.tabs.includes(tab));
+}
+
+function removeGroups() {
+  while (gZenViewSplitter._data.length) {
+    gZenViewSplitter.removeGroup(0);
+  }
+}
+
+async function removeAll(tabs) {
+  removeGroups();
+  for (const tab of Object.values(tabs)) {
+    if (tab.pinned) {
+      gBrowser.unpinTab(tab);
+    }
+    BrowserTestUtils.removeTab(tab);
+  }
+}
+
+// Opens a picker with a split action and clicks the row of a tab.
+async function pickFromSplitPicker(action, label) {
+  const done = windowAction(action);
+  await TestUtils.waitForCondition(() => picker(), `${action} opens a picker`);
+  const rows = [...picker().querySelectorAll(".lazyvimium-picker-item")];
+  const labels = rows.map(
+    row => row.querySelector(".lazyvimium-picker-label").textContent
+  );
+  if (label !== undefined) {
+    rows[labels.indexOf(label)].click();
+  }
+  return { done, labels, rows };
+}
+
+add_task(async function test_split_makes_the_new_pane_right_or_below() {
+  const { a, b, c, d } = await openNamedTabs("a", "b", "c", "d");
+
+  await select(a);
+  splitWith(window, b, "vsep");
+  is(layoutOf(groupWith(a)), "row(a,b)", "vsep puts the new pane right");
+  is(gBrowser.selectedTab, b, "and focuses it");
+  removeGroups();
+
+  await select(c);
+  splitWith(window, d, "hsep");
+  is(layoutOf(groupWith(c)), "column(c,d)", "hsep puts the picked tab below");
+  is(gBrowser.selectedTab, d, "and focuses it");
+
+  // Inside a split the new pane lands next to the current one the same way.
+  await select(c);
+  splitWith(window, a, "vsep");
+  is(
+    layoutOf(groupWith(c)),
+    "column(row(c,a),d)",
+    "in a split only the current pane is divided, and the new one is to its right"
+  );
+  is(gBrowser.selectedTab, a, "and gets the focus, as outside a split");
+  await removeAll({ a, b, c, d });
+});
+
+add_task(async function test_split_picker_choice_is_for_its_own_pane() {
+  const { a, b, c } = await openNamedTabs("a", "b", "c");
+  await select(a);
+
+  // The tab changes while the picker is open.
+  const moved = await pickFromSplitPicker("splits.vertical");
+  gBrowser.selectedTab = c;
+  moved.rows[moved.labels.indexOf("b")].click();
+  await moved.done;
+  ok(!a.splitView && !b.splitView && !c.splitView, "nothing was split");
+  is(gBrowser.selectedTab, c, "and the tab moved to stays selected");
+
+  // The picked tab closes while the picker is open.
+  await select(a);
+  const closing = await pickFromSplitPicker("splits.vertical");
+  const index = closing.labels.indexOf("b");
+  BrowserTestUtils.removeTab(b);
+  closing.rows[index].click();
+  await closing.done;
+  ok(!a.splitView && !c.splitView, "a tab that has closed is not split");
+  is(gBrowser.selectedTab, a, "and the current tab stays selected");
+
+  // The picker still splits the tab it was opened on.
+  const fine = await pickFromSplitPicker("splits.vertical", "c");
+  await fine.done;
+  ok(a.splitView && c.splitView, "a tab still open is split with it");
+  await removeAll({ a, c });
+});
+
+add_task(async function test_split_keeps_tabs_of_another_split_alone() {
+  const { a, b, c, d, e } = await openNamedTabs("a", "b", "c", "d", "e");
+  await select(d);
+  gZenViewSplitter.splitTabs([d, e], "vsep", 1);
+  await select(a);
+
+  const { done, labels } = await pickFromSplitPicker("splits.vertical");
+  ok(
+    !labels.includes("d") && !labels.includes("e"),
+    "the picker does not offer the tabs of another split"
+  );
+  ok(labels.includes("b"), "but offers the free ones");
+  EventUtils.synthesizeKey("KEY_Escape");
+  await done;
+
+  splitWith(window, d, "vsep");
+  ok(!a.splitView, "taking a pane of another split does nothing");
+  is(layoutOf(groupWith(d)), "row(d,e)", "the other split is intact");
+  is(gZenViewSplitter._data.length, 1, "and no split holds the tab twice");
+
+  // Inside a split too.
+  await select(a);
+  gZenViewSplitter.splitTabs([a, b], "vsep", 1);
+  splitWith(window, d, "vsep");
+  Assert.deepEqual(
+    gZenViewSplitter._data.map(layoutOf),
+    ["row(d,e)", "row(a,b)"],
+    "both splits are as they were"
+  );
+
+  // The explorer asks for the pane of the row under its cursor, which may be
+  // a pane of the split it is in.
+  await select(a);
+  splitWith(window, c, "hsep");
+  is(layoutOf(groupWith(a)), "row(column(a,c),b)", "a third pane");
+  await select(b);
+  splitWith(window, c, "vsep");
+  is(
+    layoutOf(groupWith(a)),
+    "row(column(a,c),b)",
+    "picking a pane that is already shown keeps the layout"
+  );
+  is(gBrowser.selectedTab, c, "and goes to that pane");
+  await removeAll({ a, b, c, d, e });
+});
+
+add_task(async function test_split_inside_pinned_panes_adds_one_pane() {
+  const { a, b, c } = await openNamedTabs("a", "b", "c");
+  gBrowser.pinTab(a);
+  gBrowser.pinTab(b);
+  await select(a);
+  gZenViewSplitter.splitTabs([a, b], "vsep", 1);
+  const tabsBefore = gBrowser.tabs.length;
+
+  splitWith(window, c, "vsep");
+  is(layoutOf(groupWith(a)), "row(a,b,c)", "the picked tab is the new pane");
+  is(gBrowser.tabs.length, tabsBefore, "no pane is a duplicate of a tab");
+  is(gBrowser.selectedTab, c, "and it has the focus");
+  ok(c.pinned, "it takes on the pinned state of the panes");
+  const toast = await TestUtils.waitForCondition(
+    () => pinnedToast(),
+    "the user is told about the pin"
+  );
+  await TestUtils.waitForCondition(
+    () => toast.textContent.includes("pinned"),
+    "with words, so the string reaches the build"
+  );
+
+  // What <leader>bp does.
+  gBrowser.unpinTab(c);
+  await TestUtils.waitForCondition(() => !c.pinned, "the pin can be undone");
+  is(layoutOf(groupWith(a)), "row(a,b,c)", "the split stays as it was");
+  is(gBrowser.tabs.length, tabsBefore, "with no duplicate pane");
+  await removeAll({ a, b, c });
+});
+
+add_task(async function test_a_split_that_pins_nothing_says_nothing() {
+  await TestUtils.waitForCondition(
+    () => !pinnedToast(),
+    "the toast of the last split is gone"
+  );
+  const { a, b, c } = await openNamedTabs("a", "b", "c");
+  await select(a);
+  gZenViewSplitter.splitTabs([a, b], "vsep", 1);
+  await select(a);
+
+  splitWith(window, c, "vsep");
+  is(groupWith(a).tabs.length, 3, "the pane is added");
+  await tick();
+  ok(!c.pinned, "no pane is pinned");
+  ok(!pinnedToast(), "so there is nothing to tell");
+  await removeAll({ a, b, c });
+});
+
+add_task(async function test_split_stops_at_the_limit_before_asking() {
+  const { a, b, c, d, e } = await openNamedTabs("a", "b", "c", "d", "e");
+  await select(a);
+  gZenViewSplitter.splitTabs([a, b, c, d], "grid", 0);
+  is(groupWith(a).tabs.length, 4, "four panes");
+
+  windowAction("splits.vertical");
+  await new Promise(resolve => setTimeout(resolve, 100));
+  ok(!picker(), "a full split does not offer a pane to add");
+  ok(!e.splitView, "and splits nothing");
+  await removeAll({ a, b, c, d, e });
+});
+
+add_task(async function test_split_open_url_works_inside_a_split() {
+  const { a, b } = await openNamedTabs("a", "b");
+  await select(a);
+  gZenViewSplitter.splitTabs([a, b], "vsep", 1);
+
+  const { done, labels, rows } = await pickFromSplitPicker("splits.horizontal");
+  is(labels[0], "Open URL…", "the picker offers a URL inside a split too");
+  rows[0].click();
+  await done;
+  await TestUtils.waitForCondition(
+    () => gURLBar._zenHandleUrlbarClose,
+    "the urlbar opens for the new pane"
+  );
+  is(gZenViewSplitter._data.length, 1, "without a second split view");
+  is(layoutOf(groupWith(a)), "row(a,b)", "and the first one is untouched");
+  ok(a.group && b.group, "the panes stay in their tab group");
+
+  // Dismissing it changes nothing.
+  gURLBar._zenHandleUrlbarClose(false, false);
+  await TestUtils.waitForCondition(
+    () => !gURLBar.hasAttribute("zen-newtab"),
+    "the urlbar closes"
+  );
+  is(layoutOf(groupWith(a)), "row(a,b)", "dismissing it changes nothing");
+  is(gBrowser.selectedTab, b, "on the same pane");
+  await TestUtils.waitForCondition(
+    () => !gZenViewSplitter.waitingForSplitTab,
+    "the tab strip is told that no tab is coming"
+  );
+
+  // Picking a result divides only the current pane.
+  const { done: again, rows: rows2 } =
+    await pickFromSplitPicker("splits.horizontal");
+  rows2[0].click();
+  await again;
+  await TestUtils.waitForCondition(
+    () => gURLBar._zenHandleUrlbarClose,
+    "the urlbar opens again"
+  );
+  const fresh = BrowserTestUtils.addTab(gBrowser, "about:blank");
+  gURLBar._zenHandleUrlbarClose(false, true);
+  gBrowser.selectedTab = fresh;
+  await TestUtils.waitForCondition(
+    () => fresh.splitView,
+    "the opened tab joins the split"
+  );
+  is(
+    layoutOf(groupWith(a)),
+    `row(a,column(b,${fresh.label}))`,
+    "below the pane it was opened from"
+  );
+  is(gBrowser.selectedTab, fresh, "with the focus");
+  await removeAll({ a, b, fresh });
+});
+
+add_task(async function test_close_goes_back_to_the_pane_used_last() {
+  const { a, b, c } = await openNamedTabs("a", "b", "c");
+  await select(a);
+  gZenViewSplitter.splitTabs([a, b], "vsep", 1);
+  splitWith(window, c, "vsep");
+  is(layoutOf(groupWith(a)), "row(a,b,c)", "three panes");
+  await select(b);
+  await select(a);
+  await select(b);
+  await select(c);
+
+  windowAction("splits.close");
+  is(gBrowser.selectedTab, b, "closing goes to the pane used before it");
+  ok(!c.splitView && gBrowser.tabs.includes(c), "the closed tab stays open");
+  await TestUtils.waitForCondition(
+    () => !c.linkedBrowser.docShellIsActive,
+    "the closed pane's page stops being active"
+  );
+  is(layoutOf(groupWith(a)), "row(a,b)", "the others share the space");
+  const sizes = groupWith(a).layoutTree.children.map(n => n.sizeInParent);
+  Assert.less(Math.abs(sizes[0] + sizes[1] - 100), 0.01, "all of it");
+  Assert.greater(Math.min(...sizes), 20, "none of them collapsed");
+
+  windowAction("splits.close");
+  is(gBrowser.selectedTab, a, "closing one of two leaves the other");
+  ok(!a.splitView && !b.splitView, "which ends the split");
+  ok(gBrowser.tabs.includes(a) && gBrowser.tabs.includes(b), "both stay open");
+  is(gZenViewSplitter.currentView, -1, "and no split is showing");
+  await removeAll({ a, b, c });
+});
+
+add_task(async function test_only_keeps_the_current_pane_showing() {
+  const { a, b, c } = await openNamedTabs("a", "b", "c");
+  await select(a);
+  gZenViewSplitter.splitTabs([a, b], "vsep", 1);
+  splitWith(window, c, "hsep");
+  await select(b);
+
+  windowAction("splits.only");
+  is(gBrowser.selectedTab, b, "the current tab stays selected");
+  ok(!a.splitView && !b.splitView && !c.splitView, "no tab is a pane any more");
+  is(gZenViewSplitter.currentView, -1, "no split is showing");
+  ok(
+    !gBrowser.tabpanels.hasAttribute("zen-split-view"),
+    "the window is back to one page"
+  );
+  ok(b.linkedBrowser.docShellIsActive, "the page is active");
+  await removeAll({ a, b, c });
+});
+
+add_task(async function test_close_and_only_drop_an_empty_pane() {
+  for (const action of ["splits.close", "splits.only"]) {
+    const { a } = await openNamedTabs("a");
+    await select(a);
+    gZenViewSplitter.createEmptySplit("right");
+    await TestUtils.waitForCondition(
+      () => gURLBar._zenHandleUrlbarClose && gURLBar.focused,
+      `${action}: the empty pane opens the urlbar`
+    );
+    is(gBrowser.selectedTab, gZenWorkspaces._emptyTab, "on the empty tab");
+
+    windowAction(action);
+    is(gBrowser.selectedTab, a, `${action} goes back to the tab it split`);
+    ok(!gZenWorkspaces._emptyTab.splitView, "the empty tab is no pane");
+    is(gZenViewSplitter._data.length, 0, "no split is left");
+    await TestUtils.waitForCondition(
+      () => !gURLBar.hasAttribute("zen-newtab"),
+      `${action}: the urlbar closes`
+    );
+    is(gBrowser.selectedTab, a, "and the tab stays selected");
+    await removeAll({ a });
+  }
+});
+
+add_task(async function test_focus_goes_to_the_pane_beside_and_back() {
+  const { a, b, c } = await openNamedTabs("a", "b", "c");
+  await select(a);
+  gZenViewSplitter.splitTabs([a, b], "vsep", 1);
+  splitWith(window, c, "hsep");
+  is(layoutOf(groupWith(a)), "row(a,column(b,c))", "one tall, two stacked");
+
+  const go = async (action, expected, message) => {
+    await tick();
+    windowAction(action);
+    is(gBrowser.selectedTab, expected, message);
+  };
+  await go("splits.focusLeft", a, "left from the lower pane is the tall one");
+  await go("splits.focusRight", c, "and right comes back to the lower pane");
+  await go("splits.focusUp", b, "up goes to the upper pane");
+  await go("splits.focusLeft", a, "left from the upper pane is the tall one");
+  await go("splits.focusRight", b, "and right comes back to the upper pane");
+  await go("splits.focusUp", b, "nothing above the upper pane");
+  await go("splits.focusRight", b, "nothing right of it");
+  await go("splits.focusDown", c, "down goes to the lower pane");
+  await go("splits.focusDown", c, "nothing below");
+  await removeAll({ a, b, c });
+});
+
+add_task(async function test_focus_in_a_grid_and_after_unequal_resizes() {
+  const { a, b, c, d } = await openNamedTabs("a", "b", "c", "d");
+  await select(a);
+  gZenViewSplitter.splitTabs([a, b, c, d], "grid", 0);
+  is(layoutOf(groupWith(a)), "row(column(a,b),column(c,d))", "a grid");
+
+  const go = async (action, expected, message) => {
+    await tick();
+    windowAction(action);
+    is(gBrowser.selectedTab, expected, message);
+  };
+  await go("splits.focusRight", c, "right of the top left is the top right");
+  await go("splits.focusDown", d, "below the top right is the bottom right");
+  await go("splits.focusLeft", b, "left of the bottom right is bottom left");
+  await go("splits.focusUp", a, "above the bottom left is the top left");
+
+  // A small pane above a big one: the big one is the neighbour that counts.
+  const [left, right] = groupWith(a).layoutTree.children;
+  left.children[0].sizeInParent = 10;
+  left.children[1].sizeInParent = 90;
+  right.children[0].sizeInParent = 50;
+  right.children[1].sizeInParent = 50;
+  gZenViewSplitter.activateSplitView(groupWith(a), true);
+  await select(c);
+  await go("splits.focusLeft", b, "left goes to the pane covering most");
+  await go("splits.focusRight", d, "and right to the one covering most");
+  await removeAll({ a, b, c, d });
+});
+
+add_task(async function test_removing_an_earlier_split_keeps_the_view_right() {
+  const { a, b, c, d } = await openNamedTabs("a", "b", "c", "d");
+  await select(a);
+  gZenViewSplitter.splitTabs([a, b], "vsep", 1);
+  await select(c);
+  gZenViewSplitter.splitTabs([c, d], "vsep", 1);
+  is(gZenViewSplitter.currentView, 1, "the second split is showing");
+
+  gZenViewSplitter.removeTabFromGroup(a, 0, { forUnsplit: true });
+  is(gZenViewSplitter.currentView, 0, "the view follows its split");
+  is(gZenViewSplitter._data[0], groupWith(c), "which is the one showing");
+  await select(d);
+  windowAction("splits.focusLeft");
+  is(gBrowser.selectedTab, c, "panes can still be moved between");
+  windowAction("splits.close");
+  is(gBrowser.selectedTab, d, "and closed");
+  await removeAll({ a, b, c, d });
 });

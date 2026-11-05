@@ -5,12 +5,14 @@
 // Every extension is reached the same way, whichever it is: <leader>x lists
 // the installed ones, and the one picked opens its popup, whose controls get
 // jump labels (LazyvimiumPopupChild) as the sidebar's rows do for <leader>bj.
+// A popup opened with the mouse has none until `s` asks for them.
 
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   AddonManager: "resource://gre/modules/AddonManager.sys.mjs",
-  ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs",
+  LazyvimiumPopupKeys:
+    "resource:///modules/lazyvimium/actors/LazyvimiumPopupParent.sys.mjs",
   LazyvimiumPicker:
     "resource:///modules/lazyvimium/ui/LazyvimiumPicker.sys.mjs",
 });
@@ -48,9 +50,7 @@ async function pick(window) {
     })),
   });
   if (index !== null) {
-    lazy.ExtensionParent.apiManager.global
-      .browserActionFor(list[index].extension)
-      .triggerAction(window);
+    lazy.LazyvimiumPopupKeys.trigger(window, list[index].extension);
   }
 }
 

@@ -71,6 +71,7 @@ zen-split-view-limit-toast = Can't add more panels to the split view!
 zen-sidebar-drag-collapsed-toast = Sidebar hidden! Use <span>{ $shortcut }</span> to bring the sidebar back.
 lazyvimium-ublock-missing-toast = uBlock Origin is turned off or not installed.
 lazyvimium-extensions-none-toast = No extension to run.
+lazyvimium-split-pinned-toast = Tab pinned to join this split.
 lazyvimium-yank-empty-toast = Nothing yanked yet.
 lazyvimium-yank-copied-toast = Copied to the clipboard.
 lazyvimium-yank-cleared-toast = Yank history cleared.

@@ -4,6 +4,7 @@
 
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 import { LazyvimiumActions } from "resource:///modules/lazyvimium/core/LazyvimiumActions.sys.mjs";
+import { LazyvimiumDom } from "resource:///modules/lazyvimium/core/LazyvimiumDom.sys.mjs";
 import { LazyvimiumKeyEngine } from "resource:///modules/lazyvimium/core/LazyvimiumKeyEngine.sys.mjs";
 import { LazyvimiumKeymap } from "resource:///modules/lazyvimium/core/LazyvimiumKeymap.sys.mjs";
 import { LazyvimiumKeys } from "resource:///modules/lazyvimium/core/LazyvimiumKeys.sys.mjs";
@@ -338,10 +339,30 @@ class LazyvimiumService {
     if (!window?.gBrowser || this.#inOnboarding(window.document)) {
       return;
     }
+    const { gBrowser } = window;
+    const selected = gBrowser.selectedBrowser;
     try {
       await this.run(id, args, { browser });
+      if (gBrowser.selectedBrowser != selected) {
+        this.#leaveFields(gBrowser.selectedBrowser);
+      }
     } catch (e) {
       console.error(`Lazyvimium: "${id}" failed`, e);
+    }
+  }
+
+  // Every frame of the page, since the field may be in any of them.
+  #leaveFields(browser) {
+    const contexts =
+      browser.browsingContext?.getAllBrowsingContextsInSubtree() ?? [];
+    for (const context of contexts) {
+      try {
+        context.currentWindowGlobal
+          ?.getActor("LazyvimiumKeys")
+          .sendAsyncMessage("Lazyvimium:LeaveField");
+      } catch {
+        // No keys run in this frame.
+      }
     }
   }
 
@@ -669,6 +690,7 @@ class LazyvimiumService {
     });
     refresh();
     window.gBrowser.tabContainer.addEventListener("TabSelect", refresh);
+    let unclaimed = null;
     window.addEventListener(
       "keydown",
       event => {
@@ -694,10 +716,20 @@ class LazyvimiumService {
           this.#bufferKey(window, ui, buffer, event);
         } else {
           this.#takeReservedKey(window, event);
+          unclaimed = event;
         }
       },
       true
     );
+    // After whatever has the focus, so this only sees keys the browser UI had
+    // no use for. Who owns a key is settled above: a key that closes a buffer
+    // or opens a menu must not look like nobody's once it gets here.
+    window.addEventListener("keydown", event => {
+      if (event == unclaimed) {
+        this.#sendKeyToPage(window, event);
+      }
+      unclaimed = null;
+    });
     window.addEventListener(
       "unload",
       () => {
@@ -705,6 +737,56 @@ class LazyvimiumService {
       },
       { once: true }
     );
+  }
+
+  // Nothing of the page has focus after a picker or a dialog closes, or with
+  // a tab of the sidebar focused, and the page's actor never hears its keys.
+  // The page gets the focus back along with the key, so the keys that follow
+  // go to it directly.
+  #sendKeyToPage(window, event) {
+    const { document, gBrowser } = window;
+    const target = event.target;
+    if (
+      !event.isTrusted ||
+      event.defaultPrevented ||
+      !LazyvimiumOptions.enabled ||
+      (target.ownerDocument ?? target) != document ||
+      ["browser", "iframe"].includes(target.localName) ||
+      document.documentElement.hasAttribute("customizing") ||
+      window.gDialogBox?.isOpen
+    ) {
+      return;
+    }
+    const active = LazyvimiumDom.deepActiveElement(document);
+    const token = LazyvimiumKeys.fromEvent(event);
+    // <Space> presses the control the keyboard moved to.
+    if (
+      !token ||
+      LazyvimiumDom.isEditable(active) ||
+      (token == "<Space>" && active?.matches(":focus-visible"))
+    ) {
+      return;
+    }
+    const browser = gBrowser.selectedBrowser;
+    const { mode, tokens, count } = this.stateFor(browser);
+    if (
+      mode == "i" ||
+      (!tokens.length &&
+        !LazyvimiumKeys.isCountDigit(token, count !== null) &&
+        !this.keymap.trie(mode).node([token]))
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    browser.focus();
+    try {
+      browser.browsingContext.currentWindowGlobal
+        .getActor("LazyvimiumKeys")
+        .sendAsyncMessage("Lazyvimium:Key", { token });
+    } catch {
+      // A tab with nothing loaded yet has no keys to hear this one.
+    }
   }
 
   #takeReservedKey(window, event) {

@@ -5,7 +5,8 @@
 import { LazyvimiumPopupHints } from "resource:///modules/lazyvimium/core/LazyvimiumPopupHints.sys.mjs";
 
 // An extension's popup, in the browser's panel: once it has loaded the
-// parent says whether it is one the user sees, and its controls get labels.
+// parent says whether it was opened from the keys, and only then do its
+// controls get labels. Opened with the mouse, it has none until `s` asks.
 export class LazyvimiumPopupChild extends JSWindowActorChild {
   #hints = null;
 

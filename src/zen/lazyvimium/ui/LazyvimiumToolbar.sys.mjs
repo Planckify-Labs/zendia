@@ -3,6 +3,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import { LazyvimiumDom } from "resource:///modules/lazyvimium/core/LazyvimiumDom.sys.mjs";
+import { LazyvimiumPopupKeys } from "resource:///modules/lazyvimium/actors/LazyvimiumPopupParent.sys.mjs";
 import {
   LazyvimiumHints,
   isOnScreen,
@@ -264,6 +265,15 @@ export class LazyvimiumToolbar {
 
   #press(item) {
     const window = this.#window;
+    // An extension's button opens its popup with its labels, as a pick from
+    // <leader>x does.
+    if (
+      item.dataset?.extensionid &&
+      (item.classList.contains("webextension-browser-action") ||
+        item.classList.contains("unified-extensions-item-action-button"))
+    ) {
+      LazyvimiumPopupKeys.expect(window, item.dataset.extensionid);
+    }
     if (item.id == "urlbar-container") {
       window.gURLBar.select();
     } else if (item == window.PanelUI?.menuButton) {

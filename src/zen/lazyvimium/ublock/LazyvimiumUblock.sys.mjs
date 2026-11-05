@@ -13,8 +13,9 @@ ChromeUtils.defineESModuleGetters(lazy, {
   AddonManager: "resource://gre/modules/AddonManager.sys.mjs",
   CustomizableUI:
     "moz-src:///browser/components/customizableui/CustomizableUI.sys.mjs",
-  ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs",
   ExtensionPermissions: "resource://gre/modules/ExtensionPermissions.sys.mjs",
+  LazyvimiumPopupKeys:
+    "resource:///modules/lazyvimium/actors/LazyvimiumPopupParent.sys.mjs",
 });
 
 const UBLOCK_ID = "uBlock0@raymondhill.net";
@@ -173,9 +174,7 @@ class LazyvimiumUblockService {
       return false;
     }
     if (name == UBLOCK_POPUP) {
-      lazy.ExtensionParent.apiManager.global
-        .browserActionFor(extension)
-        .triggerAction(window);
+      lazy.LazyvimiumPopupKeys.trigger(window, extension);
     } else {
       extension.shortcuts.onCommand(name);
     }
