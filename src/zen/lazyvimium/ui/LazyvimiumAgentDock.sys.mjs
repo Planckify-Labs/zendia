@@ -228,6 +228,13 @@ export class LazyvimiumAgentDock {
     this.#modelChip.addEventListener("click", () => this.pickModel());
     this.#status = create("span", "lazyvimium-agent-status", header);
     create("span", "lazyvimium-agent-spacer", header);
+    iconButton("new-chat", header, "New chat (<leader>an)").addEventListener(
+      "click",
+      () =>
+        this.reset(
+          this.#conversation?.browser ?? this.#window.gBrowser.selectedBrowser
+        )
+    );
     const layouts = create("div", "lazyvimium-agent-layouts", header);
     layouts.setAttribute("role", "group");
     layouts.setAttribute("aria-label", "Layout");

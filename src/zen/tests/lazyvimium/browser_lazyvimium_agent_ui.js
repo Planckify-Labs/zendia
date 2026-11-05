@@ -550,3 +550,31 @@ say 'Drew it'`);
   Assert.equal(uiRows().length, 1, "nothing left over");
   await closeAndRemove(tab);
 });
+
+add_task(async function test_the_new_chat_button_starts_over() {
+  const tab = await openTab();
+  await fakeAgent(`say 'Hello there'`);
+  await ask(tab, "hi");
+  await turnEnds(tab);
+  const first = LazyvimiumAgents.conversationFor(tab.linkedBrowser);
+  await TestUtils.waitForCondition(
+    () => dockElement().querySelector(".lazyvimium-agent-message"),
+    "the chat has messages"
+  );
+  const button = dockElement().querySelector(
+    ".lazyvimium-agent-icon-button.new-chat"
+  );
+  info(JSON.stringify(button.getBoundingClientRect()));
+  button.click();
+  await TestUtils.waitForCondition(
+    () => !dockElement().querySelector(".lazyvimium-agent-message"),
+    "the button empties the chat"
+  );
+  Assert.notEqual(
+    LazyvimiumAgents.conversationFor(tab.linkedBrowser),
+    first,
+    "with a conversation of its own"
+  );
+  Assert.ok(!dockElement().hidden, "and the dock stays open");
+  await closeAndRemove(tab);
+});

@@ -709,6 +709,10 @@
     background-image: url("chrome://browser/skin/zen-icons/close.svg");
   }
 
+  &.new-chat {
+    background-image: url("chrome://browser/skin/zen-icons/plus.svg");
+  }
+
   &.back {
     background-image: url("chrome://browser/skin/zen-icons/arrow-left.svg");
   }
