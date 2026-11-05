@@ -369,6 +369,12 @@ add_task(async function test_files_go_with_the_request() {
       $(".lazyvimium-agent-attachments").hidden,
     "the chips are cleared once sent"
   );
+  // A fast agent can finish within a frame, before the panel draws.
+  await TestUtils.waitForCondition(
+    () =>
+      $('.lazyvimium-agent-message[type="user"] .lazyvimium-agent-attachment'),
+    "the sent request is drawn"
+  );
   is(
     $('.lazyvimium-agent-message[type="user"] .lazyvimium-agent-attachment')
       .textContent,

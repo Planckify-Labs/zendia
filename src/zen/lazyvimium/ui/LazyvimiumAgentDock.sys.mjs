@@ -48,6 +48,19 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "resource:///modules/lazyvimium/ui/LazyvimiumAgentInstructionsView.sys.mjs",
   mediaKind:
     "resource:///modules/lazyvimium/ui/LazyvimiumAgentInstructionsView.sys.mjs",
+  LazyvimiumAgentFollow:
+    "resource:///modules/lazyvimium/ui/LazyvimiumAgentFollow.sys.mjs",
+  LazyvimiumAgentModelCard:
+    "resource:///modules/lazyvimium/ui/LazyvimiumAgentModelCard.sys.mjs",
+  effortLabel:
+    "resource:///modules/lazyvimium/ui/LazyvimiumAgentModelCard.sys.mjs",
+  Veil: "resource:///modules/lazyvimium/ui/LazyvimiumAgentMotion.sys.mjs",
+  WorkingRing:
+    "resource:///modules/lazyvimium/ui/LazyvimiumAgentMotion.sys.mjs",
+  rollText: "resource:///modules/lazyvimium/ui/LazyvimiumAgentMotion.sys.mjs",
+  seedOf: "resource:///modules/lazyvimium/ui/LazyvimiumAgentMotion.sys.mjs",
+  workingWord:
+    "resource:///modules/lazyvimium/ui/LazyvimiumAgentMotion.sys.mjs",
   LazyvimiumAgentUiView:
     "resource:///modules/lazyvimium/ui/LazyvimiumAgentUiView.sys.mjs",
   hideFloat: "resource:///modules/lazyvimium/ui/LazyvimiumPicker.sys.mjs",
@@ -63,6 +76,9 @@ const HTML_NS = "http://www.w3.org/1999/xhtml";
 // The kinds of picture the clipboard may hold, in the order tried.
 const IMAGE_FLAVORS = ["image/png", "image/jpeg", "image/gif"];
 const STEP_ICONS = { running: "◌", done: "✓", failed: "✕" };
+// The lane under the conversation that the working row sits in. It stays
+// when the row leaves, so the end of a turn moves nothing (lazyvimium.css).
+const FOOT_LANE = 32;
 
 const PREF_BRANCH = "lazyvimium.agent.";
 const PREF_LAYOUT = "lazyvimium.agent.layout";
@@ -97,6 +113,14 @@ function formatElapsed(ms) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+// How long something took, as the working row and a finished group say it.
+function formatDuration(ms) {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  return seconds < 60
+    ? `${seconds}s`
+    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 function readPrefs() {
   const layout = Services.prefs.getStringPref(PREF_LAYOUT, "float");
   const fallback = Services.prefs.getStringPref(PREF_FALLBACK, "float");
@@ -122,6 +146,10 @@ export class LazyvimiumAgentDock {
   #input;
   #agentChip;
   #modelChip;
+  #modelLogo;
+  #modelName;
+  #modelEffort;
+  #modelCard;
   #tabChip;
   #attachRow;
   #mediaWarning;
@@ -137,8 +165,29 @@ export class LazyvimiumAgentDock {
   // Why the last file was not attached, shown instead of the hint until the
   // next key.
   #notice = "";
-  #status;
   #hint;
+  // The end of the conversation: the lane with the working row, the two
+  // rings and how the conversation scrolls.
+  #foot;
+  #working;
+  #workingWord;
+  #workingClock;
+  #workingRing;
+  #stepRing;
+  // The running step's icon that holds #stepRing.
+  #stepRingHolder = null;
+  #follow;
+  #veil;
+  #jump;
+  // A request sent from here that has not been seen in the log yet.
+  #glideNext = false;
+  // The conversation's end shows at once on the next draw.
+  #jumpNext = true;
+  // When each turn really started, for the clock: the time waiting for the
+  // agent to start does not count. Conversation -> {sent, at}.
+  #turnStarts = new WeakMap();
+  // Each run of steps by its first message.
+  #groups = new WeakMap();
   #pill;
   #handle;
   #grip;
@@ -225,10 +274,6 @@ export class LazyvimiumAgentDock {
     this.#agentChip = create("button", "lazyvimium-agent-chip", header);
     this.#agentChip.title = "Pick an agent (Tab cycles)";
     this.#agentChip.addEventListener("click", () => this.pickAgent());
-    this.#modelChip = create("button", "lazyvimium-agent-model", header);
-    this.#modelChip.title = "Pick a model (<leader>am)";
-    this.#modelChip.addEventListener("click", () => this.pickModel());
-    this.#status = create("span", "lazyvimium-agent-status", header);
     create("span", "lazyvimium-agent-spacer", header);
     iconButton("new-chat", header, "New chat (<leader>an)").addEventListener(
       "click",
@@ -265,7 +310,36 @@ export class LazyvimiumAgentDock {
       onPrompt: text => this.#askFromPage(text),
     });
 
+    this.#foot = create("div", "lazyvimium-agent-foot");
+    this.#working = create("div", "lazyvimium-agent-working", this.#foot);
+    this.#working.setAttribute("role", "status");
+    this.#workingRing = new lazy.WorkingRing(window, { size: 16 });
+    this.#working.append(this.#workingRing.element);
+    this.#workingWord = create(
+      "span",
+      "lazyvimium-agent-working-word",
+      this.#working
+    );
+    this.#workingClock = create(
+      "span",
+      "lazyvimium-agent-working-clock",
+      this.#working
+    );
+    this.#stepRing = new lazy.WorkingRing(window, { size: 12 });
+    this.#veil = new lazy.Veil(window);
+    this.#follow = new lazy.LazyvimiumAgentFollow(window, this.#log, {
+      foot: this.#foot,
+      lane: FOOT_LANE,
+      onJump: shown => this.#jump.toggleAttribute("shown", shown),
+    });
+
     const composer = create("div", "lazyvimium-agent-composer", this.#root);
+    this.#jump = create("button", "lazyvimium-agent-jump", composer);
+    this.#jump.type = "button";
+    this.#jump.addEventListener("mousedown", event => event.preventDefault());
+    this.#jump.addEventListener("click", () =>
+      this.#follow.toEnd({ smooth: true })
+    );
     this.#tabChip = create("div", "lazyvimium-agent-tab", composer);
     this.#attachRow = create("div", "lazyvimium-agent-attachments", composer);
     this.#attachRow.hidden = true;
@@ -291,6 +365,38 @@ export class LazyvimiumAgentDock {
     const attach = roundButton("attach", bar, "Attach files");
     attach.addEventListener("click", () => this.#pickFiles());
     create("span", "lazyvimium-agent-spacer", bar);
+    // The mouse's way to the model; <leader>am keeps the keyboard picker.
+    this.#modelChip = create("button", "lazyvimium-agent-model", bar);
+    this.#modelChip.type = "button";
+    this.#modelChip.setAttribute("aria-haspopup", "dialog");
+    this.#modelLogo = create(
+      "span",
+      "lazyvimium-agent-model-logo",
+      this.#modelChip
+    );
+    this.#modelName = create(
+      "span",
+      "lazyvimium-agent-model-name",
+      this.#modelChip
+    );
+    this.#modelEffort = create(
+      "span",
+      "lazyvimium-agent-model-effort",
+      this.#modelChip
+    );
+    this.#modelChip.addEventListener("mousedown", event =>
+      event.preventDefault()
+    );
+    this.#modelChip.addEventListener("click", () => this.#toggleModelCard());
+    this.#modelCard = new lazy.LazyvimiumAgentModelCard(window, {
+      onChange: () => this.#renderModel(),
+      onClose: ({ refocus }) => {
+        this.#picking = false;
+        if (refocus && this.#open) {
+          this.#input.focus();
+        }
+      },
+    });
     this.#instructionsButton = roundButton(
       "instructions",
       bar,
@@ -628,38 +734,8 @@ export class LazyvimiumAgentDock {
       return;
     }
     const current = lazy.LazyvimiumAgents.modelFor(agent.id);
-    // Remembered lists answer at once; only a first-ever ask waits for the
-    // CLI, and says so.
-    const asked = lazy.LazyvimiumAgents.models(agent);
-    const slow = this.#window.setTimeout(() => {
-      this.#modelChip.textContent = "listing models…";
-    }, 150);
-    const models = await asked;
-    this.#window.clearTimeout(slow);
-    this.#renderModel();
-    // What the attachments need, so the models that read it come first.
     const needs = this.#attachedKinds();
-    // Models that read it, then those not known to, then those that cannot.
-    const rank = model => {
-      if (!model.input) {
-        return 1;
-      }
-      return needs.every(kind => model.input.includes(kind)) ? 2 : 0;
-    };
-    const ordered = needs.length
-      ? models
-          .map((model, i) => ({ model, i }))
-          .sort((a, b) => rank(b.model) - rank(a.model) || a.i - b.i)
-          .map(({ model }) => model)
-      : models;
-    const items = [
-      { id: "", name: "Default", detail: `what ${agent.name}'s settings pick` },
-      ...ordered,
-    ];
-    // A model picked before that the list no longer has stays pickable.
-    if (current && !models.some(model => model.id == current)) {
-      items.push({ id: current, name: current, detail: "" });
-    }
+    const items = await this.#modelList(agent);
     this.#picking = true;
     let index;
     try {
@@ -685,6 +761,68 @@ export class LazyvimiumAgentDock {
     if (this.#open) {
       this.#input.focus();
     }
+  }
+
+  // The models to pick from, the ones that read what is attached first.
+  // Remembered lists answer at once; only a first-ever ask waits for the CLI,
+  // and says so.
+  async #modelList(agent) {
+    const current = lazy.LazyvimiumAgents.modelFor(agent.id);
+    const asked = lazy.LazyvimiumAgents.models(agent);
+    const slow = this.#window.setTimeout(() => {
+      this.#modelName.textContent = "listing models…";
+      this.#modelEffort.hidden = true;
+    }, 150);
+    const models = await asked;
+    this.#window.clearTimeout(slow);
+    this.#renderModel();
+    const needs = this.#attachedKinds();
+    // Models that read it, then those not known to, then those that cannot.
+    const rank = model => {
+      if (!model.input) {
+        return 1;
+      }
+      return needs.every(kind => model.input.includes(kind)) ? 2 : 0;
+    };
+    const ordered = needs.length
+      ? models
+          .map((model, i) => ({ model, i }))
+          .sort((a, b) => rank(b.model) - rank(a.model) || a.i - b.i)
+          .map(({ model }) => model)
+      : models;
+    const items = [
+      { id: "", name: "Default", detail: `what ${agent.name}'s settings pick` },
+      ...ordered,
+    ];
+    // A model picked before that the list no longer has stays pickable.
+    if (current && !models.some(model => model.id == current)) {
+      items.push({ id: current, name: current, detail: "" });
+    }
+    return items;
+  }
+
+  // The chip's card, which a second click closes.
+  async #toggleModelCard() {
+    if (this.#modelCard.isOpen) {
+      this.#modelCard.close();
+      return;
+    }
+    const agent = this.#conversation?.agent;
+    if (!agent) {
+      return;
+    }
+    const needs = this.#attachedKinds();
+    const items = await this.#modelList(agent);
+    // The card is not part of the panel: moving to it must not hide it.
+    this.#picking = true;
+    this.#modelCard.open(
+      this.#modelChip,
+      agent,
+      items.map(model => {
+        const note = this.#inputNote(model, needs);
+        return { ...model, note, tone: note == "reads it" ? "good" : "warn" };
+      })
+    );
   }
 
   // What a model reads, for its row in the picker: when something attached
@@ -716,7 +854,11 @@ export class LazyvimiumAgentDock {
         known => known.id == id
       );
       const textOnly = !!model?.input && !model.input.includes("image");
-      this.#modelChip.textContent = id ? model?.name || id : "default model";
+      // Only a level that is really sent shows here.
+      const { effort } = lazy.LazyvimiumAgents.optionsFor(agent.id);
+      lazy.rollText(this.#modelName, id ? model?.name || id : "Default");
+      lazy.rollText(this.#modelEffort, effort ? lazy.effortLabel(effort) : "");
+      this.#modelEffort.hidden = !effort;
       this.#modelChip.toggleAttribute("text-only", textOnly);
       this.#modelChip.title = textOnly
         ? "This model reads text only, not pictures (Pick a model)"
@@ -1061,6 +1203,8 @@ export class LazyvimiumAgentDock {
     this.#unsubscribe?.();
     this.#unsubscribe = null;
     this.#conversation = conversation;
+    this.#jumpNext = true;
+    this.#modelCard.close();
     if (conversation) {
       this.#unsubscribe = conversation.subscribe(() => this.#onConversation());
     }
@@ -1583,6 +1727,7 @@ export class LazyvimiumAgentDock {
     if (this.#window.gBrowser.selectedBrowser == conversation.browser) {
       conversation.browser.focus();
     }
+    this.#glideNext = true;
     conversation
       .send(
         text,
@@ -1615,6 +1760,7 @@ export class LazyvimiumAgentDock {
     if (conversation.running) {
       return `${conversation.agent.name} is still working; ask again when it is done.`;
     }
+    this.#glideNext = true;
     conversation.send(text).catch(e => {
       console.error("Lazyvimium: the agent turn failed", e);
     });
@@ -1707,6 +1853,7 @@ export class LazyvimiumAgentDock {
       ),
       this.#create("span", "lazyvimium-agent-chip-caret")
     );
+    this.#modelLogo.replaceChildren(this.#logo(agent?.id));
   }
 
   #installName(agent) {
@@ -1715,34 +1862,16 @@ export class LazyvimiumAgentDock {
     return name;
   }
 
-  #render() {
-    const conversation = this.#conversation;
-    const atBottom =
-      this.#log.scrollTop + this.#log.clientHeight >=
-      this.#log.scrollHeight - 8;
-
-    const rows = [];
-    const messages = conversation?.messages ?? [];
-    if (!conversation) {
-      rows.push(...this.#renderNoAgent());
-    } else if (!messages.length) {
-      rows.push(this.#renderEmpty(conversation.agent));
-    }
-    for (const message of messages) {
-      const streaming =
-        !!conversation.running &&
-        message.type == "agent" &&
-        message == messages.at(-1);
-      rows.push(this.#rowFor(message, streaming));
-    }
-    // Keep the rows that did not change, so a streaming answer redraws only
-    // itself and a selection elsewhere survives.
-    let child = this.#log.firstChild;
+  // Make a box's children exactly these, leaving the ones already in place
+  // alone, so a streaming answer redraws only itself and a selection
+  // elsewhere survives.
+  #syncChildren(box, rows) {
+    let child = box.firstChild;
     for (const row of rows) {
       if (row == child) {
         child = child.nextSibling;
       } else {
-        this.#log.insertBefore(row, child);
+        box.insertBefore(row, child);
       }
     }
     while (child) {
@@ -1750,9 +1879,146 @@ export class LazyvimiumAgentDock {
       child.remove();
       child = next;
     }
+  }
+
+  // The conversation's rows: steps in a row share a group that folds.
+  #conversationRows(conversation, messages) {
+    const rows = [];
+    let run = [];
+    const endRun = live => {
+      if (run.length) {
+        rows.push(this.#groupFor(run, live));
+        run = [];
+      }
+    };
+    for (const message of messages) {
+      if (message.type == "step" || message.type == "tool") {
+        run.push(message);
+        continue;
+      }
+      endRun(false);
+      const streaming =
+        !!conversation.running &&
+        message.type == "agent" &&
+        message == messages.at(-1);
+      rows.push(this.#rowFor(message, streaming));
+    }
+    endRun(!!conversation.running);
+    return rows;
+  }
+
+  #groupFor(run, live) {
+    let group = this.#groups.get(run[0]);
+    if (!group) {
+      group = {
+        root: this.#create("div", "lazyvimium-agent-group"),
+        head: this.#create("button", "lazyvimium-agent-group-head"),
+        title: this.#create("span", "lazyvimium-agent-group-title"),
+        fold: this.#create("div", "lazyvimium-agent-group-fold"),
+        body: this.#create("div", "lazyvimium-agent-group-body"),
+        // Only a group seen working knows how long it took.
+        startedAt: live ? Date.now() : 0,
+        endedAt: 0,
+        // What the reader chose, which outlasts the group folding itself.
+        chosen: null,
+        open: false,
+      };
+      group.head.type = "button";
+      group.head.addEventListener("mousedown", event => event.preventDefault());
+      group.head.addEventListener("click", () => {
+        group.chosen = !group.open;
+        this.#syncGroup(group);
+      });
+      group.head.append(
+        group.title,
+        this.#create("span", "lazyvimium-agent-group-chevron")
+      );
+      group.fold.append(group.body);
+      group.root.append(group.head, group.fold);
+      this.#groups.set(run[0], group);
+    }
+    const known = new Set(group.body.children);
+    const rows = run.map(message => this.#rowFor(message, false));
+    for (const row of rows) {
+      // Only what arrives while the reader watches slides in.
+      row.toggleAttribute("fresh", live && !known.has(row));
+    }
+    this.#syncChildren(group.body, rows);
+    if (group.live && !live) {
+      group.endedAt = Date.now();
+    }
+    group.live = live;
+    group.root.toggleAttribute("live", live);
+    lazy.rollText(group.title, this.#groupTitle(group, run));
+    this.#syncGroup(group);
+    return group.root;
+  }
+
+  #syncGroup(group) {
+    group.open = group.chosen ?? group.live;
+    group.root.toggleAttribute("open", group.open);
+    group.head.setAttribute("aria-expanded", String(group.open));
+    // Rows clipped by the fold take no keys or clicks.
+    group.fold.inert = !group.open;
+  }
+
+  // While it works, what it is doing; then, what it came to.
+  #groupTitle(group, run) {
+    if (group.live) {
+      const last = run.at(-1);
+      return last.type == "tool" ? `Used ${last.text}` : last.text;
+    }
+    const failed = run.filter(message => message.status == "failed").length;
+    const steps = `${run.length} ${run.length == 1 ? "step" : "steps"}`;
+    return [
+      group.startedAt && group.endedAt
+        ? `Worked for ${formatDuration(group.endedAt - group.startedAt)}`
+        : "",
+      steps,
+      failed ? `${failed} failed` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  // The small ring goes on the step in flight; a redraw of that step takes
+  // it off again.
+  #placeStepRing() {
+    const icons = this.#log.querySelectorAll(
+      '[status="running"] > .lazyvimium-agent-step-icon'
+    );
+    const icon = icons[icons.length - 1] ?? null;
+    if (icon != this.#stepRingHolder && this.#stepRingHolder?.isConnected) {
+      this.#stepRingHolder.textContent = STEP_ICONS.running;
+    }
+    this.#stepRingHolder = icon;
+    if (icon) {
+      if (this.#stepRing.element.parentNode != icon) {
+        icon.replaceChildren(this.#stepRing.element);
+      }
+      this.#stepRing.start();
+    } else {
+      this.#stepRing.stop();
+    }
+  }
+
+  #render() {
+    const conversation = this.#conversation;
+    const rows = [];
+    const messages = conversation?.messages ?? [];
+    if (!conversation) {
+      rows.push(...this.#renderNoAgent());
+    } else if (!messages.length) {
+      rows.push(this.#renderEmpty(conversation.agent));
+    } else {
+      rows.push(...this.#conversationRows(conversation, messages));
+      rows.push(this.#foot);
+    }
+    this.#syncChildren(this.#log, rows);
     this.#uiView.attach(this.#log);
-    if (atBottom) {
-      this.#log.scrollTop = this.#log.scrollHeight;
+    this.#placeStepRing();
+    if (messages.length) {
+      this.#scrollAfterRender(messages);
     }
 
     const agent = conversation?.agent;
@@ -1781,9 +2047,30 @@ export class LazyvimiumAgentDock {
     this.#hint.textContent = this.#notice || hint;
     this.#hint.toggleAttribute("warning", !!this.#notice);
     this.#root.toggleAttribute("running", !!conversation?.running);
+    this.#jump.textContent = conversation?.running
+      ? "New reply"
+      : "Jump to latest";
     this.#syncComposer();
     this.#syncInstructions();
     this.#updateStatus();
+  }
+
+  #scrollAfterRender(messages) {
+    if (this.#jumpNext) {
+      this.#jumpNext = false;
+      this.#glideNext = false;
+      this.#follow.toEnd();
+      return;
+    }
+    const prompt = this.#glideNext
+      ? messages.findLast(message => message.type == "user")
+      : null;
+    if (prompt) {
+      this.#glideNext = false;
+      this.#follow.sent(this.#rows.get(prompt).row);
+    } else {
+      this.#follow.update();
+    }
   }
 
   // A message's row, built again only when what it shows changed. An answer
@@ -1804,8 +2091,9 @@ export class LazyvimiumAgentDock {
     }
     let row = cached?.row;
     // An answer and a table or page keep their row: a page's browser and a
-    // table's filter box live in it.
-    if (!row || (message.type != "agent" && message.type != "ui")) {
+    // table's filter box live in it. So does a step, which would slide in
+    // again when it finishes.
+    if (!row || !["agent", "ui", "step"].includes(message.type)) {
       row = this.#create("div", "lazyvimium-agent-message");
       row.setAttribute("type", message.type);
     }
@@ -1821,6 +2109,8 @@ export class LazyvimiumAgentDock {
           onLink: href =>
             this.#window.openWebLinkIn(href, "tab", { relatedToCurrent: true }),
         });
+        // Only what just arrived fades in; a redraw continues a fade.
+        this.#veil.update(row);
         if (!streaming && message.text.trim()) {
           // Each code block copies on its own; the whole answer copies as
           // the Markdown the agent wrote.
@@ -1837,7 +2127,7 @@ export class LazyvimiumAgentDock {
         break;
       case "step": {
         row.setAttribute("status", message.status);
-        row.append(
+        row.replaceChildren(
           this.#create(
             "span",
             "lazyvimium-agent-step-icon",
@@ -1953,12 +2243,46 @@ export class LazyvimiumAgentDock {
     return rows;
   }
 
+  // The row under the conversation: "Starting…" with no clock until the
+  // agent really runs, then a word and a clock that start together and
+  // never restart. Leaving, it only fades: its lane keeps its height.
+  #syncWorking(conversation) {
+    const running = !!conversation?.running;
+    this.#working.toggleAttribute("shown", running);
+    this.#foot.style.setProperty(
+      "--lazyvimium-agent-color",
+      lazy.agentColor(conversation?.agent.id)
+    );
+    if (!running) {
+      this.#workingRing.stop();
+      this.#follow.release();
+      return;
+    }
+    this.#workingRing.start();
+    let turn = this.#turnStarts.get(conversation);
+    if (conversation.run && turn?.sent != conversation.startedAt) {
+      turn = { sent: conversation.startedAt, at: Date.now() };
+      this.#turnStarts.set(conversation, turn);
+    }
+    if (turn?.sent != conversation.startedAt) {
+      lazy.rollText(this.#workingWord, "Starting…");
+      this.#workingClock.textContent = "";
+      return;
+    }
+    const seconds = Math.floor((Date.now() - turn.at) / 1000);
+    lazy.rollText(
+      this.#workingWord,
+      lazy.workingWord(lazy.seedOf(String(turn.sent)), seconds)
+    );
+    this.#workingClock.textContent = formatDuration(
+      Math.max(1000, seconds * 1000)
+    );
+  }
+
   #updateStatus() {
     const conversation = this.#conversation;
     const running = !!conversation?.running;
-    this.#status.textContent = running
-      ? `working · ${formatElapsed(Date.now() - conversation.startedAt)}`
-      : "";
+    this.#syncWorking(conversation);
     if (running && !this.#timer) {
       this.#timer = this.#window.setInterval(() => {
         this.#updateStatus();

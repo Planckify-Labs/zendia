@@ -80,6 +80,12 @@ async function closeDock() {
 
 // The mouse at the top edge brings the compact top bar down.
 async function showTopBar() {
+  // Zen's own hover may still be pending from a compact change. When it ends
+  // it takes zen-has-hover off too, so setting that now would be undone.
+  await TestUtils.waitForCondition(
+    () => !wrapper().hasAttribute("zen-has-implicit-hover"),
+    "Zen's own hover ended"
+  );
   wrapper().setAttribute("zen-has-hover", "true");
   await TestUtils.waitForCondition(
     () => wrapper().getBoundingClientRect().height >= 30,

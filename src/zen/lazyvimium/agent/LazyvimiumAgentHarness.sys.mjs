@@ -133,6 +133,92 @@ function tomlString(value) {
   return JSON.stringify(String(value));
 }
 
+// Reasoning effort levels from least to most, as the CLIs name them.
+export const EFFORT_ORDER = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+];
+
+/**
+ * @param {string[]} levels Effort levels in any order.
+ * @returns {string[]} A new list from least to most effort; a level that
+ *   EFFORT_ORDER does not know goes last, in the order it was listed.
+ */
+export function orderEfforts(levels) {
+  const rank = level => {
+    const at = EFFORT_ORDER.indexOf(level);
+    return at < 0 ? EFFORT_ORDER.length : at;
+  };
+  return [...levels].sort((a, b) => rank(a) - rank(b));
+}
+
+// Agy lists each effort of a model as an id of its own, gemini-3.8-flash-low
+// and so on. One model with an effort reads better, and the id is put back
+// together when the turn starts.
+const AGY_VARIANT = /^(.+)-(minimal|low|medium|high|xhigh|max)$/;
+
+function foldAgyVariants(models) {
+  const groups = new Map();
+  for (const model of models) {
+    const match = AGY_VARIANT.exec(model.id);
+    if (match) {
+      groups.set(match[1], [...(groups.get(match[1]) ?? []), model]);
+    }
+  }
+  const folded = [];
+  const done = new Set();
+  for (const model of models) {
+    const base = AGY_VARIANT.exec(model.id)?.[1];
+    // A base with one variant is a model of its own, under its full id.
+    if (!base || groups.get(base).length < 2) {
+      folded.push(model);
+    } else if (!done.has(base)) {
+      done.add(base);
+      const variants = groups.get(base);
+      const efforts = orderEfforts(
+        variants.map(variant => AGY_VARIANT.exec(variant.id)[2])
+      );
+      const label = model.name.replace(/\s*\([^)]*\)\s*$/, "");
+      folded.push({
+        id: base,
+        name: label && label != model.name ? label : base,
+        efforts,
+        defaultEffort: efforts.includes("medium")
+          ? "medium"
+          : efforts[Math.ceil(efforts.length / 2) - 1],
+        effortInId: true,
+        ...(model.input ? { input: model.input } : {}),
+      });
+    }
+  }
+  return folded;
+}
+
+/**
+ * @typedef {object} LazyvimiumAgentModel
+ * @property {string} id What the CLI is given as the model.
+ * @property {string} name What the picker shows.
+ * @property {string} [detail] A line about it.
+ * @property {string[]} [input] What it reads (text, image, pdf, audio,
+ *   video), where that is known.
+ * @property {string[]} [efforts] The reasoning effort levels the CLI accepts
+ *   for it, from least to most.
+ * @property {string} [defaultEffort] The level the model uses unasked.
+ * @property {boolean} [effortInId] Whether the effort is part of the model's
+ *   id (agy), so one is always sent.
+ * @property {{id: string, label: string, default?: boolean}[]} [contexts]
+ *   The context window sizes to choose from; `id` is what the driver sends
+ *   ("" for the default size).
+ * @property {number} [context] The context window in tokens, for the user to
+ *   read; there is no choice.
+ */
+
 /**
  * @typedef {object} LazyvimiumAgentTurn
  * @property {string} prompt What to send, with the tab's context.
@@ -145,6 +231,10 @@ function tomlString(value) {
  * @property {string} runId Unique per turn, naming its private files.
  * @property {string|null} [model] The model the user picked, or null for
  *   the agent's own.
+ * @property {string|null} [effort] The reasoning effort to run with, or null
+ *   for what the agent's settings say.
+ * @property {string|null} [context] The id of the context window size (one
+ *   of the model's `contexts`), or null for the default.
  */
 
 /**
@@ -238,10 +328,13 @@ function parseVerboseModels(stdout) {
         const input = Object.entries(json.capabilities?.input ?? {})
           .filter(([, takes]) => takes)
           .map(([kind]) => kind);
+        const efforts = orderEfforts(Object.keys(json.variants ?? {}));
         models.push({
           id,
           name: json.name || id,
           ...(input.length ? { input } : {}),
+          ...(efforts.length ? { efforts } : {}),
+          ...(json.limit?.context ? { context: json.limit.context } : {}),
         });
       } catch {
         models.push({ id, name: id });
@@ -293,6 +386,18 @@ function parseStreamJson(event) {
   return [];
 }
 
+// What every Claude model takes, as fresh objects for each model.
+function claudeOptions() {
+  return {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    defaultEffort: "medium",
+    contexts: [
+      { id: "", label: "1M", default: true },
+      { id: "200k", label: "200K" },
+    ],
+  };
+}
+
 /**
  * The drivers, by agent id. `launch` returns the command line, extra
  * environment and private files of a turn; `parse` turns one JSON line of
@@ -318,6 +423,8 @@ export const LAZYVIMIUM_DRIVERS = {
           // The answer as it is written, not once it is done.
           "--include-partial-messages",
           ...(turn.model ? ["--model", turn.model] : []),
+          ...(turn.effort ? ["--effort", turn.effort] : []),
+          ...(turn.context ? ["--autocompact", turn.context] : []),
           ...(turn.resume ? ["--resume", turn.resume] : []),
         ],
         files: [
@@ -381,13 +488,21 @@ export const LAZYVIMIUM_DRIVERS = {
       }
       return parseStreamJson(event);
     },
-    // Claude Code lists no models; its aliases follow the latest of each.
+    // Claude Code has no listing command, so its models and what they take
+    // are written here. The aliases follow the newest of each family, and
+    // those are natively 1M, so 200K is a compaction limit (--autocompact)
+    // rather than a smaller model.
+    defaultModel: claudeOptions(),
     async models() {
       return [
         { id: "opus", name: "Opus", detail: "the latest Opus" },
         { id: "sonnet", name: "Sonnet", detail: "the latest Sonnet" },
         { id: "haiku", name: "Haiku", detail: "the latest Haiku" },
-      ].map(model => ({ ...model, input: ["text", "image", "pdf"] }));
+      ].map(model => ({
+        ...model,
+        input: ["text", "image", "pdf"],
+        ...claudeOptions(),
+      }));
     },
   },
 
@@ -406,6 +521,9 @@ export const LAZYVIMIUM_DRIVERS = {
           `sandbox_mode="read-only"`,
           // As config, which `exec resume` takes too.
           ...(turn.model ? ["-c", `model=${tomlString(turn.model)}`] : []),
+          ...(turn.effort
+            ? ["-c", `model_reasoning_effort=${tomlString(turn.effort)}`]
+            : []),
           "exec",
           ...(turn.resume ? ["resume"] : []),
           "--json",
@@ -456,14 +574,28 @@ export const LAZYVIMIUM_DRIVERS = {
         return (JSON.parse(stdout).models ?? [])
           .filter(model => model.slug && model.visibility != "hide")
           .sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
-          .map(model => ({
-            id: model.slug,
-            name: model.display_name || model.slug,
-            detail: model.description ?? "",
-            ...(model.input_modalities?.length
-              ? { input: model.input_modalities }
-              : {}),
-          }));
+          .map(model => {
+            const efforts = orderEfforts(
+              (model.supported_reasoning_levels ?? [])
+                .map(level => level?.effort)
+                .filter(Boolean)
+            );
+            return {
+              id: model.slug,
+              name: model.display_name || model.slug,
+              detail: model.description ?? "",
+              ...(model.input_modalities?.length
+                ? { input: model.input_modalities }
+                : {}),
+              ...(efforts.length ? { efforts } : {}),
+              ...(model.default_reasoning_level
+                ? { defaultEffort: model.default_reasoning_level }
+                : {}),
+              ...(model.context_window
+                ? { context: model.context_window }
+                : {}),
+            };
+          });
       } catch {
         return [];
       }
@@ -518,13 +650,19 @@ export const LAZYVIMIUM_DRIVERS = {
           "--output-format",
           "stream-json",
           "--dangerously-skip-permissions",
-          ...(turn.model ? ["--model", turn.model] : []),
+          // The effort is part of the model's id, so there is no --effort.
+          ...(turn.model
+            ? [
+                "--model",
+                turn.effort ? `${turn.model}-${turn.effort}` : turn.model,
+              ]
+            : []),
           ...(turn.resume ? ["--conversation", turn.resume] : []),
         ],
       };
     },
     async models(run) {
-      return parseModelLines((await run(["models"])).stdout);
+      return foldAgyVariants(parseModelLines((await run(["models"])).stdout));
     },
     parse(event) {
       switch (event.event) {
@@ -591,6 +729,7 @@ export const LAZYVIMIUM_DRIVERS = {
           "--format",
           "json",
           ...(turn.model ? ["--model", turn.model] : []),
+          ...(turn.effort ? ["--variant", turn.effort] : []),
           ...(turn.resume ? ["--session", turn.resume] : []),
           withInstructions(turn),
         ],
@@ -766,6 +905,10 @@ export const LAZYVIMIUM_DRIVERS = {
               name: model.model_name || model.model_id,
               detail: model.description ?? "",
               ...(input ? { input } : {}),
+              // Nothing says which models honour --effort, so no efforts.
+              ...(model.context_window_tokens
+                ? { context: model.context_window_tokens }
+                : {}),
             };
           });
       } catch {

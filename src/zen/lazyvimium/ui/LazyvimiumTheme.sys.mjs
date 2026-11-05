@@ -97,6 +97,15 @@ export const LAZYVIMIUM_ROLES = {
   "agent-border": "border",
   "agent-user": "accent",
   "agent-confirm": "yellow",
+  // The effort slider, from cool to hot as the model thinks harder.
+  "effort-none": "muted",
+  "effort-minimal": "teal",
+  "effort-low": "cyan",
+  "effort-medium": "blue",
+  "effort-high": "purple",
+  "effort-xhigh": "pink",
+  "effort-max": "orange",
+  "effort-ultra": "red",
 };
 
 // The agent panel's glass: how much of the surface color shows over the page

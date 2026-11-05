@@ -34,6 +34,10 @@ export const PREF_DEFAULT_AGENT = "lazyvimium.agent.default";
 export const PREF_NETWORK = "lazyvimium.agent.network";
 // lazyvimium.agent.model.<agent id>: the model each agent runs with.
 export const PREF_MODEL = "lazyvimium.agent.model.";
+// lazyvimium.agent.effort.<agent id> and lazyvimium.agent.context.<agent id>:
+// the reasoning effort and the context window size picked for each agent.
+export const PREF_EFFORT = "lazyvimium.agent.effort.";
+export const PREF_CONTEXT = "lazyvimium.agent.context.";
 
 // What one request may carry, and how long the copies of its files stay.
 export const ATTACH_MAX_FILES = 10;
@@ -41,6 +45,9 @@ export const ATTACH_MAX_BYTES = 25 * 1024 * 1024;
 const ATTACH_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 // How long a remembered model list answers without asking the CLI again.
 const MODELS_FRESH_MS = 60 * 60 * 1000;
+// What the remembered lists look like: v1 lists lack efforts and contexts, so
+// they count as missing.
+const MODELS_CACHE_VERSION = 2;
 
 /**
  * @typedef {object} LazyvimiumAgentMessage
@@ -231,17 +238,6 @@ export class LazyvimiumAgentConversation {
       agent: this.agent.id,
     });
     const log = this.log;
-    log.write("turn", {
-      turn: ++this.#turns,
-      agent: this.agent.id,
-      version: this.agent.version,
-      model: this.#service.modelFor(this.agent.id) || null,
-      executable: this.agent.path,
-      resume: this.resume,
-      url: this.#browser.currentURI?.spec,
-      title: this.#browser.contentTitle,
-      request: text,
-    });
     const toolbox = new LazyvimiumAgentToolbox({
       lazyvimium: this.#service.lazyvimium,
       browser: () => this.#browser,
@@ -266,6 +262,23 @@ export class LazyvimiumAgentConversation {
         text: `Could not attach the files: ${e.message ?? e}`,
       });
     }
+    // The effort and window depend on the model's entry in the list, which
+    // is empty this session until it was read from the file.
+    await this.#service.loadRememberedModels(this.agent.id);
+    const options = this.#service.optionsFor(this.agent.id);
+    log.write("turn", {
+      turn: ++this.#turns,
+      agent: this.agent.id,
+      version: this.agent.version,
+      model: this.#service.modelFor(this.agent.id) || null,
+      effort: options.effort,
+      context: options.context || null,
+      executable: this.agent.path,
+      resume: this.resume,
+      url: this.#browser.currentURI?.spec,
+      title: this.#browser.contentTitle,
+      request: text,
+    });
     const path = await LazyvimiumAgentDetect.childPath();
     const connected =
       !driver.ensureConnected ||
@@ -287,6 +300,8 @@ export class LazyvimiumAgentConversation {
         prompt: this.#prompt(text, attached),
         resume: this.resume,
         model: this.#service.modelFor(this.agent.id) || null,
+        effort: options.effort,
+        context: options.context || null,
         first,
         mcp: { url: LazyvimiumAgentServer.url, token },
         dir: this.#service.workDir,
@@ -636,6 +651,105 @@ class LazyvimiumAgentService {
     }
   }
 
+  /**
+   * @param {string} id An agent id.
+   * @returns {string} The reasoning effort the user picked, or "".
+   */
+  effortFor(id) {
+    return Services.prefs.getStringPref(`${PREF_EFFORT}${id}`, "");
+  }
+
+  /**
+   * @param {string} id An agent id.
+   * @param {string} effort "" goes back to the agent's own setting.
+   */
+  setEffort(id, effort) {
+    if (effort) {
+      Services.prefs.setStringPref(`${PREF_EFFORT}${id}`, effort);
+    } else {
+      Services.prefs.clearUserPref(`${PREF_EFFORT}${id}`);
+    }
+  }
+
+  /**
+   * @param {string} id An agent id.
+   * @returns {string} The id of the context window size the user picked, or
+   *   "" for the default one.
+   */
+  contextFor(id) {
+    return Services.prefs.getStringPref(`${PREF_CONTEXT}${id}`, "");
+  }
+
+  /**
+   * @param {string} id An agent id.
+   * @param {string} context "" goes back to the default size.
+   */
+  setContext(id, context) {
+    if (context) {
+      Services.prefs.setStringPref(`${PREF_CONTEXT}${id}`, context);
+    } else {
+      Services.prefs.clearUserPref(`${PREF_CONTEXT}${id}`);
+    }
+  }
+
+  /**
+   * What the model picked for an agent lets the user choose, and what a turn
+   * sends of it. Needs the model list: see `loadRememberedModels`.
+   *
+   * @param {string} id An agent id.
+   * @returns {{
+   *   model: object|null,
+   *   efforts: string[],
+   *   effort: string|null,
+   *   shownEffort: string|null,
+   *   contexts: {id: string, label: string, default?: boolean}[],
+   *   context: string,
+   *   contextTokens: number|null,
+   * }} `model` is the picked model (the driver's defaultModel with no pick),
+   *   `efforts` the levels it takes and `effort` the one a turn sends: null
+   *   leaves it to the CLI's own settings, which a level the user did not
+   *   choose would override. `shownEffort` is where a slider sits, `contexts`
+   *   the window sizes to choose from and `context` the id in use,
+   *   `contextTokens` the window in tokens where the CLI only reports it.
+   */
+  optionsFor(id) {
+    const picked = this.modelFor(id);
+    const model = picked
+      ? (this.modelsNow(id).find(item => item.id == picked) ?? null)
+      : (LAZYVIMIUM_DRIVERS[id]?.defaultModel ?? null);
+    const efforts = model?.efforts ?? [];
+    const saved = this.effortFor(id);
+    let effort = null;
+    if (efforts.length) {
+      if (saved) {
+        effort = efforts.includes(saved)
+          ? saved
+          : (["high", "medium"].find(level => efforts.includes(level)) ??
+            efforts[0]);
+      } else if (model.effortInId) {
+        effort = model.defaultEffort ?? null;
+      }
+    }
+    const contexts = model?.contexts ?? [];
+    const savedContext = this.contextFor(id);
+    return {
+      model,
+      efforts,
+      effort,
+      shownEffort:
+        effort ??
+        model?.defaultEffort ??
+        efforts[Math.ceil(efforts.length / 2) - 1] ??
+        null,
+      contexts,
+      context:
+        savedContext && contexts.some(item => item.id == savedContext)
+          ? savedContext
+          : (contexts.find(item => item.default)?.id ?? ""),
+      contextTokens: model?.context ?? null,
+    };
+  }
+
   #models = new Map();
   #modelCache = null;
 
@@ -656,9 +770,15 @@ class LazyvimiumAgentService {
     return this.#modelCache;
   }
 
+  // A remembered list of another version is as good as none.
+  async #remembered(id) {
+    const entry = (await this.#readModelCache())[id];
+    return entry?.v == MODELS_CACHE_VERSION ? entry : undefined;
+  }
+
   async #saveModels(agent, models) {
     const cache = await this.#readModelCache();
-    cache[agent.id] = { at: Date.now(), models };
+    cache[agent.id] = { v: MODELS_CACHE_VERSION, at: Date.now(), models };
     try {
       await IOUtils.makeDirectory(this.workDir, {
         createAncestors: true,
@@ -674,20 +794,22 @@ class LazyvimiumAgentService {
    * The models an agent offers, as its CLI lists them. The list of the last
    * run answers at once and is renewed behind it, at most once an hour; with
    * nothing remembered the CLI is asked and awaited. Each model is
-   * `{id, name, detail?, input?}`, `input` listing what it reads (text,
-   * image, pdf, audio, video) where that is known.
+   * `{id, name, detail?, input?, efforts?, defaultEffort?, effortInId?,
+   * contexts?, context?}`, see LazyvimiumAgentModel in the harness: `input`
+   * lists what it reads (text, image, pdf, audio, video) where that is known,
+   * `efforts` and `contexts` what the user can choose for it.
    *
    * @param {object} agent A detected agent.
    * @param {object} [options]
    * @param {boolean} [options.refresh] Ask the CLI again and wait for it.
-   * @returns {Promise<{id: string, name: string, detail?: string, input?: string[]}[]>}
+   * @returns {Promise<import("resource:///modules/lazyvimium/agent/LazyvimiumAgentHarness.sys.mjs").LazyvimiumAgentModel[]>}
    */
   async models(agent, { refresh = false } = {}) {
     const driver = LAZYVIMIUM_DRIVERS[agent.id];
     if (!driver?.models || !agent.path) {
       return [];
     }
-    const remembered = (await this.#readModelCache())[agent.id];
+    const remembered = await this.#remembered(agent.id);
     const stale =
       !remembered?.models?.length ||
       Date.now() - remembered.at > MODELS_FRESH_MS;
@@ -708,7 +830,7 @@ class LazyvimiumAgentService {
           this.#models.delete(agent.id);
           if (models.length) {
             this.#saveModels(agent, models);
-            this.#current.set(agent.id, models);
+            this.#adopt(agent.id, models);
           }
           return models;
         });
@@ -718,7 +840,7 @@ class LazyvimiumAgentService {
       }
     }
     if (remembered?.models?.length) {
-      this.#current.set(agent.id, remembered.models);
+      this.#adopt(agent.id, remembered.models);
       return remembered.models;
     }
     return this.#models.get(agent.id) ?? [];
@@ -726,6 +848,44 @@ class LazyvimiumAgentService {
 
   // The newest list of each agent that is already at hand.
   #current = new Map();
+
+  // A list has arrived. A model picked before agy's variants were folded
+  // into one is still in the pick as its variant's id: it becomes the model
+  // and its effort.
+  #adopt(id, models) {
+    this.#current.set(id, models);
+    const picked = this.modelFor(id);
+    if (!picked || models.some(model => model.id == picked)) {
+      return;
+    }
+    for (const model of models) {
+      const effort = model.effortInId
+        ? model.efforts?.find(level => `${model.id}-${level}` == picked)
+        : null;
+      if (effort) {
+        this.setModel(id, model.id);
+        this.setEffort(id, effort);
+        return;
+      }
+    }
+  }
+
+  /**
+   * Read the remembered model list of an agent into `modelsNow`, from the
+   * file only: the CLI is never asked, so this does not wait on a process.
+   * Does nothing where `models` already has a list this session.
+   *
+   * @param {string} id An agent id.
+   */
+  async loadRememberedModels(id) {
+    if (this.#current.has(id)) {
+      return;
+    }
+    const remembered = await this.#remembered(id);
+    if (remembered?.models?.length && !this.#current.has(id)) {
+      this.#adopt(id, remembered.models);
+    }
+  }
 
   /**
    * The models of an agent, at once, if `models` has run for it this

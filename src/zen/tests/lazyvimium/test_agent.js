@@ -11,12 +11,17 @@ const {
   LAZYVIMIUM_DRIVERS,
   LazyvimiumAgentRun,
   guessInputs,
+  orderEfforts,
   STDIO_PROXY,
   TOKEN_ENV,
   URL_ENV,
 } = ChromeUtils.importESModule(
   "resource:///modules/lazyvimium/agent/LazyvimiumAgentHarness.sys.mjs"
 );
+const { LazyvimiumAgents, PREF_CONTEXT, PREF_EFFORT } =
+  ChromeUtils.importESModule(
+    "resource:///modules/lazyvimium/agent/LazyvimiumAgents.sys.mjs"
+  );
 const { LazyvimiumAgentServer, handleMcpMessage } = ChromeUtils.importESModule(
   "resource:///modules/lazyvimium/agent/LazyvimiumAgentServer.sys.mjs"
 );
@@ -262,25 +267,286 @@ add_task(async function test_drivers_list_models() {
               description: "Fast",
               visibility: "list",
               priority: 1,
+              default_reasoning_level: "medium",
+              // Out of order on purpose: the list is ordered by effort.
+              supported_reasoning_levels: [
+                { effort: "high", description: "Deep" },
+                { effort: "low", description: "Quick" },
+                { effort: "medium", description: "Balanced" },
+              ],
+              context_window: 272000,
             },
           ],
         })
       )
     ),
     [
-      { id: "gpt-a", name: "GPT A", detail: "Fast" },
+      {
+        id: "gpt-a",
+        name: "GPT A",
+        detail: "Fast",
+        efforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+        context: 272000,
+      },
       { id: "gpt-b", name: "GPT B", detail: "" },
-    ]
+    ],
+    "a model without levels or a window carries neither"
   );
   Assert.deepEqual(
     await LAZYVIMIUM_DRIVERS.codex.models(run("not json")),
     [],
     "an output it cannot read lists nothing"
   );
+  const claude = await LAZYVIMIUM_DRIVERS.claude.models();
   Assert.deepEqual(
-    (await LAZYVIMIUM_DRIVERS.claude.models()).map(model => model.id),
+    claude.map(model => model.id),
     ["opus", "sonnet", "haiku"]
   );
+  for (const model of claude) {
+    Assert.deepEqual(
+      model.efforts,
+      ["low", "medium", "high", "xhigh", "max"],
+      `${model.id} takes five levels`
+    );
+    Assert.equal(model.defaultEffort, "medium", model.id);
+    Assert.deepEqual(model.contexts, [
+      { id: "", label: "1M", default: true },
+      { id: "200k", label: "200K" },
+    ]);
+  }
+  Assert.deepEqual(
+    {
+      ...LAZYVIMIUM_DRIVERS.claude.defaultModel,
+    },
+    {
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "medium",
+      contexts: [
+        { id: "", label: "1M", default: true },
+        { id: "200k", label: "200K" },
+      ],
+    },
+    "with no model picked, the same options"
+  );
+  claude[0].efforts.push("changed");
+  ok(
+    !LAZYVIMIUM_DRIVERS.claude.defaultModel.efforts.includes("changed"),
+    "a model's options are its own"
+  );
+
+  Assert.deepEqual(
+    await LAZYVIMIUM_DRIVERS.kiro.models(
+      run(
+        JSON.stringify({
+          models: [
+            {
+              model_id: "auto",
+              model_name: "auto",
+              context_window_tokens: 1e6,
+            },
+            { model_id: "glm-5", model_name: "glm-5" },
+          ],
+        })
+      )
+    ),
+    [
+      {
+        id: "auto",
+        name: "auto",
+        detail: "",
+        input: ["text", "image", "pdf"],
+        context: 1e6,
+      },
+      { id: "glm-5", name: "glm-5", detail: "", input: ["text"] },
+    ],
+    "kiro reports its window and offers no efforts"
+  );
+
+  // OpenCode: the variants of a model are the efforts it takes.
+  const verbose = `opencode/beam-free
+{
+  "id": "beam-free",
+  "name": "Beam Free",
+  "limit": { "context": 1048576, "output": 131072 },
+  "capabilities": { "input": { "text": true, "image": false } },
+  "variants": {
+    "max": { "reasoningEffort": "max" },
+    "low": { "reasoningEffort": "low" },
+    "high": { "reasoningEffort": "high" }
+  }
+}
+opencode/big-pickle
+{
+  "id": "big-pickle",
+  "name": "Big Pickle",
+  "limit": { "output": 1000 },
+  "capabilities": { "input": { "text": true } },
+  "variants": {}
+}
+`;
+  Assert.deepEqual(
+    await LAZYVIMIUM_DRIVERS.opencode.models(async args => ({
+      stdout: args.includes("--verbose") ? verbose : "",
+      exitCode: 0,
+    })),
+    [
+      {
+        id: "opencode/beam-free",
+        name: "Beam Free",
+        input: ["text"],
+        efforts: ["low", "high", "max"],
+        context: 1048576,
+      },
+      { id: "opencode/big-pickle", name: "Big Pickle", input: ["text"] },
+    ],
+    "no variants, no efforts; no window, no context"
+  );
+});
+
+// Recorded from agy 1.5.1, with a model that has one variant only.
+const AGY_LISTING = [
+  "Fetching available models...",
+  "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)",
+  "gemini-3.8-flash-high\tGemini 3.8 Flash (High)",
+  "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)",
+  "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
+  "claude-opus-5-5-low\tClaude Opus 5.5 (Low)",
+  "claude-opus-5-5-high\tClaude Opus 5.5 (High)",
+  "",
+].join("\n");
+
+add_task(async function test_antigravity_folds_variants_into_models() {
+  const models = await LAZYVIMIUM_DRIVERS.antigravity.models(async () => ({
+    stdout: AGY_LISTING,
+    exitCode: 0,
+  }));
+  Assert.deepEqual(models, [
+    {
+      id: "gemini-3.8-flash",
+      name: "Gemini 3.8 Flash",
+      efforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
+      effortInId: true,
+      input: ["text", "image", "pdf"],
+    },
+    {
+      id: "gpt-oss-120b-medium",
+      name: "GPT-OSS 120B (Medium)",
+      input: ["text"],
+    },
+    {
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      efforts: ["low", "high"],
+      defaultEffort: "low",
+      effortInId: true,
+      input: ["text", "image", "pdf"],
+    },
+  ]);
+
+  const odd = await LAZYVIMIUM_DRIVERS.antigravity.models(async () => ({
+    stdout:
+      "x-max\tX (Max)\nx-low\tX (Low)\nx-high\tX (High)\nx-xhigh\tNo label\n",
+    exitCode: 0,
+  }));
+  Assert.deepEqual(odd, [
+    {
+      id: "x",
+      name: "X",
+      efforts: ["low", "high", "xhigh", "max"],
+      defaultEffort: "high",
+      effortInId: true,
+    },
+  ]);
+});
+
+add_task(function test_efforts_are_ordered() {
+  const levels = ["max", "weird", "high", "ultra", "none", "odd", "low"];
+  Assert.deepEqual(orderEfforts(levels), [
+    "none",
+    "low",
+    "high",
+    "max",
+    "ultra",
+    "weird",
+    "odd",
+  ]);
+  Assert.equal(levels[0], "max", "the list given is not changed");
+  Assert.deepEqual(
+    orderEfforts(["minimal", "medium", "xhigh", "low", "high"]),
+    ["minimal", "low", "medium", "high", "xhigh"]
+  );
+  Assert.deepEqual(orderEfforts([]), []);
+});
+
+add_task(function test_drivers_launch_with_effort_and_context() {
+  const set = { ...TURN, model: "m1", effort: "high", context: "200k" };
+
+  const claude = LAZYVIMIUM_DRIVERS.claude.launch(set).args;
+  Assert.equal(claude[claude.indexOf("--effort") + 1], "high");
+  Assert.equal(claude[claude.indexOf("--autocompact") + 1], "200k");
+  const bare = LAZYVIMIUM_DRIVERS.claude.launch(TURN).args;
+  ok(!bare.includes("--effort") && !bare.includes("--autocompact"), "claude");
+  const noContext = LAZYVIMIUM_DRIVERS.claude.launch({
+    ...set,
+    context: null,
+  }).args;
+  ok(noContext.includes("--effort") && !noContext.includes("--autocompact"));
+
+  for (const resume of [null, "t1"]) {
+    const codex = LAZYVIMIUM_DRIVERS.codex.launch({
+      ...set,
+      effort: "xhigh",
+      resume,
+    }).args;
+    ok(codex.includes('model_reasoning_effort="xhigh"'), "codex takes it");
+    Assert.equal(
+      codex[codex.indexOf('model_reasoning_effort="xhigh"') - 1],
+      "-c"
+    );
+    ok(
+      codex.indexOf('model_reasoning_effort="xhigh"') < codex.indexOf("exec"),
+      "as config, before exec"
+    );
+    Assert.deepEqual(
+      codex.slice(codex.indexOf("exec"), codex.indexOf("exec") + 2),
+      resume ? ["exec", "resume"] : ["exec", "--json"]
+    );
+    ok(!codex.includes("--effort") && !codex.includes("--autocompact"));
+  }
+  ok(
+    !LAZYVIMIUM_DRIVERS.codex
+      .launch({ ...TURN, model: "m1" })
+      .args.join(" ")
+      .includes("model_reasoning_effort"),
+    "codex keeps its own effort when none is picked"
+  );
+
+  const opencode = LAZYVIMIUM_DRIVERS.opencode.launch(set).args;
+  Assert.equal(opencode[opencode.indexOf("--variant") + 1], "high");
+  ok(!LAZYVIMIUM_DRIVERS.opencode.launch(TURN).args.includes("--variant"));
+
+  const agy = LAZYVIMIUM_DRIVERS.antigravity.launch(set).args;
+  Assert.equal(
+    agy[agy.indexOf("--model") + 1],
+    "m1-high",
+    "agy takes the effort as part of the model"
+  );
+  ok(!agy.includes("--effort"), "and no --effort of its own");
+  const agyPlain = LAZYVIMIUM_DRIVERS.antigravity.launch({
+    ...set,
+    effort: null,
+  }).args;
+  Assert.equal(agyPlain[agyPlain.indexOf("--model") + 1], "m1");
+
+  for (const id of ["cursor", "kiro"]) {
+    Assert.deepEqual(
+      LAZYVIMIUM_DRIVERS[id].launch(set).args,
+      LAZYVIMIUM_DRIVERS[id].launch({ ...TURN, model: "m1" }).args,
+      `${id} sends no effort or context`
+    );
+  }
 });
 
 add_task(function test_codex_driver() {
@@ -1261,4 +1527,327 @@ add_task(function test_keys_parse_as_agents_name_them() {
   Assert.deepEqual(keyOf("+"), ["+"]);
   Assert.equal(parseKey("Hyper+Q"), null);
   Assert.equal(parseKey("NotAKey"), null);
+});
+
+// The service remembers lists in a file it reads once, so the test that
+// writes that file must be the first to use the service.
+add_task(async function test_remembered_lists_have_a_version() {
+  const dir = PathUtils.join(
+    PathUtils.join(PathUtils.profileDir, "lazyvimium"),
+    "agent"
+  );
+  const file = PathUtils.join(dir, "models-cache.json");
+  await IOUtils.makeDirectory(dir, { createAncestors: true });
+  const opus = { id: "opus", name: "Opus", efforts: ["low", "high"] };
+  await IOUtils.writeJSON(file, {
+    claude: { v: 2, at: Date.now(), models: [opus] },
+    codex: { at: Date.now(), models: [{ id: "old", name: "Old" }] },
+    kiro: { v: 1, at: Date.now(), models: [{ id: "old", name: "Old" }] },
+  });
+
+  // Reading what is remembered never asks a CLI.
+  const originals = {};
+  let asked = 0;
+  for (const id of ["claude", "codex", "kiro"]) {
+    originals[id] = LAZYVIMIUM_DRIVERS[id].models;
+    LAZYVIMIUM_DRIVERS[id].models = async () => {
+      asked++;
+      return [{ id: "new", name: "New" }];
+    };
+  }
+  try {
+    for (const id of ["claude", "codex", "kiro"]) {
+      await LazyvimiumAgents.loadRememberedModels(id);
+    }
+    Assert.deepEqual(LazyvimiumAgents.modelsNow("claude"), [opus]);
+    Assert.deepEqual(
+      LazyvimiumAgents.modelsNow("codex"),
+      [],
+      "a list without a version is missing"
+    );
+    Assert.deepEqual(
+      LazyvimiumAgents.modelsNow("kiro"),
+      [],
+      "so is one of another version"
+    );
+    Assert.equal(asked, 0, "no CLI was asked");
+
+    const agent = { id: "kiro", name: "Kiro", path: "/bin/true" };
+    Assert.deepEqual(
+      await LazyvimiumAgents.models(agent),
+      [{ id: "new", name: "New" }],
+      "an old list is not answered with"
+    );
+    Assert.equal(asked, 1, "the CLI is asked in its place");
+    let written = null;
+    for (let i = 0; i < 100 && written?.v != 2; i++) {
+      await new Promise(resolve => do_timeout(50, resolve));
+      written = (await IOUtils.readJSON(file)).kiro;
+    }
+    Assert.equal(written?.v, 2, "the new list is written with the version");
+    Assert.deepEqual(written.models, [{ id: "new", name: "New" }]);
+  } finally {
+    for (const id in originals) {
+      LAZYVIMIUM_DRIVERS[id].models = originals[id];
+    }
+  }
+});
+
+function clearPicks() {
+  for (const id of ["claude", "codex", "antigravity"]) {
+    LazyvimiumAgents.setModel(id, "");
+    LazyvimiumAgents.setEffort(id, "");
+    LazyvimiumAgents.setContext(id, "");
+  }
+}
+
+// Run with these as the models the agents list this session.
+function withModels(models, fn) {
+  LazyvimiumAgents.modelsNow = id => models[id] ?? [];
+  try {
+    return fn();
+  } finally {
+    delete LazyvimiumAgents.modelsNow;
+    clearPicks();
+  }
+}
+
+add_task(function test_effort_and_context_are_picked_per_agent() {
+  try {
+    Assert.equal(LazyvimiumAgents.effortFor("codex"), "");
+    LazyvimiumAgents.setEffort("codex", "high");
+    LazyvimiumAgents.setContext("codex", "200k");
+    Assert.equal(LazyvimiumAgents.effortFor("codex"), "high");
+    Assert.equal(LazyvimiumAgents.contextFor("codex"), "200k");
+    Assert.equal(LazyvimiumAgents.effortFor("claude"), "", "per agent");
+    Assert.equal(
+      Services.prefs.getStringPref(`${PREF_EFFORT}codex`),
+      "high",
+      "in the effort pref"
+    );
+    Assert.equal(Services.prefs.getStringPref(`${PREF_CONTEXT}codex`), "200k");
+    LazyvimiumAgents.setEffort("codex", "");
+    LazyvimiumAgents.setContext("codex", "");
+    ok(!Services.prefs.prefHasUserValue(`${PREF_EFFORT}codex`), "cleared");
+    ok(!Services.prefs.prefHasUserValue(`${PREF_CONTEXT}codex`), "cleared");
+  } finally {
+    clearPicks();
+  }
+});
+
+add_task(function test_options_send_no_effort_the_user_did_not_pick() {
+  const codex = {
+    id: "gpt-a",
+    name: "GPT A",
+    efforts: ["low", "medium", "high", "xhigh"],
+    defaultEffort: "medium",
+    context: 272000,
+  };
+  withModels({ codex: [codex] }, () => {
+    Assert.deepEqual(
+      LazyvimiumAgents.optionsFor("codex"),
+      {
+        model: null,
+        efforts: [],
+        effort: null,
+        shownEffort: null,
+        contexts: [],
+        context: "",
+        contextTokens: null,
+      },
+      "no model picked and no default model: nothing to choose"
+    );
+
+    LazyvimiumAgents.setModel("codex", "gpt-a");
+    let options = LazyvimiumAgents.optionsFor("codex");
+    Assert.equal(options.model, codex);
+    Assert.deepEqual(options.efforts, codex.efforts);
+    Assert.equal(options.effort, null, "none picked: the CLI's settings rule");
+    Assert.equal(
+      options.shownEffort,
+      "medium",
+      "the slider rests on the default"
+    );
+    Assert.equal(options.contextTokens, 272000);
+    Assert.deepEqual(options.contexts, []);
+    Assert.equal(options.context, "");
+
+    LazyvimiumAgents.setEffort("codex", "xhigh");
+    options = LazyvimiumAgents.optionsFor("codex");
+    Assert.equal(options.effort, "xhigh");
+    Assert.equal(options.shownEffort, "xhigh");
+
+    LazyvimiumAgents.setModel("codex", "gone");
+    Assert.deepEqual(
+      LazyvimiumAgents.optionsFor("codex"),
+      {
+        model: null,
+        efforts: [],
+        effort: null,
+        shownEffort: null,
+        contexts: [],
+        context: "",
+        contextTokens: null,
+      },
+      "a model that is not listed has no options"
+    );
+  });
+});
+
+add_task(function test_a_saved_effort_the_model_lacks_is_clamped() {
+  const model = levels => ({ id: "m", name: "M", efforts: levels });
+  const effort = (levels, saved) =>
+    withModels({ codex: [model(levels)] }, () => {
+      LazyvimiumAgents.setModel("codex", "m");
+      LazyvimiumAgents.setEffort("codex", saved);
+      return LazyvimiumAgents.optionsFor("codex");
+    });
+  Assert.equal(effort(["low", "high"], "low").effort, "low", "kept if offered");
+  Assert.equal(
+    effort(["low", "medium", "high"], "max").effort,
+    "high",
+    "else high"
+  );
+  Assert.equal(
+    effort(["low", "medium"], "max").effort,
+    "medium",
+    "else medium"
+  );
+  Assert.equal(
+    effort(["minimal", "low"], "max").effort,
+    "minimal",
+    "else the first"
+  );
+  Assert.equal(effort([], "max").effort, null, "no levels, no effort");
+
+  // Without a default, the slider sits in the middle.
+  const shown = levels =>
+    withModels({ codex: [model(levels)] }, () => {
+      LazyvimiumAgents.setModel("codex", "m");
+      return LazyvimiumAgents.optionsFor("codex").shownEffort;
+    });
+  Assert.equal(shown(["a", "b", "c", "d"]), "b");
+  Assert.equal(shown(["a", "b", "c", "d", "e"]), "c");
+  Assert.equal(shown(["a"]), "a");
+  Assert.equal(shown([]), null);
+});
+
+add_task(function test_an_effort_in_the_model_id_is_always_sent() {
+  const agy = {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    efforts: ["low", "medium", "high"],
+    defaultEffort: "medium",
+    effortInId: true,
+  };
+  withModels({ antigravity: [agy] }, () => {
+    LazyvimiumAgents.setModel("antigravity", "gemini-3.8-flash");
+    Assert.equal(
+      LazyvimiumAgents.optionsFor("antigravity").effort,
+      "medium",
+      "the id needs one, so the default"
+    );
+    LazyvimiumAgents.setEffort("antigravity", "high");
+    Assert.equal(LazyvimiumAgents.optionsFor("antigravity").effort, "high");
+    LazyvimiumAgents.setEffort("antigravity", "max");
+    Assert.equal(
+      LazyvimiumAgents.optionsFor("antigravity").effort,
+      "high",
+      "a level it lacks is clamped"
+    );
+  });
+});
+
+add_task(function test_the_default_model_has_options_until_one_is_picked() {
+  const opus = {
+    id: "opus",
+    name: "Opus",
+    ...LAZYVIMIUM_DRIVERS.claude.defaultModel,
+  };
+  withModels({ claude: [opus] }, () => {
+    let options = LazyvimiumAgents.optionsFor("claude");
+    Assert.equal(options.model, LAZYVIMIUM_DRIVERS.claude.defaultModel);
+    Assert.deepEqual(options.efforts, [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    Assert.equal(options.effort, null, "nothing is sent unasked");
+    Assert.equal(options.shownEffort, "medium");
+    Assert.equal(options.contexts.length, 2);
+    Assert.equal(options.context, "", "the 1M default");
+    Assert.equal(options.contextTokens, null);
+
+    LazyvimiumAgents.setContext("claude", "200k");
+    Assert.equal(LazyvimiumAgents.optionsFor("claude").context, "200k");
+    LazyvimiumAgents.setContext("claude", "5k");
+    Assert.equal(
+      LazyvimiumAgents.optionsFor("claude").context,
+      "",
+      "a size that is not listed is the default"
+    );
+
+    LazyvimiumAgents.setModel("claude", "opus");
+    LazyvimiumAgents.setEffort("claude", "max");
+    options = LazyvimiumAgents.optionsFor("claude");
+    Assert.equal(options.model, opus);
+    Assert.equal(options.effort, "max");
+  });
+
+  const sized = {
+    id: "s",
+    name: "S",
+    contexts: [
+      { id: "a", label: "A" },
+      { id: "b", label: "B", default: true },
+    ],
+  };
+  withModels({ codex: [sized] }, () => {
+    LazyvimiumAgents.setModel("codex", "s");
+    Assert.equal(LazyvimiumAgents.optionsFor("codex").context, "b");
+    LazyvimiumAgents.setContext("codex", "a");
+    Assert.equal(LazyvimiumAgents.optionsFor("codex").context, "a");
+  });
+});
+
+add_task(async function test_a_saved_agy_variant_becomes_model_and_effort() {
+  const driver = LAZYVIMIUM_DRIVERS.antigravity;
+  const original = driver.models;
+  driver.models = () =>
+    original(async () => ({ stdout: AGY_LISTING, exitCode: 0 }));
+  const agent = { id: "antigravity", name: "agy", path: "/bin/true" };
+  try {
+    LazyvimiumAgents.setModel("antigravity", "gemini-3.8-flash-low");
+    await LazyvimiumAgents.models(agent, { refresh: true });
+    Assert.equal(
+      LazyvimiumAgents.modelFor("antigravity"),
+      "gemini-3.8-flash",
+      "the model the variant belongs to"
+    );
+    Assert.equal(LazyvimiumAgents.effortFor("antigravity"), "low");
+    Assert.equal(LazyvimiumAgents.optionsFor("antigravity").effort, "low");
+
+    // Nothing else is touched: a model that is listed, and a single variant
+    // that stayed under its full id.
+    LazyvimiumAgents.setEffort("antigravity", "high");
+    await LazyvimiumAgents.models(agent, { refresh: true });
+    Assert.equal(LazyvimiumAgents.modelFor("antigravity"), "gemini-3.8-flash");
+    Assert.equal(LazyvimiumAgents.effortFor("antigravity"), "high");
+    LazyvimiumAgents.setModel("antigravity", "gpt-oss-120b-medium");
+    LazyvimiumAgents.setEffort("antigravity", "");
+    await LazyvimiumAgents.models(agent, { refresh: true });
+    Assert.equal(
+      LazyvimiumAgents.modelFor("antigravity"),
+      "gpt-oss-120b-medium"
+    );
+    Assert.equal(LazyvimiumAgents.effortFor("antigravity"), "");
+    LazyvimiumAgents.setModel("antigravity", "unknown-low");
+    await LazyvimiumAgents.models(agent, { refresh: true });
+    Assert.equal(LazyvimiumAgents.modelFor("antigravity"), "unknown-low");
+  } finally {
+    driver.models = original;
+    clearPicks();
+  }
 });

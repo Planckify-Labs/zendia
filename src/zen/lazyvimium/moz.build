@@ -90,7 +90,10 @@ EXTRA_JS_MODULES.lazyvimium.ublock += [
 
 EXTRA_JS_MODULES.lazyvimium.ui += [
     "ui/LazyvimiumAgentDock.sys.mjs",
+    "ui/LazyvimiumAgentFollow.sys.mjs",
     "ui/LazyvimiumAgentInstructionsView.sys.mjs",
+    "ui/LazyvimiumAgentModelCard.sys.mjs",
+    "ui/LazyvimiumAgentMotion.sys.mjs",
     "ui/LazyvimiumAgentUiView.sys.mjs",
     "ui/LazyvimiumChatButton.sys.mjs",
     "ui/LazyvimiumExplorer.sys.mjs",
