@@ -76,6 +76,18 @@ export const LAZYVIMIUM_AGENTS = [
     paths: ["~/.opencode/bin/opencode", "/opt/homebrew/bin/opencode"],
     install: "curl -fsSL https://opencode.ai/install | bash",
   },
+  {
+    id: "kiro",
+    name: "Kiro",
+    bin: "kiro-cli",
+    paths: [
+      "~/.local/bin/kiro-cli",
+      "~/.kiro/bin/kiro-cli",
+      "/opt/homebrew/bin/kiro-cli",
+      "/usr/local/bin/kiro-cli",
+    ],
+    install: "curl -fsSL https://cli.kiro.dev/install | bash",
+  },
 ];
 
 // Global install directories of the Node toolchains, which npm-installed
@@ -207,11 +219,36 @@ export function parseVersion(output) {
   return output.match(/\d+\.\d+(\.\d+)?(-[\w.]+)?/)?.[0] ?? null;
 }
 
+// What the last scan found, kept between sessions so the first answer of a
+// session costs a few stat calls, not a login shell and a --version run per
+// agent.
+function cachePath() {
+  return PathUtils.join(
+    PathUtils.profileDir,
+    "lazyvimium",
+    "agent",
+    "detect-cache.json"
+  );
+}
+
+async function isExecutable(path) {
+  try {
+    const info = await IOUtils.stat(path);
+    return info.type == "regular" && !!(info.permissions & 0o111);
+  } catch {
+    return false;
+  }
+}
+
 class LazyvimiumAgentDetector {
   /** @type {Promise<string|null>|null} */
   #shellPath = null;
   /** @type {Promise<object[]>|null} */
   #detected = null;
+  /** @type {object[]|null} The last answer, for callers that cannot wait. */
+  #last = null;
+  /** @type {Map<string, string>} Version by executable path. */
+  #versions = new Map();
 
   /**
    * The PATH the user's login shell reports, asked once per session: as an
@@ -315,34 +352,121 @@ class LazyvimiumAgentDetector {
   }
 
   /**
-   * Every known agent with where it is installed, if it is.
+   * Every known agent with where it is installed, if it is. The first call
+   * of a session answers from the last session's scan when that still holds,
+   * and looks again behind it; a version that is not known yet fills in
+   * when its --version run ends.
    *
    * @param {object} [options]
    * @param {boolean} [options.refresh] Look again instead of using the last
-   *   answer, e.g. after the user installed one.
+   *   answer, e.g. after the user installed one. Costs a stat per place,
+   *   not a process.
    * @returns {Promise<Array<LazyvimiumAgentInfo & {path: string|null, version: string|null}>>}
    */
   detect({ refresh = false } = {}) {
     if (refresh) {
-      this.#detected = null;
+      this.#detected = this.#scan();
     }
-    this.#detected ??= (async () => {
-      const path = await this.childPath();
-      return Promise.all(
+    this.#detected ??= this.#fromCache();
+    return this.#detected;
+  }
+
+  /**
+   * The last answer, at once; null before the first one.
+   *
+   * @returns {Array<LazyvimiumAgentInfo & {path: string|null, version: string|null}>|null}
+   */
+  get known() {
+    return this.#last;
+  }
+
+  async #fromCache() {
+    let cached = null;
+    try {
+      cached = (await IOUtils.readJSON(cachePath()))?.agents ?? null;
+    } catch {
+      // No cache yet.
+    }
+    if (cached) {
+      const list = await Promise.all(
         LAZYVIMIUM_AGENTS.map(async agent => {
-          const executable = await this.resolve(agent);
-          let version = null;
-          if (executable) {
-            const { stdout } = await runForOutput(executable, ["--version"], {
-              environment: { PATH: path },
-            });
-            version = parseVersion(stdout);
-          }
-          return { ...agent, path: executable, version };
+          const entry = cached[agent.id];
+          const found = entry?.path && (await isExecutable(entry.path));
+          return {
+            ...agent,
+            path: found ? entry.path : null,
+            version: found ? (entry.version ?? null) : null,
+          };
         })
       );
-    })();
-    return this.#detected;
+      if (list.some(agent => agent.path)) {
+        this.#last = list;
+        for (const agent of list) {
+          if (agent.version) {
+            this.#versions.set(agent.path, agent.version);
+          }
+        }
+        // Look again behind the answer: an agent installed since, or moved.
+        this.#detected = this.#scan();
+        return list;
+      }
+    }
+    return this.#scan();
+  }
+
+  async #scan() {
+    const path = await this.childPath();
+    const list = await Promise.all(
+      LAZYVIMIUM_AGENTS.map(async agent => {
+        const executable = await this.resolve(agent);
+        return {
+          ...agent,
+          path: executable,
+          version: executable ? (this.#versions.get(executable) ?? null) : null,
+        };
+      })
+    );
+    this.#last = list;
+    this.#fillVersions(list, path);
+    return list;
+  }
+
+  // The --version runs of the executables whose version is not known, in
+  // the background; each fills in its entry when it ends.
+  async #fillVersions(list, path) {
+    await Promise.all(
+      list.map(async agent => {
+        if (!agent.path || agent.version) {
+          return;
+        }
+        const { stdout } = await runForOutput(agent.path, ["--version"], {
+          environment: { PATH: path },
+        });
+        agent.version = parseVersion(stdout);
+        if (agent.version) {
+          this.#versions.set(agent.path, agent.version);
+        }
+      })
+    );
+    await this.#saveCache(list);
+  }
+
+  async #saveCache(list) {
+    const agents = {};
+    for (const agent of list) {
+      if (agent.path) {
+        agents[agent.id] = { path: agent.path, version: agent.version };
+      }
+    }
+    try {
+      await IOUtils.makeDirectory(PathUtils.parent(cachePath()), {
+        createAncestors: true,
+        ignoreExisting: true,
+      });
+      await IOUtils.writeJSON(cachePath(), { agents });
+    } catch {
+      // A cache that is not written is only a slower next start.
+    }
   }
 
   /**

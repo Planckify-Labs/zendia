@@ -18,7 +18,7 @@
   value: true # install uBlock Origin from AMO when it is missing; turned off when the user removes it
 
 - name: lazyvimium.agent.default
-  value: "" # an agent id (claude, codex, cursor, antigravity, opencode); empty picks the first installed
+  value: "" # an agent id (claude, codex, cursor, antigravity, opencode, kiro); empty picks the first installed
 
 - name: lazyvimium.agent.layout
   value: "float" # float over the page, slide in from the side and hide when the mouse leaves, or split beside the tab

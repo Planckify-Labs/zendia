@@ -110,6 +110,7 @@ export const LAZYVIMIUM_AGENT_COLORS = {
   cursor: "#a3a3a3",
   antigravity: "#4285f4",
   opencode: "#f5a742",
+  kiro: "#9046ff",
 };
 
 // Colors are #rrggbb: the window's mode color is mixed from their channels.

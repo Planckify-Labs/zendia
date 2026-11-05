@@ -10,6 +10,7 @@ const { LAZYVIMIUM_AGENTS, parseShellPath, parseVersion, runForOutput } =
 const {
   LAZYVIMIUM_DRIVERS,
   LazyvimiumAgentRun,
+  guessInputs,
   STDIO_PROXY,
   TOKEN_ENV,
   URL_ENV,
@@ -75,7 +76,7 @@ function post(url, body, headers = {}) {
 add_task(function test_known_agents() {
   Assert.deepEqual(
     LAZYVIMIUM_AGENTS.map(agent => agent.id),
-    ["claude", "codex", "cursor", "antigravity", "opencode"]
+    ["claude", "codex", "cursor", "antigravity", "opencode", "kiro"]
   );
   for (const agent of LAZYVIMIUM_AGENTS) {
     ok(!!LAZYVIMIUM_DRIVERS[agent.id], `${agent.id} has a driver`);
@@ -223,8 +224,16 @@ add_task(async function test_drivers_list_models() {
       )
     ),
     [
-      { id: "gemini-4-argon-high", name: "Gemini 4 Argon (High)" },
-      { id: "claude-opus-5-5-low", name: "Claude Opus 5.5 (Low)" },
+      {
+        id: "gemini-4-argon-high",
+        name: "Gemini 4 Argon (High)",
+        input: ["text", "image", "pdf"],
+      },
+      {
+        id: "claude-opus-5-5-low",
+        name: "Claude Opus 5.5 (Low)",
+        input: ["text", "image", "pdf"],
+      },
     ]
   );
   Assert.deepEqual(
@@ -523,6 +532,144 @@ add_task(function test_opencode_and_cursor_drivers() {
     `Bearer \${env:${TOKEN_ENV}}`
   );
   ok(cursor.args.includes("--approve-mcps"));
+});
+
+add_task(async function test_kiro_driver() {
+  const turn = { ...TURN, model: "claude-sonnet-4.5", resume: "sess_1" };
+  const { args, files } = LAZYVIMIUM_DRIVERS.kiro.launch(turn);
+  Assert.deepEqual(args.slice(0, 5), [
+    "chat",
+    "--output-format",
+    "stream-json",
+    "--trust-workspace",
+    "--agent",
+  ]);
+  Assert.equal(args[args.indexOf("--model") + 1], "claude-sonnet-4.5");
+  Assert.equal(args[args.indexOf("--resume-id") + 1], "sess_1");
+  ok(args.at(-1).includes("Open the docs"));
+  const [mcp, agent] = files;
+  ok(mcp.path.endsWith(".kiro/settings/mcp.json"));
+  Assert.equal(
+    mcp.data.mcpServers.lazyvimium.headers.Authorization,
+    `Bearer \${${TOKEN_ENV}}`,
+    "the token is read from the environment, never written"
+  );
+  ok(!JSON.stringify(files).includes("secret"));
+  ok(agent.path.endsWith(".kiro/agents/lazyvimium.json"));
+  Assert.deepEqual(
+    [agent.data.tools, agent.data.allowedTools],
+    [["@lazyvimium"], ["@lazyvimium"]],
+    "only the browser tools, already allowed"
+  );
+
+  const update = (sessionUpdate, extra = {}) => ({
+    type: "sessionUpdate",
+    data: { sessionId: "s9", update: { sessionUpdate, ...extra } },
+  });
+  Assert.deepEqual(
+    parseAll("kiro", [
+      { type: "runStarted", data: {} },
+      update("agent_message_chunk", { content: { type: "text", text: "po" } }),
+      update("tool_call", {
+        title: "@lazyvimium/page_observe",
+        rawInput: { tool_id: "lazyvimium::page_observe", arguments: {} },
+      }),
+      update("tool_call", {
+        title: "@other/search",
+        rawInput: { arguments: { q: "x" } },
+      }),
+      {
+        type: "runFinished",
+        data: { sessionId: "s9", status: "success", finalText: "pong" },
+      },
+      { type: "runFinished", data: { status: "error", error: "no login" } },
+    ]),
+    [
+      { type: "session", id: "s9" },
+      { type: "text", text: "po", delta: true },
+      { type: "session", id: "s9" },
+      { type: "session", id: "s9" },
+      { type: "tool", name: "@other/search", input: { q: "x" } },
+      { type: "session", id: "s9" },
+      { type: "done", error: null },
+      { type: "done", error: "no login" },
+    ],
+    "text streams, its own tools stay quiet, the run ends the turn"
+  );
+
+  const run = stdout => async () => ({ stdout, exitCode: 0 });
+  Assert.deepEqual(
+    await LAZYVIMIUM_DRIVERS.kiro.models(
+      run(
+        JSON.stringify({
+          models: [
+            { model_id: "auto", model_name: "auto", description: "by task" },
+            { model_id: "deepseek-3.2", model_name: "deepseek-3.2" },
+          ],
+        })
+      )
+    ),
+    [
+      {
+        id: "auto",
+        name: "auto",
+        detail: "by task",
+        input: ["text", "image", "pdf"],
+      },
+      { id: "deepseek-3.2", name: "deepseek-3.2", detail: "", input: ["text"] },
+    ]
+  );
+});
+
+add_task(async function test_models_say_what_they_read() {
+  Assert.deepEqual(guessInputs("deepseek-3.2"), ["text"]);
+  Assert.deepEqual(guessInputs("claude-haiku-4.5"), ["text", "image", "pdf"]);
+  Assert.equal(guessInputs("some-new-model"), undefined, "unknown stays so");
+
+  // OpenCode: the model's id, then its JSON, one after the other.
+  const verbose = `opencode/beam-free
+{
+  "id": "beam-free",
+  "name": "Beam Free",
+  "capabilities": { "input": { "text": true, "image": false, "pdf": false } }
+}
+anthropic/claude-sonnet-5-5
+{
+  "id": "claude-sonnet-5-5",
+  "name": "Claude Sonnet 5.5",
+  "capabilities": { "input": { "text": true, "image": true, "pdf": true } }
+}
+`;
+  const models = await LAZYVIMIUM_DRIVERS.opencode.models(async args => ({
+    stdout: args.includes("--verbose") ? verbose : "",
+    exitCode: 0,
+  }));
+  Assert.deepEqual(models, [
+    { id: "opencode/beam-free", name: "Beam Free", input: ["text"] },
+    {
+      id: "anthropic/claude-sonnet-5-5",
+      name: "Claude Sonnet 5.5",
+      input: ["text", "image", "pdf"],
+    },
+  ]);
+
+  Assert.deepEqual(
+    (
+      await LAZYVIMIUM_DRIVERS.codex.models(async () => ({
+        stdout: JSON.stringify({
+          models: [
+            {
+              slug: "g",
+              display_name: "G",
+              input_modalities: ["text", "image"],
+            },
+          ],
+        }),
+        exitCode: 0,
+      }))
+    ).map(model => model.input),
+    [["text", "image"]]
+  );
 });
 
 add_task(async function test_mcp_messages() {

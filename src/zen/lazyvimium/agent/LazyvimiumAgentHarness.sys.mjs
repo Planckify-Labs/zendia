@@ -64,7 +64,12 @@ const OWN_TOOLS = [
 // Agents' plumbing rather than work: Claude Code loads deferred tools,
 // lazyvimium's among them, through ToolSearch, and agy reports every MCP
 // call, lazyvimium's included, as call_mcp_tool.
-const QUIET_TOOLS = new Set(["ToolSearch", "call_mcp_tool", "call_tool"]);
+const QUIET_TOOLS = new Set([
+  "ToolSearch",
+  "call_mcp_tool",
+  "call_tool",
+  "Tool Load",
+]);
 
 const STDERR_TAIL = 4000;
 
@@ -190,8 +195,70 @@ function parseModelLines(stdout) {
     ) {
       return [];
     }
-    return [{ id, name: name.join(" ").trim() || id }];
+    const label = name.join(" ").trim() || id;
+    const input = guessInputs(`${id} ${label}`);
+    return [{ id, name: label, ...(input ? { input } : {}) }];
   });
+}
+
+// What a model can read besides text, as far as is known: the CLI's own
+// catalog where it has one (Codex, OpenCode), else the family's name. A
+// model whose input is not known has no `input`, which the dock treats as
+// "maybe": it asks the agent to say so rather than guess.
+const TEXT_ONLY_FAMILY =
+  /deepseek|minimax|glm-?\d|qwen\d*-coder|gpt-oss|codestral|devstral|kimi-k2(?!.*(?:vl|vision))/i;
+const SEES_IMAGES_FAMILY =
+  /claude|gemini|gpt-[4-9]|\bo[134](?:-|$)|grok-[2-9]|pixtral|llava|-vl\b|vision|\bauto\b/i;
+
+/**
+ * @param {string} id A model's id or name.
+ * @returns {string[]|undefined} The kinds of input it takes, when its name
+ *   says.
+ */
+export function guessInputs(id) {
+  if (TEXT_ONLY_FAMILY.test(id)) {
+    return ["text"];
+  }
+  if (SEES_IMAGES_FAMILY.test(id)) {
+    return ["text", "image", "pdf"];
+  }
+  return undefined;
+}
+
+// `opencode models --verbose` prints "provider/model" and then that model's
+// JSON, one after the other.
+function parseVerboseModels(stdout) {
+  const models = [];
+  let id = null;
+  let body = [];
+  const flush = () => {
+    if (id) {
+      try {
+        const json = JSON.parse(body.join("\n"));
+        const input = Object.entries(json.capabilities?.input ?? {})
+          .filter(([, takes]) => takes)
+          .map(([kind]) => kind);
+        models.push({
+          id,
+          name: json.name || id,
+          ...(input.length ? { input } : {}),
+        });
+      } catch {
+        models.push({ id, name: id });
+      }
+    }
+    body = [];
+  };
+  for (const line of stdout.split("\n")) {
+    if (/^[\w][\w.:@[\]-]*\/\S+$/.test(line.trim()) && !line.startsWith(" ")) {
+      flush();
+      id = line.trim();
+    } else if (id) {
+      body.push(line);
+    }
+  }
+  flush();
+  return models;
 }
 
 // Claude Code and Cursor's agent print the same stream-json shapes.
@@ -320,7 +387,7 @@ export const LAZYVIMIUM_DRIVERS = {
         { id: "opus", name: "Opus", detail: "the latest Opus" },
         { id: "sonnet", name: "Sonnet", detail: "the latest Sonnet" },
         { id: "haiku", name: "Haiku", detail: "the latest Haiku" },
-      ];
+      ].map(model => ({ ...model, input: ["text", "image", "pdf"] }));
     },
   },
 
@@ -393,6 +460,9 @@ export const LAZYVIMIUM_DRIVERS = {
             id: model.slug,
             name: model.display_name || model.slug,
             detail: model.description ?? "",
+            ...(model.input_modalities?.length
+              ? { input: model.input_modalities }
+              : {}),
           }));
       } catch {
         return [];
@@ -577,9 +647,130 @@ export const LAZYVIMIUM_DRIVERS = {
     },
     // provider/model, for every provider the user has signed in to.
     async models(run) {
+      // --verbose carries what each model can read; without it the list
+      // still works, and the names guess.
+      const verbose = parseVerboseModels(
+        (await run(["models", "--verbose"])).stdout
+      ).filter(model => model.id.includes("/"));
+      if (verbose.length) {
+        return verbose.map(model => {
+          const input = model.input ?? guessInputs(model.id);
+          return { ...model, ...(input ? { input } : {}) };
+        });
+      }
       return parseModelLines((await run(["models"])).stdout).filter(model =>
         model.id.includes("/")
       );
+    },
+  },
+
+  // Kiro's v3 engine speaks ACP: `--output-format stream-json` prints each
+  // session update as a line. It has no system prompt flag, no
+  // per-call approvals when it runs without a terminal, and a tool it is
+  // not allowed to call just fails, so the turn runs as an agent profile
+  // that has the lazyvimium server's tools and nothing else (no shell, no
+  // file edits), with those tools pre-approved. The workspace's MCP config
+  // loads under --trust-workspace, and its headers expand ${VAR}.
+  kiro: {
+    launch(turn) {
+      return {
+        args: [
+          "chat",
+          "--output-format",
+          "stream-json",
+          "--trust-workspace",
+          "--agent",
+          MCP_SERVER_NAME,
+          ...(turn.model ? ["--model", turn.model] : []),
+          ...(turn.resume ? ["--resume-id", turn.resume] : []),
+          withInstructions(turn),
+        ],
+        files: [
+          {
+            path: PathUtils.join(turn.dir, ".kiro", "settings", "mcp.json"),
+            data: {
+              mcpServers: {
+                [MCP_SERVER_NAME]: {
+                  url: turn.mcp.url,
+                  headers: { Authorization: `Bearer \${${TOKEN_ENV}}` },
+                },
+              },
+            },
+          },
+          {
+            path: PathUtils.join(
+              turn.dir,
+              ".kiro",
+              "agents",
+              `${MCP_SERVER_NAME}.json`
+            ),
+            data: {
+              name: MCP_SERVER_NAME,
+              description: "Works in the browser through lazyvimium only",
+              tools: [`@${MCP_SERVER_NAME}`],
+              allowedTools: [`@${MCP_SERVER_NAME}`],
+              includeMcpJson: true,
+            },
+          },
+        ],
+      };
+    },
+    parse(event) {
+      const data = event.data ?? {};
+      const session = data.sessionId
+        ? [{ type: "session", id: data.sessionId }]
+        : [];
+      if (event.type == "runFinished") {
+        return [
+          ...session,
+          {
+            type: "done",
+            error:
+              data.status && data.status != "success"
+                ? String(data.error ?? data.message ?? data.status)
+                : null,
+          },
+        ];
+      }
+      if (event.type != "sessionUpdate") {
+        return [];
+      }
+      const update = data.update ?? {};
+      switch (update.sessionUpdate) {
+        case "agent_message_chunk":
+          return update.content?.text
+            ? [
+                ...session,
+                { type: "text", text: update.content.text, delta: true },
+              ]
+            : session;
+        case "tool_call":
+          return [
+            ...session,
+            ...toolEvent(update.title, update.rawInput?.arguments),
+          ];
+      }
+      return session;
+    },
+    // `--list-models` prints a catalog without what a model reads, so the
+    // names guess.
+    async models(run) {
+      const { stdout } = await run(["chat", "--list-models", "-f", "json"]);
+      try {
+        return (JSON.parse(stdout).models ?? [])
+          .filter(model => model.model_id)
+          .map(model => {
+            const input = guessInputs(model.model_id);
+            return {
+              id: model.model_id,
+              name: model.model_name || model.model_id,
+              detail: model.description ?? "",
+              ...(input ? { input } : {}),
+            };
+          });
+      } catch {
+        return [];
+      }
     },
   },
 };

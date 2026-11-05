@@ -614,6 +614,8 @@ class LazyvimiumService {
     return this.#states.get(browser) ?? NORMAL_STATE;
   }
 
+  #agentsWarmed = false;
+
   /**
    * @param {Window} window A browser window, after delayed startup.
    */
@@ -627,6 +629,15 @@ class LazyvimiumService {
     if (commands.join() != this.#zenCommands.join()) {
       this.#zenCommands = commands;
       this.reload();
+    }
+
+    // Have the agents and the default one's models ready before the first
+    // time the user opens the panel or a picker, in idle time.
+    if (!this.#agentsWarmed) {
+      this.#agentsWarmed = true;
+      window.requestIdleCallback(() => lazy.LazyvimiumAgents.warm(), {
+        timeout: 8000,
+      });
     }
 
     lazy.LazyvimiumTheme.apply(window.document);

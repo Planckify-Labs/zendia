@@ -31,6 +31,15 @@ ChromeUtils.defineESModuleGetters(lazy, {
   LazyvimiumAgents:
     "resource:///modules/lazyvimium/agent/LazyvimiumAgents.sys.mjs",
   agentColor: "resource:///modules/lazyvimium/agent/LazyvimiumAgents.sys.mjs",
+  inputKindOf: "resource:///modules/lazyvimium/agent/LazyvimiumAgents.sys.mjs",
+  agentIcon:
+    "resource:///modules/lazyvimium/agent/LazyvimiumAgentIcons.sys.mjs",
+  iconIsMono:
+    "resource:///modules/lazyvimium/agent/LazyvimiumAgentIcons.sys.mjs",
+  iconIsTile:
+    "resource:///modules/lazyvimium/agent/LazyvimiumAgentIcons.sys.mjs",
+  iconIsFull:
+    "resource:///modules/lazyvimium/agent/LazyvimiumAgentIcons.sys.mjs",
   LazyvimiumAgentInstructions:
     "resource:///modules/lazyvimium/agent/LazyvimiumAgentInstructions.sys.mjs",
   LazyvimiumAgentInstructionsView:
@@ -49,6 +58,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
 });
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
+// The kinds of picture the clipboard may hold, in the order tried.
+const IMAGE_FLAVORS = ["image/png", "image/jpeg", "image/gif"];
 const STEP_ICONS = { running: "◌", done: "✓", failed: "✕" };
 
 const PREF_BRANCH = "lazyvimium.agent.";
@@ -111,6 +122,10 @@ export class LazyvimiumAgentDock {
   #modelChip;
   #tabChip;
   #attachRow;
+  #mediaWarning;
+  // The warning's key the user already saw, so a second Enter sends.
+  #mediaAck = "";
+  #chipAgent = "";
   #sendButton;
   #instructionsButton;
   #instructions;
@@ -199,10 +214,14 @@ export class LazyvimiumAgentDock {
     this.#root.hidden = true;
     this.#root.setAttribute("role", "dialog");
     this.#root.setAttribute("aria-label", "Ask your agent");
+    // A click on the conversation's text then keeps the focus in the panel.
+    // Left to itself it goes to the window, where Ctrl+C is a vim key the
+    // page takes, and the selected text is never copied.
+    this.#root.tabIndex = -1;
 
     const header = create("div", "lazyvimium-agent-header", this.#root);
     this.#agentChip = create("button", "lazyvimium-agent-chip", header);
-    this.#agentChip.title = "Pick an agent (Tab)";
+    this.#agentChip.title = "Pick an agent (Tab cycles)";
     this.#agentChip.addEventListener("click", () => this.pickAgent());
     this.#modelChip = create("button", "lazyvimium-agent-model", header);
     this.#modelChip.title = "Pick a model (<leader>am)";
@@ -241,6 +260,13 @@ export class LazyvimiumAgentDock {
     this.#tabChip = create("div", "lazyvimium-agent-tab", composer);
     this.#attachRow = create("div", "lazyvimium-agent-attachments", composer);
     this.#attachRow.hidden = true;
+    this.#mediaWarning = create(
+      "div",
+      "lazyvimium-agent-media-warning",
+      composer
+    );
+    this.#mediaWarning.hidden = true;
+    this.#mediaWarning.setAttribute("role", "alert");
     this.#input = create("textarea", "lazyvimium-agent-input", composer);
     this.#input.rows = 1;
     this.#input.setAttribute("aria-label", "Ask your agent");
@@ -249,12 +275,9 @@ export class LazyvimiumAgentDock {
       this.#fitInput();
       this.#syncComposer();
     });
-    this.#input.addEventListener("paste", event => {
-      if (event.clipboardData?.files.length) {
-        event.preventDefault();
-        this.#attachDomFiles(event.clipboardData.files);
-      }
-    });
+    // Pasting anywhere in the panel: text goes into the box as usual, files,
+    // pictures and files copied in a file manager are attached.
+    this.#root.addEventListener("paste", event => this.#onPaste(event));
     const bar = create("div", "lazyvimium-agent-composer-bar", composer);
     const attach = roundButton("attach", bar, "Attach files");
     attach.addEventListener("click", () => this.#pickFiles());
@@ -551,6 +574,7 @@ export class LazyvimiumAgentDock {
       index = await lazy.LazyvimiumPicker.open(this.#window, {
         title: "Agents",
         items: agents.map(agent => ({
+          icon: lazy.agentIcon(agent.id) ?? undefined,
           label: `${agent.name}${agent.id == current ? "  ·  current" : ""}`,
           detail: agent.path
             ? `${agent.version ?? ""} ${agent.path}`.trim()
@@ -567,6 +591,8 @@ export class LazyvimiumAgentDock {
     }
     lazy.LazyvimiumAgents.setDefaultAgent(agent.id);
     this.#conversation?.setAgent(agent);
+    // The new agent's models are what the next picker shows.
+    lazy.LazyvimiumAgents.models(agent);
     if (this.#open) {
       this.#render();
       this.#input.focus();
@@ -586,12 +612,33 @@ export class LazyvimiumAgentDock {
       return;
     }
     const current = lazy.LazyvimiumAgents.modelFor(agent.id);
-    this.#modelChip.textContent = "listing models…";
-    const models = await lazy.LazyvimiumAgents.models(agent);
+    // Remembered lists answer at once; only a first-ever ask waits for the
+    // CLI, and says so.
+    const asked = lazy.LazyvimiumAgents.models(agent);
+    const slow = this.#window.setTimeout(() => {
+      this.#modelChip.textContent = "listing models…";
+    }, 150);
+    const models = await asked;
+    this.#window.clearTimeout(slow);
     this.#renderModel();
+    // What the attachments need, so the models that read it come first.
+    const needs = this.#attachedKinds();
+    // Models that read it, then those not known to, then those that cannot.
+    const rank = model => {
+      if (!model.input) {
+        return 1;
+      }
+      return needs.every(kind => model.input.includes(kind)) ? 2 : 0;
+    };
+    const ordered = needs.length
+      ? models
+          .map((model, i) => ({ model, i }))
+          .sort((a, b) => rank(b.model) - rank(a.model) || a.i - b.i)
+          .map(({ model }) => model)
+      : models;
     const items = [
       { id: "", name: "Default", detail: `what ${agent.name}'s settings pick` },
-      ...models,
+      ...ordered,
     ];
     // A model picked before that the list no longer has stays pickable.
     if (current && !models.some(model => model.id == current)) {
@@ -601,10 +648,14 @@ export class LazyvimiumAgentDock {
     let index;
     try {
       index = await lazy.LazyvimiumPicker.open(this.#window, {
-        title: `${agent.name} models`,
+        title: needs.length
+          ? `${agent.name} models · attached ${needs.join(" and ")}`
+          : `${agent.name} models`,
         items: items.map(model => ({
           label: `${model.name}${model.id == current ? "  ·  current" : ""}`,
-          detail: [model.id, model.detail].filter(Boolean).join(" · "),
+          detail: [model.id, this.#inputNote(model, needs), model.detail]
+            .filter(Boolean)
+            .join(" · "),
         })),
       });
     } finally {
@@ -613,19 +664,133 @@ export class LazyvimiumAgentDock {
     const model = items[index];
     if (model) {
       lazy.LazyvimiumAgents.setModel(agent.id, model.id);
+      this.#renderModel();
     }
     if (this.#open) {
       this.#input.focus();
     }
   }
 
+  // What a model reads, for its row in the picker: when something attached
+  // needs it, whether it does; else whether it sees pictures.
+  #inputNote(model, needs) {
+    if (!model.input) {
+      return "";
+    }
+    if (needs.length) {
+      const missing = needs.filter(kind => !model.input.includes(kind));
+      return missing.length ? `cannot read ${missing.join(", ")}` : "reads it";
+    }
+    return model.input.includes("image") ? "" : "text only";
+  }
+
+  // The kinds of input the attached files need beyond text.
+  #attachedKinds() {
+    return [
+      ...new Set(this.#attachments.map(lazy.inputKindOf).filter(Boolean)),
+    ];
+  }
+
   #renderModel() {
     const agent = this.#conversation?.agent;
     this.#modelChip.hidden = !agent;
     if (agent) {
-      this.#modelChip.textContent =
-        lazy.LazyvimiumAgents.modelFor(agent.id) || "default model";
+      const id = lazy.LazyvimiumAgents.modelFor(agent.id);
+      const model = lazy.LazyvimiumAgents.modelsNow(agent.id).find(
+        known => known.id == id
+      );
+      const textOnly = !!model?.input && !model.input.includes("image");
+      this.#modelChip.textContent = id ? model?.name || id : "default model";
+      this.#modelChip.toggleAttribute("text-only", textOnly);
+      this.#modelChip.title = textOnly
+        ? "This model reads text only, not pictures (Pick a model)"
+        : "Pick a model (<leader>am)";
     }
+    this.#syncMediaWarning();
+  }
+
+  // Attached pictures, video, audio or PDFs the model cannot read: say so
+  // before the agent guesses from their names, and offer one that can.
+  #mediaIssue() {
+    const agent = this.#conversation?.agent;
+    const kinds = this.#attachedKinds();
+    const inputs = agent && lazy.LazyvimiumAgents.inputsOf(agent.id);
+    if (!kinds.length || !inputs) {
+      return null;
+    }
+    const blind = kinds.filter(kind => !inputs.includes(kind));
+    if (!blind.length) {
+      return null;
+    }
+    const picked = lazy.LazyvimiumAgents.modelFor(agent.id);
+    const models = lazy.LazyvimiumAgents.modelsNow(agent.id);
+    return {
+      agent,
+      blind,
+      model: models.find(model => model.id == picked)?.name ?? picked,
+      best: models.find(model =>
+        blind.every(kind => model.input?.includes(kind))
+      ),
+      key: `${picked}|${blind.join()}`,
+    };
+  }
+
+  #syncMediaWarning() {
+    const issue = this.#mediaIssue();
+    const box = this.#mediaWarning;
+    box.hidden = !issue;
+    if (!issue) {
+      this.#mediaAck = "";
+      box.replaceChildren();
+      delete box.dataset.shown;
+      return;
+    }
+    const shown = `${issue.key}|${issue.best?.id}|${this.#mediaAck == issue.key}`;
+    if (box.dataset.shown == shown) {
+      return;
+    }
+    box.dataset.shown = shown;
+    box.toggleAttribute("nudge", this.#mediaAck == issue.key);
+    const things = issue.blind
+      .map(kind => (kind == "pdf" ? "PDFs" : `${kind}s`))
+      .join(" or ");
+    const text = this.#create("span", "lazyvimium-agent-media-text");
+    text.append(
+      this.#create("b", "", issue.model),
+      ` can't read ${things}. The agent would only get the file's name, so it can't tell what is in it.`
+    );
+    const actions = this.#create("span", "lazyvimium-agent-media-actions");
+    if (issue.best) {
+      const swap = this.#create(
+        "button",
+        "lazyvimium-agent-button primary",
+        `Use ${issue.best.name}`
+      );
+      swap.title = "Switch to a model that can read it";
+      swap.addEventListener("mousedown", event => event.preventDefault());
+      swap.addEventListener("click", () => {
+        lazy.LazyvimiumAgents.setModel(issue.agent.id, issue.best.id);
+        this.#renderModel();
+        this.#input.focus();
+      });
+      actions.append(swap);
+    }
+    const pick = this.#create("button", "lazyvimium-agent-button", "Pick…");
+    pick.title = "Choose another model";
+    pick.addEventListener("mousedown", event => event.preventDefault());
+    pick.addEventListener("click", () => this.pickModel());
+    const anyway = this.#create(
+      "button",
+      "lazyvimium-agent-button",
+      "Send anyway"
+    );
+    anyway.addEventListener("mousedown", event => event.preventDefault());
+    anyway.addEventListener("click", () => {
+      this.#mediaAck = issue.key;
+      this.#send();
+    });
+    actions.append(pick, anyway);
+    box.replaceChildren(text, actions);
   }
 
   // Layout.
@@ -940,6 +1105,16 @@ export class LazyvimiumAgentDock {
       (event.key == "y" || event.key == "n")
     ) {
       pending.answer(event.key == "y");
+    } else if (
+      ((event.key.toLowerCase() == "v" && event.ctrlKey) ||
+        (event.key == "Insert" && event.shiftKey)) &&
+      !event.altKey &&
+      !event.metaKey &&
+      this.#clipboardHoldsFiles()
+    ) {
+      // A text box's own paste does nothing when the clipboard has no text
+      // (a picture, a file copied in a file manager), so it is done here.
+      this.#pasteFiles();
     } else if (event.key == "Enter" && !event.shiftKey) {
       this.#send();
     } else if (event.key == "c" && event.ctrlKey && conversation?.running) {
@@ -995,9 +1170,10 @@ export class LazyvimiumAgentDock {
     if (!conversation || conversation.running) {
       return;
     }
-    const installed = (await lazy.LazyvimiumAgents.agents()).filter(
-      agent => agent.path
-    );
+    const installed = (
+      lazy.LazyvimiumAgents.knownAgents() ??
+      (await lazy.LazyvimiumAgents.agents())
+    ).filter(agent => agent.path);
     const index = installed.findIndex(
       agent => agent.id == conversation.agent.id
     );
@@ -1006,6 +1182,8 @@ export class LazyvimiumAgentDock {
     if (next) {
       lazy.LazyvimiumAgents.setDefaultAgent(next.id);
       conversation.setAgent(next);
+      // So the model picker is ready by the time it is asked for.
+      lazy.LazyvimiumAgents.models(next);
     }
   }
 
@@ -1039,6 +1217,164 @@ export class LazyvimiumAgentDock {
     if (this.#open) {
       this.#input.focus();
     }
+  }
+
+  // A paste into the panel. Files and pictures on the clipboard, and files
+  // copied in a file manager, are attached; text is left to the box.
+  #onPaste(event) {
+    const data = event.clipboardData;
+    // Another box of the panel (the instructions) takes its own paste.
+    const field = event.target.closest?.("textarea, input");
+    if (!data || !this.#conversation || (field && field != this.#input)) {
+      return;
+    }
+    if (data.files.length) {
+      event.preventDefault();
+      this.#attachDomFiles(data.files);
+      return;
+    }
+    const paths = this.#clipboardPaths(data);
+    if (paths.length) {
+      event.preventDefault();
+      this.#attachPaths(paths);
+    } else if (event.target != this.#input && data.getData("text/plain")) {
+      // Pasted somewhere else in the panel: it is meant for the request.
+      event.preventDefault();
+      this.#input.focus();
+      this.#input.setRangeText(
+        data.getData("text/plain"),
+        this.#input.selectionStart,
+        this.#input.selectionEnd,
+        "end"
+      );
+      this.#fitInput();
+      this.#syncComposer();
+    }
+  }
+
+  // Whether the clipboard has files or a picture and no text: the only
+  // time the box's own paste has nothing to do. Files win over text (a
+  // file manager also puts the file's path there); a picture does not (a
+  // spreadsheet's cells come with one).
+  #clipboardHoldsFiles() {
+    const has = flavor =>
+      Services.clipboard.hasDataMatchingFlavors(
+        [flavor],
+        Ci.nsIClipboard.kGlobalClipboard
+      );
+    try {
+      return (
+        has("application/x-moz-file") ||
+        (!has("text/plain") && IMAGE_FLAVORS.some(has))
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  // Attach what the clipboard holds: files by their paths, a picture by its
+  // bytes.
+  async #pasteFiles() {
+    const read = flavor => {
+      const transferable = Cc[
+        "@mozilla.org/widget/transferable;1"
+      ].createInstance(Ci.nsITransferable);
+      transferable.init(null);
+      transferable.addDataFlavor(flavor);
+      Services.clipboard.getData(
+        transferable,
+        Ci.nsIClipboard.kGlobalClipboard
+      );
+      const data = {};
+      transferable.getTransferData(flavor, data);
+      return data.value;
+    };
+    const found = [];
+    try {
+      // A list of files, as a file manager puts it, else the first one.
+      let list = "";
+      try {
+        list = read("text/uri-list")?.QueryInterface(Ci.nsISupportsString).data;
+      } catch {
+        // Not offered as a list.
+      }
+      for (const uri of (list ?? "").split(/\r?\n/)) {
+        if (uri.startsWith("file://")) {
+          found.push(
+            Services.io.newURI(uri).QueryInterface(Ci.nsIFileURL).file.path
+          );
+        }
+      }
+      if (!found.length) {
+        const file = read("application/x-moz-file")?.QueryInterface(Ci.nsIFile);
+        if (file) {
+          found.push(file.path);
+        }
+      }
+    } catch {
+      // No files; maybe a picture.
+    }
+    if (!found.length) {
+      // A picture, through the async clipboard, which decodes what the
+      // desktop offers.
+      try {
+        for (const item of await this.#window.navigator.clipboard.read()) {
+          const type = item.types.find(kind => IMAGE_FLAVORS.includes(kind));
+          if (type) {
+            const blob = await item.getType(type);
+            found.push({
+              name: `pasted-image.${type.split("/")[1].replace("jpeg", "jpg")}`,
+              size: blob.size,
+              type,
+              bytes: new Uint8Array(await blob.arrayBuffer()),
+            });
+          }
+        }
+      } catch {
+        // Nothing readable.
+      }
+    }
+    if (found.length) {
+      await this.#attachPaths(found);
+    } else {
+      this.#refuse("", "Nothing on the clipboard could be attached");
+      this.#queueRender();
+    }
+  }
+
+  // Where the files a file manager copied are: the browser's own flavor
+  // first, then the URI lists desktops put on the clipboard.
+  #clipboardPaths(data) {
+    const paths = new Set();
+    try {
+      for (let i = 0; i < (data.mozItemCount ?? 0); i++) {
+        const file = data.mozGetDataAt("application/x-moz-file", i);
+        if (file?.path) {
+          paths.add(file.path);
+        }
+      }
+    } catch {
+      // Not a file.
+    }
+    if (!paths.size) {
+      const uris = [
+        data.getData("text/uri-list"),
+        data.getData("x-special/gnome-copied-files"),
+      ]
+        .join("\n")
+        .split(/\r?\n/)
+        .filter(line => line.startsWith("file://"));
+      for (const uri of uris) {
+        try {
+          paths.add(
+            Services.io.newURI(uri).QueryInterface(Ci.nsIFileURL).file.path
+          );
+        } catch {
+          // Not a local file.
+        }
+      }
+    }
+    return [...paths];
   }
 
   // Dropped or pasted files: the browser's own know where they live; a
@@ -1108,6 +1444,7 @@ export class LazyvimiumAgentDock {
   }
 
   #renderAttachments() {
+    this.#syncMediaWarning();
     this.#attachRow.hidden = !this.#attachments.length;
     this.#attachRow.replaceChildren(
       ...this.#attachments.map(file => {
@@ -1209,6 +1546,16 @@ export class LazyvimiumAgentDock {
     if (!conversation || (!text && !files.length) || conversation.running) {
       return;
     }
+    // A model that cannot read what is attached: the first Enter shows why
+    // (the warning above the box), the second sends.
+    const issue = this.#mediaIssue();
+    if (issue && this.#mediaAck != issue.key) {
+      this.#mediaAck = issue.key;
+      this.#syncMediaWarning();
+      this.#hint.textContent = `${issue.model} can't read these · Enter again to send anyway`;
+      this.#hint.setAttribute("warning", "");
+      return;
+    }
     this.#input.value = "";
     this.#attachments = [];
     this.#releasePreviews(files);
@@ -1287,6 +1634,71 @@ export class LazyvimiumAgentDock {
     return element;
   }
 
+  // A button that puts `text()` on the clipboard and says so.
+  #copyButton(text, label = "Copy", className = "") {
+    const button = this.#create(
+      "button",
+      `lazyvimium-agent-copy ${className}`.trim()
+    );
+    button.type = "button";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    // A click keeps the selection and the typing focus where they were.
+    button.addEventListener("mousedown", event => event.preventDefault());
+    button.addEventListener("click", () => {
+      Cc["@mozilla.org/widget/clipboardhelper;1"]
+        .getService(Ci.nsIClipboardHelper)
+        .copyString(text());
+      button.setAttribute("copied", "");
+      button.title = "Copied";
+      this.#window.setTimeout(() => {
+        button.removeAttribute("copied");
+        button.title = label;
+      }, 1400);
+    });
+    return button;
+  }
+
+  // The logo of an agent, drawn from a data URL: one shape in the text
+  // color for the monochrome ones, a picture for the rest.
+  #logo(id) {
+    const logo = this.#create("span", "lazyvimium-agent-logo");
+    const url = lazy.agentIcon(id, { mask: true });
+    if (url) {
+      logo.style.setProperty("--lazyvimium-agent-logo", `url("${url}")`);
+      logo.toggleAttribute("mono", lazy.iconIsMono(id));
+      logo.toggleAttribute("tile", lazy.iconIsTile(id));
+      logo.toggleAttribute("full", lazy.iconIsFull(id));
+    } else {
+      logo.setAttribute("none", "");
+    }
+    return logo;
+  }
+
+  // The agent chip: its logo, name and a caret, redrawn only when the agent
+  // changes.
+  #renderChip(agent) {
+    if (this.#chipAgent == (agent?.id ?? "")) {
+      return;
+    }
+    this.#chipAgent = agent?.id ?? "";
+    this.#agentChip.replaceChildren(
+      this.#logo(agent?.id),
+      this.#create(
+        "span",
+        "lazyvimium-agent-chip-name",
+        agent?.name ?? "No agent"
+      ),
+      this.#create("span", "lazyvimium-agent-chip-caret")
+    );
+  }
+
+  #installName(agent) {
+    const name = this.#create("span", "lazyvimium-agent-install-name");
+    name.append(this.#logo(agent.id), agent.name);
+    return name;
+  }
+
   #render() {
     const conversation = this.#conversation;
     const atBottom =
@@ -1328,7 +1740,7 @@ export class LazyvimiumAgentDock {
     }
 
     const agent = conversation?.agent;
-    this.#agentChip.textContent = agent ? agent.name : "No agent";
+    this.#renderChip(agent);
     this.#agentChip.style.setProperty(
       "--lazyvimium-agent-color",
       lazy.agentColor(agent?.id)
@@ -1393,6 +1805,19 @@ export class LazyvimiumAgentDock {
           onLink: href =>
             this.#window.openWebLinkIn(href, "tab", { relatedToCurrent: true }),
         });
+        if (!streaming && message.text.trim()) {
+          // Each code block copies on its own; the whole answer copies as
+          // the Markdown the agent wrote.
+          for (const pre of row.querySelectorAll("pre")) {
+            const code = pre.textContent;
+            pre.append(this.#copyButton(() => code, "Copy code", "on-code"));
+          }
+          const actions = this.#create("div", "lazyvimium-agent-actions");
+          actions.append(
+            this.#copyButton(() => message.text, "Copy answer", "labelled")
+          );
+          row.append(actions);
+        }
         break;
       case "step": {
         row.setAttribute("status", message.status);
@@ -1416,6 +1841,7 @@ export class LazyvimiumAgentDock {
         break;
       case "user":
         row.append(this.#create("span", "", message.text));
+        row.append(this.#copyButton(() => message.text, "Copy", "on-user"));
         if (message.files?.length) {
           const files = this.#create("span", "lazyvimium-agent-sent-files");
           for (const name of message.files) {
@@ -1461,7 +1887,10 @@ export class LazyvimiumAgentDock {
 
   #renderEmpty(agent) {
     const empty = this.#create("div", "lazyvimium-agent-empty");
+    const mark = this.#logo(agent.id);
+    mark.classList.add("large");
     empty.append(
+      mark,
       this.#create(
         "div",
         "lazyvimium-agent-empty-title",
@@ -1489,7 +1918,7 @@ export class LazyvimiumAgentDock {
       for (const agent of agents) {
         const row = this.#create("div", "lazyvimium-agent-install-row");
         row.append(
-          this.#create("span", "lazyvimium-agent-install-name", agent.name),
+          this.#installName(agent),
           this.#create("code", "", agent.install)
         );
         list.append(row);

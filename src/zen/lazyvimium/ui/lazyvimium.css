@@ -520,6 +520,7 @@
 
 /* float: a card over the page, inset from its side. */
 #lazyvimium-agent-dock {
+  outline: none;
   top: 10px;
   bottom: 10px;
   width: var(--lazyvimium-agent-width, 420px);
@@ -1792,25 +1793,112 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 6px;
-  padding: 2px 9px 2px 7px;
+  gap: 7px;
+  padding: 3px 9px 3px 5px;
   border: none;
   border-radius: 999px;
-  background-color: color-mix(in srgb, var(--lazyvimium-agent-color) 20%, transparent);
+  background-color: color-mix(in srgb, var(--lazyvimium-agent-color) 18%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--lazyvimium-agent-color) 38%, transparent);
   color: inherit;
   font: inherit;
   font-weight: 600;
+  transition: background-color 120ms ease;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--lazyvimium-agent-color) 28%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--lazyvimium-accent);
+    outline-offset: 1px;
+  }
+
+  #lazyvimium-agent-dock[running] & .lazyvimium-agent-logo {
+    animation: lazyvimium-agent-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+/* A small caret that says the chip opens a list. */
+.lazyvimium-agent-chip-caret {
+  width: 5px;
+  height: 5px;
+  margin-top: -2px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  opacity: 0.55;
+  transform: rotate(45deg);
+}
+
+/* An agent's logo, a circle: a brand tile (Kiro) fills it, any other
+   mark sits on a white badge, one-color ones in dark ink. */
+.lazyvimium-agent-logo {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  overflow: hidden;
+  border-radius: 50%;
+  background-color: #ffffff;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.14);
 
   &::before {
     content: "";
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background-color: var(--lazyvimium-agent-color);
+    position: absolute;
+    inset: 17%;
+    background: var(--lazyvimium-agent-logo) center / contain no-repeat;
   }
 
-  #lazyvimium-agent-dock[running] &::before {
-    animation: lazyvimium-agent-pulse 1.2s ease-in-out infinite;
+  &[full]::before {
+    inset: 5%;
+  }
+
+  &[tile] {
+    background: none;
+
+    &::before {
+      inset: 0;
+      background-size: cover;
+    }
+  }
+
+  &[mono]::before {
+    inset: 25%;
+    background: #211e1e;
+    mask: var(--lazyvimium-agent-logo) center / contain no-repeat;
+  }
+
+  &[none] {
+    background: var(--lazyvimium-agent-color);
+    transform: scale(0.45);
+    box-shadow: none;
+
+    &::before {
+      display: none;
+    }
+  }
+
+  &.large {
+    width: 44px;
+    height: 44px;
+    margin-bottom: 12px;
+    filter: drop-shadow(0 4px 12px color-mix(in srgb, var(--lazyvimium-agent-color, var(--lazyvimium-accent)) 35%, transparent));
+  }
+}
+
+.lazyvimium-agent-empty > .lazyvimium-agent-logo {
+  display: block;
+  margin-inline: auto;
+}
+
+.lazyvimium-agent-install-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  & .lazyvimium-agent-logo {
+    width: 18px;
+    height: 18px;
   }
 }
 
@@ -1834,6 +1922,21 @@
 
   &[hidden] {
     display: none;
+  }
+
+  /* A model that cannot read pictures. */
+  &[text-only] {
+    border-color: color-mix(in srgb, var(--lazyvimium-warning) 60%, transparent);
+
+    &::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-inline-end: 5px;
+      border-radius: 50%;
+      background-color: var(--lazyvimium-warning);
+    }
   }
 }
 
@@ -1896,6 +1999,150 @@
     color: light-dark(#ffffff, var(--lazyvimium-ink));
     font-weight: 600;
   }
+}
+
+/* What the attached files need and the model cannot read. */
+.lazyvimium-agent-media-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background-color: color-mix(in srgb, var(--lazyvimium-warning) 15%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--lazyvimium-warning) 55%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+
+  &[hidden] {
+    display: none;
+  }
+
+  &[nudge] {
+    animation: lazyvimium-agent-nudge 320ms ease;
+    box-shadow: inset 0 0 0 1.5px var(--lazyvimium-warning);
+  }
+
+  & b {
+    font-weight: 600;
+  }
+}
+
+.lazyvimium-agent-media-text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.lazyvimium-agent-media-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@keyframes lazyvimium-agent-nudge {
+  25% {
+    transform: translateX(-3px);
+  }
+
+  75% {
+    transform: translateX(3px);
+  }
+}
+
+/* Copy: on an answer's foot, a code block's corner and a request's top. */
+.lazyvimium-agent-copy {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px 2px 5px;
+  border: none;
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--lazyvimium-agent-muted);
+  font: inherit;
+  font-size: 11px;
+  -moz-context-properties: fill;
+  fill: currentColor;
+
+  &::before {
+    content: "";
+    width: 13px;
+    height: 13px;
+    background: url("chrome://browser/skin/zen-icons/edit-copy.svg") center / contain no-repeat;
+  }
+
+  &.labelled::after {
+    content: "Copy";
+  }
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--lazyvimium-agent-text) 10%, transparent);
+    color: var(--lazyvimium-agent-text);
+  }
+
+  &[copied] {
+    color: var(--lazyvimium-success, var(--lazyvimium-accent));
+
+    &::before {
+      background-image: url("chrome://browser/skin/zen-icons/check.svg");
+    }
+
+    &.labelled::after {
+      content: "Copied";
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--lazyvimium-accent);
+  }
+
+  /* On code, and on a request, only where the pointer is. */
+  &:is(.on-code, .on-user) {
+    position: absolute;
+    padding: 3px;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    background-color: color-mix(in srgb, var(--lazyvimium-agent-surface) 80%, transparent);
+  }
+
+  &.on-code {
+    top: 6px;
+    right: 6px;
+  }
+
+  &.on-user {
+    top: -9px;
+    right: 8px;
+  }
+}
+
+.lazyvimium-agent-actions {
+  display: flex;
+  margin-top: 4px;
+  margin-inline-start: -5px;
+
+  & .lazyvimium-agent-copy {
+    opacity: 0.55;
+    transition: opacity 120ms ease;
+  }
+}
+
+.lazyvimium-agent-message:hover .lazyvimium-agent-actions .lazyvimium-agent-copy,
+.lazyvimium-agent-actions .lazyvimium-agent-copy:focus-visible,
+.lazyvimium-agent-actions .lazyvimium-agent-copy[copied] {
+  opacity: 1;
+}
+
+.lazyvimium-md pre:hover > .lazyvimium-agent-copy.on-code,
+.lazyvimium-agent-message[type="user"]:hover > .lazyvimium-agent-copy.on-user,
+.lazyvimium-agent-copy:is(.on-code, .on-user):is(:focus-visible, [copied]) {
+  opacity: 1;
+}
+
+.lazyvimium-md pre,
+.lazyvimium-agent-message[type="user"] {
+  position: relative;
 }
 
 .lazyvimium-agent-install {
@@ -2019,7 +2266,7 @@
   .lazyvimium-agent-instruction,
   .lazyvimium-agent-switch,
   .lazyvimium-agent-switch::before,
-  .lazyvimium-agent-chip::before,
+  .lazyvimium-agent-logo,
   #lazyvimium-agent-pill::before,
   #lazyvimium-agent-handle::before,
   .lazyvimium-agent-grip::before,

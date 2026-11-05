@@ -381,3 +381,274 @@ add_task(async function test_files_go_with_the_request() {
   LazyvimiumAgents.reset(tab.linkedBrowser);
   BrowserTestUtils.removeTab(tab);
 });
+
+add_task(async function test_a_model_that_cannot_read_the_files_says_so() {
+  const tab = await BrowserTestUtils.openNewForegroundTab(
+    gBrowser,
+    "data:text/html,<title>Shop</title><p>shop"
+  );
+  const dir = await fakeAgent();
+  const models = [
+    { id: "deep", name: "DeepSeek", input: ["text"] },
+    { id: "sonnet", name: "Sonnet", input: ["text", "image", "pdf"] },
+  ];
+  const modelsNow = LazyvimiumAgents.modelsNow;
+  LazyvimiumAgents.modelsNow = () => models;
+  Services.prefs.setStringPref("lazyvimium.agent.model.claude", "deep");
+  registerCleanupFunction(() => {
+    LazyvimiumAgents.modelsNow = modelsNow;
+    Services.prefs.clearUserPref("lazyvimium.agent.model.claude");
+  });
+  await dock().open(tab.linkedBrowser);
+  const input = $(".lazyvimium-agent-input");
+  const warning = $(".lazyvimium-agent-media-warning");
+  ok(warning.hidden, "no warning while nothing is attached");
+
+  const png = Uint8Array.from(
+    atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+    ),
+    c => c.charCodeAt(0)
+  );
+  const drop = (...files) => {
+    const data = new DataTransfer();
+    for (const file of files) {
+      data.items.add(file);
+    }
+    $(".lazyvimium-agent-log").dispatchEvent(
+      new DragEvent("drop", {
+        dataTransfer: data,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+  };
+  drop(new File(["a,b"], "notes.csv"));
+  await TestUtils.waitForCondition(
+    () => $(".lazyvimium-agent-attachment"),
+    "a text file attached"
+  );
+  ok(warning.hidden, "a text file is fine for a text model");
+
+  drop(new File([png], "pic.png", { type: "image/png" }));
+  await TestUtils.waitForCondition(() => !warning.hidden, "the warning shows");
+  ok(warning.textContent.includes("DeepSeek"), "it names the model");
+  ok(warning.textContent.includes("images"), "and what it cannot read");
+  const buttons = [...warning.querySelectorAll("button")].map(
+    button => button.textContent
+  );
+  Assert.deepEqual(
+    buttons,
+    ["Use Sonnet", "Pick…", "Send anyway"],
+    "it offers a model that can, another pick, or sending as is"
+  );
+  ok(
+    $(".lazyvimium-agent-model").hasAttribute("text-only"),
+    "the model chip says the model reads text only"
+  );
+
+  type(input, "what is in the picture?");
+  EventUtils.synthesizeKey("KEY_Enter", {}, window);
+  ok(
+    !LazyvimiumAgents.conversationFor(tab.linkedBrowser)?.messages.length,
+    "the first Enter does not send"
+  );
+  ok(warning.hasAttribute("nudge"), "it points at the warning instead");
+  is(input.value, "what is in the picture?", "what was typed stays");
+
+  // Switching to the model that can read it.
+  warning.querySelector("button.primary").click();
+  is(
+    Services.prefs.getStringPref("lazyvimium.agent.model.claude"),
+    "sonnet",
+    "the model is switched"
+  );
+  await TestUtils.waitForCondition(() => warning.hidden, "the warning goes");
+  ok(
+    !$(".lazyvimium-agent-model").hasAttribute("text-only"),
+    "the chip no longer warns"
+  );
+
+  // Back to the text model: a second Enter sends anyway, and the agent is
+  // told it cannot see the picture.
+  Services.prefs.setStringPref("lazyvimium.agent.model.claude", "deep");
+  dockElement().querySelector(".lazyvimium-agent-attachment-x").click();
+  drop(new File([png], "pic2.png", { type: "image/png" }));
+  await TestUtils.waitForCondition(() => !warning.hidden, "warns again");
+  EventUtils.synthesizeKey("KEY_Enter", {}, window);
+  EventUtils.synthesizeKey("KEY_Enter", {}, window);
+  await TestUtils.waitForCondition(
+    () => LazyvimiumAgents.conversationFor(tab.linkedBrowser)?.messages.length,
+    "the second Enter sends"
+  );
+  await TestUtils.waitForCondition(
+    () => !LazyvimiumAgents.conversationFor(tab.linkedBrowser)?.running,
+    "the turn ends"
+  );
+  const prompt = await IOUtils.readUTF8(PathUtils.join(dir, "prompt"));
+  ok(
+    /cannot read image files/.test(prompt),
+    `the agent is told not to guess: ${prompt}`
+  );
+
+  // Copying what the agent answered.
+  const copy = await TestUtils.waitForCondition(
+    () => $('.lazyvimium-agent-message[type="agent"] .lazyvimium-agent-copy'),
+    "the answer has a copy button"
+  );
+  await SimpleTest.promiseClipboardChange("ok", () => copy.click());
+  ok(copy.hasAttribute("copied"), "the button says it copied");
+
+  dock().close();
+  await TestUtils.waitForCondition(() => dockElement().hidden, "closed");
+  LazyvimiumAgents.reset(tab.linkedBrowser);
+  BrowserTestUtils.removeTab(tab);
+});
+
+add_task(async function test_ctrl_v_attaches_pictures_and_files() {
+  if (Services.env.exists("MOZ_HEADLESS")) {
+    // The headless clipboard holds text only; run this under a display
+    // (xvfb-run, with WAYLAND_DISPLAY unset).
+    ok(true, "skipped: no picture or file clipboard when headless");
+    return;
+  }
+  const tab = await BrowserTestUtils.openNewForegroundTab(
+    gBrowser,
+    "data:text/html,<title>Shop</title><p>shop"
+  );
+  await fakeAgent();
+  await dock().open(tab.linkedBrowser);
+  await TestUtils.waitForCondition(
+    () => dockElement().getAnimations().length == 0,
+    "the panel has come in"
+  );
+  const input = $(".lazyvimium-agent-input");
+  input.focus();
+  // Nothing left over from an earlier test.
+  for (const cross of dockElement().querySelectorAll(
+    ".lazyvimium-agent-attachment-x"
+  )) {
+    cross.click();
+  }
+  const attached = () =>
+    dockElement().querySelectorAll(
+      ".lazyvimium-agent-attachment, .lazyvimium-agent-attachment-tile"
+    ).length;
+  const setClipboard = setup => {
+    const transferable = Cc[
+      "@mozilla.org/widget/transferable;1"
+    ].createInstance(Ci.nsITransferable);
+    transferable.init(null);
+    setup(transferable);
+    Services.clipboard.setData(
+      transferable,
+      null,
+      Ci.nsIClipboard.kGlobalClipboard
+    );
+  };
+  const paste = () => EventUtils.synthesizeKey("v", { accelKey: true }, window);
+
+  // A box's own paste does nothing without text on the clipboard, so a
+  // picture used to be ignored.
+  const png = Uint8Array.from(
+    atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+    ),
+    c => c.charCodeAt(0)
+  );
+  const container = Cc["@mozilla.org/image/tools;1"]
+    .getService(Ci.imgITools)
+    .decodeImageFromArrayBuffer(png.buffer, "image/png");
+  setClipboard(t => {
+    t.addDataFlavor("image/png");
+    t.setTransferData("image/png", container);
+  });
+  paste();
+  await TestUtils.waitForCondition(
+    () => $(".lazyvimium-agent-attachment-tile img"),
+    "a picture on the clipboard is attached"
+  );
+  is(attached(), 1, "as one tile");
+
+  // A file copied in a file manager.
+  const dir = await IOUtils.createUniqueDirectory(PathUtils.tempDir, "paste");
+  registerCleanupFunction(() => IOUtils.remove(dir, { recursive: true }));
+  const path = PathUtils.join(dir, "prices.csv");
+  await IOUtils.writeUTF8(path, "a,b");
+  const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+  file.initWithPath(path);
+  setClipboard(t => {
+    t.addDataFlavor("application/x-moz-file");
+    t.setTransferData("application/x-moz-file", file);
+  });
+  paste();
+  await TestUtils.waitForCondition(
+    () => attached() == 2,
+    "a copied file is attached"
+  );
+  is(
+    $(".lazyvimium-agent-attachment-name").textContent,
+    "prices.csv",
+    "by its name"
+  );
+
+  // Text still goes into the box.
+  const text = Cc["@mozilla.org/supports-string;1"].createInstance(
+    Ci.nsISupportsString
+  );
+  text.data = "hello";
+  setClipboard(t => {
+    t.addDataFlavor("text/plain");
+    t.setTransferData("text/plain", text);
+  });
+  paste();
+  await TestUtils.waitForCondition(
+    () => input.value == "hello",
+    "text is pasted as text"
+  );
+  is(attached(), 2, "and attaches nothing");
+
+  dock().close();
+  await TestUtils.waitForCondition(() => dockElement().hidden, "closed");
+  LazyvimiumAgents.reset(tab.linkedBrowser);
+  BrowserTestUtils.removeTab(tab);
+});
+
+add_task(async function test_ctrl_c_copies_text_selected_in_the_log() {
+  const tab = await BrowserTestUtils.openNewForegroundTab(
+    gBrowser,
+    "data:text/html,<title>Shop</title><p>shop"
+  );
+  await fakeAgent();
+  await dock().open(tab.linkedBrowser);
+  await TestUtils.waitForCondition(
+    () => dockElement().getAnimations().length == 0,
+    "the panel has come in"
+  );
+  const conversation = LazyvimiumAgents.conversationFor(tab.linkedBrowser);
+  conversation.messages.push({
+    type: "agent",
+    text: "| Name | Kind |\n| --- | --- |\n| Paper2Agent (Nature) | Multi-agent AI System |",
+  });
+  conversation.changed();
+  const cell = await TestUtils.waitForCondition(
+    () =>
+      [...dockElement().querySelectorAll("td")].find(td =>
+        td.textContent.startsWith("Paper2Agent")
+      ),
+    "the answer's table is drawn"
+  );
+
+  // What a user does: click in the text, select it, press Ctrl+C.
+  EventUtils.synthesizeMouseAtCenter(cell, {}, window);
+  window.getSelection().selectAllChildren(cell);
+  await SimpleTest.promiseClipboardChange("Paper2Agent (Nature)", () =>
+    EventUtils.synthesizeKey("c", { accelKey: true }, window)
+  );
+  ok(true, "the selected text is on the clipboard");
+
+  dock().close();
+  await TestUtils.waitForCondition(() => dockElement().hidden, "closed");
+  LazyvimiumAgents.reset(tab.linkedBrowser);
+  BrowserTestUtils.removeTab(tab);
+});
