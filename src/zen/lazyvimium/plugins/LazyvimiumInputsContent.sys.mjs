@@ -2,7 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import { LazyvimiumControls } from "resource:///modules/lazyvimium/core/LazyvimiumControls.sys.mjs";
 import { LazyvimiumDom } from "resource:///modules/lazyvimium/core/LazyvimiumDom.sys.mjs";
+import { labelElements } from "resource:///modules/lazyvimium/plugins/LazyvimiumJumpContent.sys.mjs";
 
 const FIELDS =
   "input, textarea, select, [contenteditable='true'], [contenteditable='']";
@@ -20,20 +22,16 @@ function isShown(element) {
   return rect.width > 0 && rect.height > 0;
 }
 
-/**
- * The page's editable fields in reading order.
- *
- * @param {Document} document
- * @returns {Element[]}
- */
-function fields(document) {
-  return [...LazyvimiumDom.deepElements(document)]
-    .filter(
-      element =>
-        element.matches(FIELDS) &&
-        LazyvimiumDom.isEditable(element) &&
-        isShown(element)
-    )
+function isField(element) {
+  return (
+    element.matches(FIELDS) &&
+    LazyvimiumDom.isEditable(element) &&
+    isShown(element)
+  );
+}
+
+function inReadingOrder(elements) {
+  return elements
     .map(element => ({ element, rect: element.getBoundingClientRect() }))
     .sort((a, b) =>
       Math.abs(a.rect.top - b.rect.top) > ROW_TOLERANCE
@@ -41,6 +39,29 @@ function fields(document) {
         : a.rect.left - b.rect.left
     )
     .map(({ element }) => element);
+}
+
+/**
+ * The page's editable fields in reading order.
+ *
+ * @param {Document} document
+ * @returns {Element[]}
+ */
+function fields(document) {
+  return inReadingOrder(
+    [...LazyvimiumDom.deepElements(document)].filter(isField)
+  );
+}
+
+/**
+ * The fields in the window that a user can see, in reading order: one under a
+ * dialog is no choice.
+ *
+ * @param {Window} window
+ * @returns {Element[]}
+ */
+function fieldsToChoose(window) {
+  return inReadingOrder(LazyvimiumControls.find(window).filter(isField));
 }
 
 function inViewport(element, window) {
@@ -84,17 +105,39 @@ function step({ document, window }, offset) {
   focusField(list[((index % list.length) + list.length) % list.length]);
 }
 
+function first({ actor, document, window }, { count = 1 }) {
+  const visible = fields(document).filter(element =>
+    inViewport(element, window)
+  );
+  if (!visible.length) {
+    // No field to type in: pass keys to the page, like `I`.
+    actor.setMode("i", { explicit: true });
+    return;
+  }
+  focusField(visible[Math.min(count, visible.length) - 1]);
+}
+
 export const actions = {
-  "input.first": function ({ actor, document, window }, { count = 1 }) {
-    const visible = fields(document).filter(element =>
-      inViewport(element, window)
-    );
-    if (!visible.length) {
-      // No field to type in: pass keys to the page, like `I`.
-      actor.setMode("i", { explicit: true });
-      return;
+  "input.first": first,
+
+  // A count says which field, and one field needs no choosing. Agents have
+  // `input.first`: labels would wait for keys they do not press.
+  "input.choose": async function (context, { count }) {
+    const { actor, window } = context;
+    const choices = count === undefined ? fieldsToChoose(window) : [];
+    if (choices.length > 1) {
+      await labelElements(
+        actor,
+        window,
+        () => fieldsToChoose(window),
+        focusField
+      );
+    } else if (choices.length) {
+      focusField(choices[0]);
+    } else {
+      // A field that something clear lies over is still the one to type in.
+      first(context, { count });
     }
-    focusField(visible[Math.min(count, visible.length) - 1]);
   },
 
   "input.last": function ({ actor, document }, { count = 1 }) {

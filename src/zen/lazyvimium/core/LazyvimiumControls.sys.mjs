@@ -80,27 +80,38 @@ function sitsInATrack(element) {
   return false;
 }
 
-const MAX_ELEMENTS = 5000;
 const MIN_SIZE = 4;
 
 /**
- * Whether the element is on screen and nothing covers it.
+ * Whether a box is in the window and big enough to press. It costs next to
+ * nothing, so it comes before everything else: a long page has far more
+ * elements out of the window than in it.
+ *
+ * @param {Window} window
+ * @param {DOMRect} rect
+ * @returns {boolean}
+ */
+function isInWindow(window, rect) {
+  return (
+    rect.width >= MIN_SIZE &&
+    rect.height >= MIN_SIZE &&
+    rect.bottom > 0 &&
+    rect.right > 0 &&
+    rect.top < window.innerHeight &&
+    rect.left < window.innerWidth
+  );
+}
+
+/**
+ * Whether an element in the window shows and nothing covers it.
  *
  * @param {Window} window
  * @param {Element} element
+ * @param {DOMRect} rect
  * @returns {boolean}
  */
-function isShown(window, element) {
-  const rect = element.getBoundingClientRect();
-  if (
-    !element.checkVisibility() ||
-    rect.width < MIN_SIZE ||
-    rect.height < MIN_SIZE ||
-    rect.bottom <= 0 ||
-    rect.right <= 0 ||
-    rect.top >= window.innerHeight ||
-    rect.left >= window.innerWidth
-  ) {
+function isShown(window, element, rect) {
+  if (!element.checkVisibility()) {
     return false;
   }
   const hit = LazyvimiumDom.deepElementFromPoint(
@@ -116,6 +127,63 @@ function isShown(window, element) {
   );
 }
 
+/**
+ * The elements that may be in the window, found by asking the layout what is
+ * drawn there rather than by reading the box of every element: a long feed
+ * has thousands above and below the window, and reading those boxes cost more
+ * than all the rest. The elements that hold what is drawn come too, as a
+ * control may be drawn by its children alone, and so does the field of a label
+ * in the window, which may take no clicks of its own.
+ *
+ * @param {Window} window
+ * @param {Element} root The elements inside it, not it.
+ * @returns {Set<Element>}
+ */
+function elementsOnScreen(window, root) {
+  const inside = new Set();
+  const outside = new Set();
+  const fields = new Set();
+  const nodes = window.windowUtils.nodesFromRect(
+    0,
+    0,
+    0,
+    window.innerWidth,
+    window.innerHeight,
+    0,
+    false,
+    true,
+    false,
+    1
+  );
+  for (const node of nodes) {
+    // From the node up to one already seen, or to the root: the chain is
+    // inside the root only if it got there.
+    const chain = [];
+    let each = node.nodeType == node.ELEMENT_NODE ? node : null;
+    each ??= LazyvimiumDom.composedParent(node);
+    for (
+      ;
+      each && each !== root && !inside.has(each) && !outside.has(each);
+      each = LazyvimiumDom.composedParent(each)
+    ) {
+      chain.push(each);
+    }
+    const isInside = each === root || inside.has(each);
+    for (const element of chain) {
+      (isInside ? inside : outside).add(element);
+      if (isInside && element.localName == "label" && element.control) {
+        fields.add(element.control);
+      }
+    }
+  }
+  for (const field of fields) {
+    if (LazyvimiumDom.composedContains(root, field) && field !== root) {
+      inside.add(field);
+    }
+  }
+  return inside;
+}
+
 export const LazyvimiumControls = {
   /**
    * The controls on screen, in document order.
@@ -124,33 +192,64 @@ export const LazyvimiumControls = {
    * @returns {Element[]}
    */
   find(window) {
-    const found = [];
-    let seen = 0;
+    const cursors = new Map();
+    const cursorOf = element => {
+      let cursor = cursors.get(element);
+      if (cursor === undefined) {
+        cursor = window.getComputedStyle(element).cursor;
+        cursors.set(element, cursor);
+      }
+      return cursor;
+    };
     const root = window.document.body ?? window.document.documentElement;
-    for (const element of LazyvimiumDom.deepElements(root)) {
-      if (++seen > MAX_ELEMENTS) {
-        break;
+    // Only what is drawn in the window is looked at, so the cost is that of
+    // the window, not of the page.
+    const shown = [];
+    for (const element of elementsOnScreen(window, root)) {
+      const rect = element.getBoundingClientRect();
+      if (!isInWindow(window, rect)) {
+        continue;
       }
       const isControl = element.matches(CONTROLS);
       // A div with a click handler has no markup to say so, only a hand for
       // a cursor; its children share it.
-      const parent = LazyvimiumDom.composedParent(element);
-      const cursor = isControl ? "" : window.getComputedStyle(element).cursor;
-      const hasHand =
-        !isControl &&
-        HANDS.has(cursor) &&
-        !found.some(other => LazyvimiumDom.composedContains(other, element)) &&
-        parent &&
-        window.getComputedStyle(parent).cursor != cursor;
+      let isHand = false;
+      if (!isControl) {
+        const cursor = cursorOf(element);
+        const parent = LazyvimiumDom.composedParent(element);
+        isHand = HANDS.has(cursor) && !!parent && cursorOf(parent) != cursor;
+      }
       if (
-        (isControl || hasHand) &&
+        (isControl || isHand) &&
         !element.disabled &&
-        isShown(window, element)
+        isShown(window, element, rect)
       ) {
-        found.push(element);
+        shown.push({ element, isHand });
       }
     }
-    return found;
+    // A hand within a control, or within another hand, is not another target.
+    const hands = new Set(
+      shown.filter(item => item.isHand).map(i => i.element)
+    );
+    const found = new Set();
+    for (const element of LazyvimiumDom.sortComposed(
+      shown.map(i => i.element)
+    )) {
+      let isInside = false;
+      if (hands.has(element)) {
+        for (
+          let each = LazyvimiumDom.composedParent(element);
+          each && !isInside;
+          each = LazyvimiumDom.composedParent(each)
+        ) {
+          isInside = found.has(each);
+        }
+      }
+      if (!isInside) {
+        found.add(element);
+      }
+    }
+    return [...found];
   },
 
   /**
@@ -180,22 +279,19 @@ export const LazyvimiumControls = {
    * @returns {Element[]}
    */
   frames(window) {
-    const frames = [...LazyvimiumDom.deepElements(window.document)].filter(
-      element => element.matches("iframe, frame")
+    // From the frames themselves: walking the page for them would cost what
+    // `find` no longer does, on every scroll of a jump.
+    const frames = window.browsingContext.children
+      .map(child => child.embedderElement)
+      .filter(element => element?.matches("iframe, frame"));
+    return LazyvimiumDom.sortComposed(
+      frames.filter(
+        frame =>
+          frame.browsingContext &&
+          frame.checkVisibility() &&
+          isInWindow(window, frame.getBoundingClientRect())
+      )
     );
-    return frames.filter(frame => {
-      const rect = frame.getBoundingClientRect();
-      return (
-        frame.browsingContext &&
-        frame.checkVisibility() &&
-        rect.width >= MIN_SIZE &&
-        rect.height >= MIN_SIZE &&
-        rect.bottom > 0 &&
-        rect.right > 0 &&
-        rect.top < window.innerHeight &&
-        rect.left < window.innerWidth
-      );
-    });
   },
 
   /**

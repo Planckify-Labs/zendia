@@ -181,6 +181,362 @@ add_task(async function test_hints_label_everything() {
   BrowserTestUtils.removeTab(tab);
 });
 
+add_task(async function test_hints_mark_the_letters_already_pressed() {
+  const links = Array.from(
+    { length: 60 },
+    (_, i) => `<a href="#${i}" style="margin: 4px">link ${i}</a>`
+  ).join(" ");
+  const tab = await openPage(`<body>${links}</body>`);
+  // Each label, with what it marks as pressed and how.
+  const marks = () =>
+    inPage(tab, () =>
+      [...content.document.documentElement.querySelectorAll("div > span")].map(
+        tag => {
+          const pressed = tag.querySelector("span");
+          return {
+            label: tag.textContent,
+            pressed: pressed?.textContent ?? "",
+            background: pressed?.style.background ?? "",
+            color: pressed?.style.color ?? "",
+          };
+        }
+      )
+    );
+
+  type("s");
+  await TestUtils.waitForCondition(
+    async () => (await labelsShown(tab)).length == 60,
+    "every link is labeled"
+  );
+  const labels = await labelsShown(tab);
+  const first = labels[0][0];
+  ok(labels[0].length > 1, "with labels of more than one letter");
+  ok(
+    (await marks()).every(mark => !mark.pressed),
+    "nothing is marked before a key"
+  );
+
+  type(first);
+  await TestUtils.waitForCondition(
+    async () => (await labelsShown(tab)).length < 60,
+    "a letter leaves the labels that start with it"
+  );
+  const left = await marks();
+  ok(
+    left.every(mark => mark.label.startsWith(first)),
+    "and only those"
+  );
+  ok(
+    left.every(mark => mark.pressed == first),
+    "with the letter pressed marked on each"
+  );
+  is(left[0].background, "rgb(255, 199, 119)", "in the palette's yellow");
+  is(left[0].color, "rgb(27, 29, 43)", "and ink");
+
+  EventUtils.synthesizeKey("KEY_Backspace");
+  await TestUtils.waitForCondition(
+    async () => (await labelsShown(tab)).length == 60,
+    "<BS> brings the labels back"
+  );
+  ok(
+    (await marks()).every(mark => !mark.pressed),
+    "with nothing marked"
+  );
+
+  type(labels[0]);
+  await TestUtils.waitForCondition(
+    async () => !(await labelsShown(tab)).length,
+    "typing the rest of a label still picks it"
+  );
+  BrowserTestUtils.removeTab(tab);
+});
+
+// A long feed, as a home page of videos is: a link per row, and far more
+// elements above the window than anything counted could reach.
+const FEED_ROWS = 6000;
+const FEED_ROW_HEIGHT = 30;
+const FEED = `<body style="margin: 0; font: 16px sans-serif"><script>
+  const rows = [];
+  for (let i = 0; i < ${FEED_ROWS}; i++) {
+    rows.push(
+      '<div style="height: ${FEED_ROW_HEIGHT}px"><i><b>.</b></i>' +
+        '<a id="r' + i + '" href="#r' + i + '">Item ' + i + '</a></div>'
+    );
+  }
+  document.body.innerHTML = rows.join("");
+</script></body>`;
+
+// Links of the feed in the window, in reading order.
+const feedLinksOnScreen = tab =>
+  inPage(tab, () =>
+    [...content.document.querySelectorAll("a")]
+      .filter(link => {
+        const { top, bottom } = link.getBoundingClientRect();
+        return bottom > 0 && top < content.innerHeight;
+      })
+      .map(link => link.id)
+  );
+
+add_task(async function test_hints_label_what_is_on_screen_in_a_long_page() {
+  const tab = await openPage(FEED);
+  const row = Math.floor(FEED_ROWS * 0.8);
+  await inPage(
+    tab,
+    async (top, id) => {
+      content.scrollTo(0, top);
+      await new Promise(resolve => content.requestAnimationFrame(resolve));
+      // The window is on the row it was sent to.
+      content.document.getElementById(id).getBoundingClientRect();
+    },
+    [row * FEED_ROW_HEIGHT, "r" + row]
+  );
+  const visible = await feedLinksOnScreen(tab);
+  Assert.greater(visible.length, 5, "there are links in the window");
+  Assert.greater(
+    await inPage(tab, () => content.document.querySelectorAll("*").length),
+    FEED_ROWS * 4,
+    "with more elements above it than any count could cover"
+  );
+
+  const timing = await inPage(tab, () => {
+    const { LazyvimiumControls } = ChromeUtils.importESModule(
+      "resource:///modules/lazyvimium/core/LazyvimiumControls.sys.mjs"
+    );
+    const runs = [];
+    let found = [];
+    for (let i = 0; i < 9; i++) {
+      const start = content.performance.now();
+      found = LazyvimiumControls.find(content);
+      runs.push(content.performance.now() - start);
+    }
+    runs.sort((a, b) => a - b);
+    return { median: runs[4], first: runs[0], found: found.length };
+  });
+  info(`BENCH find ${JSON.stringify(timing)}`);
+  is(timing.found, visible.length, "find returns the links in the window");
+
+  type("s");
+  await TestUtils.waitForCondition(
+    async () => (await labelsShown(tab)).length == visible.length,
+    "every link in the window is labeled"
+  );
+  // Reading order: the first label is on the top link.
+  type((await labelsShown(tab))[0]);
+  await TestUtils.waitForCondition(
+    () => inPage(tab, id => content.location.hash == "#" + id, [visible[0]]),
+    "a label presses the link under it"
+  );
+  BrowserTestUtils.removeTab(tab);
+});
+
+const MIXED = `<body style="margin: 0; font: 14px sans-serif; height: 3000px">
+<style>
+  .hand { cursor: pointer; padding: 4px; margin: 2px; }
+  .inner { cursor: pointer; }
+  .box { width: 200px; height: 60px; overflow: hidden; border: 1px solid; }
+  .none { pointer-events: none; }
+  #head { position: fixed; top: 0; left: 0; right: 0; height: 30px; background: #ddd; z-index: 5 }
+  #cover { position: fixed; top: 100px; left: 0; width: 300px; height: 80px; background: #aaa; z-index: 9 }
+  .sw { position: relative; display: inline-block; width: 40px; height: 20px; background: #888 }
+  .sw input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none }
+  .neg { position: relative; background: #eee; width: 100px; height: 30px }
+  .neg > a { position: absolute; z-index: -1; left: 0; top: 0; width: 50px; height: 20px }
+  .esc { width: 0; height: 0; position: relative }
+  .esc > button { position: absolute; left: 400px; top: 0; width: 60px; height: 20px }
+</style>
+<div id="head"><a href="#h1" id="h1">home</a> <button id="h2">menu</button></div>
+<div style="height: 40px"></div>
+<div id="cover"><button id="covered">under cover</button></div>
+<div class="hand" id="card" onclick="">card <span id="cardtext">text</span><div class="inner" id="inner">inner</div></div>
+<div class="hand" id="card2"><b id="b2">b</b> <div style="cursor: default"><i class="inner" id="i3">x</i></div></div>
+<button id="dis" disabled>disabled</button>
+<button id="plain">plain</button>
+<a href="#x" id="hidden-a" style="display: none">hidden</a>
+<a href="#y" id="vis-hidden" style="visibility: hidden">vh</a>
+<a href="#n" id="none-a" class="none">no events</a>
+<div class="box" id="clip"><div style="height: 100px"><a href="#c1" id="clipped" style="position: relative; top: 70px">clipped</a></div></div>
+<label class="sw" id="swlabel"><input type="checkbox" id="swin"></label>
+<div class="neg" id="neg"><a href="#z" id="negz">behind</a></div>
+<div class="esc"><button id="escaper">escaper</button></div>
+<details open><summary id="sum">summary</summary><p>text</p></details>
+<div contenteditable id="ce">editable</div>
+<div tabindex="0" id="ti">tab</div>
+<div tabindex="-1" id="tin">tab -1</div>
+<input id="in1"><input type="hidden" id="inh"><select id="sel"><option>a</option></select><textarea id="ta"></textarea>
+<div id="host"></div>
+<div id="host2"><a href="#light" id="light">light child</a></div>
+<svg width="100" height="30"><a href="#svg" id="svga"><rect width="80" height="20" fill="red"/></a></svg>
+<iframe id="fr" srcdoc="<button>in frame</button>" style="width: 200px; height: 60px"></iframe>
+<div style="transform: translateY(40px)"><a href="#tr" id="transformed">transformed</a></div>
+<div style="height: 1800px"></div>
+<a href="#far" id="far">far below</a>
+<script>
+  const make = (mode, id) => {
+    const host = document.getElementById(id);
+    const shadow = host.attachShadow({ mode });
+    shadow.innerHTML = '<button id="sb-' + id + '">in shadow</button><div class="x" style="cursor: pointer; padding: 3px">shadow hand</div><slot></slot>';
+    if (mode == "open") {
+      const inner = shadow.querySelector(".x");
+      const nested = inner.appendChild(document.createElement("div"));
+      nested.id = "nest";
+      nested.attachShadow({ mode: "closed" }).innerHTML = '<a href="#ns" id="deep">deeper</a>';
+    }
+  };
+  make("open", "host");
+  make("closed", "host2");
+  document.body.insertAdjacentHTML("beforeend", "<a href='#end' id='end'>end</a>");
+</script></body>`;
+
+// Where each scroll leaves the page, what `find` is to return: the same as
+// when every element of the page was walked. Shadow roots of both kinds, a
+// field only its label can be pressed for, a control behind its parent, one
+// out of its box, and what is hidden, disabled, covered, clipped or far.
+const MIXED_FOUND = {
+  0: "h1 h2 covered card card2 swin negz escaper sum ce ti in1 sel ta sb-host@host div@host deep@nest sb-host2@host2 div@host2 light svga transformed",
+  150: "h1 h2 covered swin escaper sum ce ti in1 sel ta sb-host@host div@host deep@nest sb-host2@host2 div@host2 light svga transformed",
+  800: "h1 h2 covered",
+  2900: "h1 h2 covered far end",
+};
+
+add_task(async function test_find_gives_the_controls_in_the_window_in_order() {
+  const tab = await openPage(MIXED);
+  for (const [top, expected] of Object.entries(MIXED_FOUND)) {
+    const found = await inPage(
+      tab,
+      async scroll => {
+        content.scrollTo(0, scroll);
+        await new Promise(resolve => content.requestAnimationFrame(resolve));
+        const { LazyvimiumControls } = ChromeUtils.importESModule(
+          "resource:///modules/lazyvimium/core/LazyvimiumControls.sys.mjs"
+        );
+        return LazyvimiumControls.find(content).map(element => {
+          const host = element.getRootNode().host;
+          return (
+            (element.id || element.localName) + (host ? "@" + host.id : "")
+          );
+        });
+      },
+      [Number(top)]
+    );
+    is(found.join(" "), expected, `the controls of a page scrolled to ${top}`);
+  }
+  BrowserTestUtils.removeTab(tab);
+});
+
+const FIELDS_PAGE = `<body style="margin: 0; height: 4000px">
+  <a href="#x">A link that is no field</a>
+  <input id="name" style="position: absolute; top: 40px; left: 10px">
+  <input id="email" value="me@example.com"
+         style="position: absolute; top: 40px; left: 300px">
+  <input type="checkbox" id="agree" style="position: absolute; top: 90px">
+  <textarea id="message" style="position: absolute; top: 140px"></textarea>
+  <input id="hidden" style="position: absolute; top: 240px; display: none">
+  <input id="below" style="position: absolute; top: 3000px">
+</body>`;
+
+const focusedId = tab =>
+  inPage(tab, () => content.document.activeElement?.id ?? "");
+
+add_task(async function test_i_labels_the_fields_when_there_are_several() {
+  const tab = await openPage(FIELDS_PAGE);
+  type("i");
+  await TestUtils.waitForCondition(
+    async () => (await labelsShown(tab)).length,
+    "i labels the fields"
+  );
+  const labels = await labelsShown(tab);
+  is(labels.length, 3, "the fields on screen and nothing else");
+  is(await focusedId(tab), "", "no field is entered yet");
+
+  EventUtils.synthesizeKey("KEY_Escape");
+  await TestUtils.waitForCondition(
+    async () => !(await labelsShown(tab)).length,
+    "<Esc> drops the labels"
+  );
+  await waitForMode("NORMAL");
+  is(await focusedId(tab), "", "and enters no field");
+
+  type("i");
+  await TestUtils.waitForCondition(
+    async () => (await labelsShown(tab)).length == 3,
+    "i labels them again"
+  );
+  // Reading order: name, email, message.
+  type(labels[1]);
+  await TestUtils.waitForCondition(
+    async () => (await focusedId(tab)) == "email",
+    "a label enters its field"
+  );
+  await waitForMode("INSERT");
+  Assert.deepEqual(
+    await inPage(tab, () => {
+      const { value, selectionStart } =
+        content.document.getElementById("email");
+      return [value, selectionStart];
+    }),
+    ["me@example.com", 14],
+    "the label is not typed, and the caret is after the text"
+  );
+  ok(!(await labelsShown(tab)).length, "the labels are gone");
+  BrowserTestUtils.removeTab(tab);
+});
+
+add_task(async function test_i_with_a_count_goes_to_that_field() {
+  const tab = await openPage(FIELDS_PAGE);
+  type("2i");
+  await TestUtils.waitForCondition(
+    async () => (await focusedId(tab)) == "email",
+    "2i enters the second field"
+  );
+  ok(!(await labelsShown(tab)).length, "with no labels");
+  BrowserTestUtils.removeTab(tab);
+});
+
+add_task(async function test_i_enters_a_lone_field_at_once() {
+  const tab = await openPage(`<body style="margin: 0; height: 4000px">
+    <input id="only" style="position: absolute; top: 40px">
+    <input id="far" style="position: absolute; top: 3000px">
+  </body>`);
+  type("i");
+  await TestUtils.waitForCondition(
+    async () => (await focusedId(tab)) == "only",
+    "the one field on screen is entered"
+  );
+  await waitForMode("INSERT");
+  ok(!(await labelsShown(tab)).length, "with no labels");
+  BrowserTestUtils.removeTab(tab);
+});
+
+add_task(async function test_i_leaves_out_the_fields_under_a_dialog() {
+  const tab = await openPage(`<body style="margin: 0">
+    <input id="under" style="position: absolute; top: 40px">
+    <input id="under2" style="position: absolute; top: 80px">
+    <div style="position: fixed; inset: 0; background: white">
+      <input id="dialog" style="position: absolute; top: 200px">
+    </div>
+  </body>`);
+  type("i");
+  await TestUtils.waitForCondition(
+    async () => (await focusedId(tab)) == "dialog",
+    "the one field that can be seen is entered"
+  );
+  ok(!(await labelsShown(tab)).length, "with no labels");
+  BrowserTestUtils.removeTab(tab);
+});
+
+add_task(async function test_i_enters_a_lone_field_something_clear_lies_over() {
+  const tab = await openPage(`<body style="margin: 0">
+    <input id="covered" style="position: absolute; top: 40px">
+    <div style="position: fixed; inset: 0"></div>
+  </body>`);
+  type("i");
+  await TestUtils.waitForCondition(
+    async () => (await focusedId(tab)) == "covered",
+    "it is still the field to type in"
+  );
+  BrowserTestUtils.removeTab(tab);
+});
+
 const ROOT = getRootDirectory(gTestPath).replace(
   "chrome://mochitests/content",
   "https://example.com"

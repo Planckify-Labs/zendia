@@ -6,14 +6,11 @@ import { LazyvimiumKeys } from "resource:///modules/lazyvimium/core/LazyvimiumKe
 import { LABELS } from "resource:///modules/lazyvimium/ui/LazyvimiumPicker.sys.mjs";
 
 export function hintLabels(count) {
-  if (count <= LABELS.length) {
-    return [...LABELS].slice(0, count);
-  }
-  const labels = [];
-  for (const first of LABELS) {
-    for (const second of LABELS) {
-      labels.push(first + second);
-    }
+  // All of one length, so no label is the start of another; longer ones
+  // when there are more targets than two letters can name.
+  let labels = [...LABELS];
+  while (labels.length < count) {
+    labels = labels.flatMap(first => [...LABELS].map(next => first + next));
   }
   return labels.slice(0, count);
 }

@@ -22,6 +22,10 @@ export const LazyvimiumInputsSpec = {
   name: "inputs",
   actions: {
     "input.first": field("Insert in First Visible Field"),
+    "input.choose": {
+      ...field("Insert in a Field, by Label if There are Several"),
+      agent: false,
+    },
     "input.last": field("Insert in Last Used Field"),
     "input.next": field("Next Field"),
     "input.prev": field("Prev Field"),

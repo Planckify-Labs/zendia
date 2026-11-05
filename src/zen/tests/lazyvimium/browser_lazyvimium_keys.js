@@ -666,8 +666,9 @@ add_task(async function test_i_and_field_jumps() {
   const tab = await openPage(FORM);
   const browser = tab.linkedBrowser;
 
+  EventUtils.synthesizeKey("1");
   EventUtils.synthesizeKey("i");
-  await waitForField(browser, "name", "i enters the top-left visible field");
+  await waitForField(browser, "name", "1i enters the top-left visible field");
   await TestUtils.waitForCondition(
     () => statuslineText().includes("INSERT"),
     "in insert mode"

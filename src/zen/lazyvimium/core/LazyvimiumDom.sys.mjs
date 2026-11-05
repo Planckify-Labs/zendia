@@ -140,6 +140,55 @@ export const LazyvimiumDom = {
   },
 
   /**
+   * Elements in the order `deepElements` gives them: a shadow root's before
+   * its host's own children.
+   *
+   * @param {Element[]} elements
+   * @returns {Element[]}
+   */
+  sortComposed(elements) {
+    // From the top of the page down to each element, found once.
+    const paths = new Map(
+      elements.map(element => {
+        const path = [];
+        for (
+          let each = element;
+          each;
+          each = LazyvimiumDom.composedParent(each)
+        ) {
+          path.push(each);
+        }
+        return [element, path.reverse()];
+      })
+    );
+    return [...elements].sort((a, b) => {
+      const first = paths.get(a);
+      const second = paths.get(b);
+      let depth = 0;
+      while (
+        depth < first.length &&
+        depth < second.length &&
+        first[depth] === second[depth]
+      ) {
+        depth++;
+      }
+      // One holds the other: the outer one comes first.
+      if (depth == first.length || depth == second.length) {
+        return first.length - second.length;
+      }
+      const x = first[depth];
+      const y = second[depth];
+      const inShadow = element => !!element.getRootNode().host;
+      if (inShadow(x) != inShadow(y)) {
+        return inShadow(x) ? -1 : 1;
+      }
+      return x.compareDocumentPosition(y) & x.DOCUMENT_POSITION_FOLLOWING
+        ? -1
+        : 1;
+    });
+  },
+
+  /**
    * The element on top at a point, looking inside shadow roots.
    *
    * @param {Document} document

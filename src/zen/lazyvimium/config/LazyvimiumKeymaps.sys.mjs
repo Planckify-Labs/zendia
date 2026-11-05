@@ -11,7 +11,7 @@ export const LazyvimiumKeymapsSpec = {
   name: "keymaps",
   priority: 100,
   keys: [
-    ["n", "i", "input.first"],
+    ["n", "i", "input.choose"],
     ["n", "I", "mode.insert"],
     ["n", "gi", "input.last"],
     ["n", "]i", "input.next"],

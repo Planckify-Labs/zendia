@@ -27,6 +27,9 @@ const HTML_NS = "http://www.w3.org/1999/xhtml";
 const LABEL_BACKGROUND = "#a25772";
 const PARAGRAPH_BACKGROUND = "#3d59a1";
 const LABEL_TEXT = "#eef5ff";
+// The letters of a label already pressed: the palette's yellow and ink.
+const TYPED_BACKGROUND = "#ffc777";
+const TYPED_TEXT = "#1b1d2b";
 const MATCH_BACKGROUND = "rgba(255, 199, 119, 0.4)";
 const TARGET_OUTLINE = "rgba(162, 87, 114, 0.55)";
 
@@ -231,10 +234,16 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
       return [];
     }
     const rect = element.getBoundingClientRect();
+    let text = null;
     return [
       {
         key: element,
-        text: LazyvimiumControls.textOf(element),
+        // Read when a pattern asks for it: the labels of hints mode never do,
+        // and reading each control's text costs a layout of it.
+        get text() {
+          text ??= LazyvimiumControls.textOf(element);
+          return text;
+        },
         rect,
         challenge: inCaptcha,
         drag: inCaptcha && LazyvimiumControls.isDraggable(window, element),
@@ -268,26 +277,25 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
     // With nothing typed every control is a target, to be seen but not yet
     // labeled.
     matches(pattern) {
-      return items.flatMap(
-        ({ key, text, rect, challenge, drag, picture, pick }) => {
-          const found = findMatches(text, pattern);
-          if (pattern && !found.length) {
-            return [];
-          }
-          return [
-            {
-              id: key,
-              rect,
-              nexts: found.map(match => match.next),
-              distance: distance(rect, from),
-              challenge,
-              drag,
-              picture,
-              pick,
-            },
-          ];
+      return items.flatMap(item => {
+        const { key, rect, challenge, drag, picture, pick } = item;
+        const found = pattern ? findMatches(item.text, pattern) : [];
+        if (pattern && !found.length) {
+          return [];
         }
-      );
+        return [
+          {
+            id: key,
+            rect,
+            nexts: found.map(match => match.next),
+            distance: distance(rect, from),
+            challenge,
+            drag,
+            picture,
+            pick,
+          },
+        ];
+      });
     },
   };
 }
@@ -1064,8 +1072,26 @@ class JumpSession {
   #tag(label, { rect, kind }) {
     const window = this.#window;
     const tag = window.document.createElementNS(HTML_NS, "span");
-    tag.textContent = label;
     const small = kind == "word" || kind == "paragraph";
+    const padding = small ? 3 : 4;
+    const typed = this.#hints ? this.#typed.length : 0;
+    if (typed) {
+      // What is pressed stands apart from what is left to press, up to the
+      // label's edge.
+      const pressed = window.document.createElementNS(HTML_NS, "span");
+      pressed.textContent = label.slice(0, typed);
+      style(pressed, {
+        display: "inline-block",
+        marginLeft: `-${padding}px`,
+        paddingLeft: `${padding}px`,
+        borderRadius: "4px 0 0 4px",
+        background: TYPED_BACKGROUND,
+        color: TYPED_TEXT,
+      });
+      tag.append(pressed, label.slice(typed));
+    } else {
+      tag.textContent = label;
+    }
     const width = label.length * (small ? 6.5 : 7) + 8;
     let left = rect.left + 2;
     let top = rect.top + 2;
@@ -1083,7 +1109,7 @@ class JumpSession {
       position: "absolute",
       left: `${Math.max(0, Math.min(left, window.innerWidth - width))}px`,
       top: `${Math.max(0, Math.min(top, window.innerHeight - 18))}px`,
-      padding: small ? "0 3px" : "0 4px",
+      padding: `0 ${padding}px`,
       borderRadius: "4px",
       background: kind == "paragraph" ? PARAGRAPH_BACKGROUND : LABEL_BACKGROUND,
       color: LABEL_TEXT,
@@ -1117,6 +1143,33 @@ class JumpSession {
 async function begin(actor, window, makeSource, options) {
   const source = await makeSource();
   actor.startCapture(new JumpSession(window, makeSource, source, options));
+}
+
+/**
+ * A label on each of some elements of this window, to choose one with the keys.
+ *
+ * @param {object} actor
+ * @param {Window} window
+ * @param {() => Element[]} find The elements, read again as the page scrolls.
+ * @param {(element: Element) => void} pick
+ * @returns {Promise<void>}
+ */
+export function labelElements(actor, window, find, pick) {
+  const makeSource = () => {
+    const from = center(window);
+    const targets = find().map(element => {
+      const rect = element.getBoundingClientRect();
+      return {
+        id: element,
+        rect,
+        nexts: [],
+        distance: distance(rect, from),
+        pick: () => pick(element),
+      };
+    });
+    return { isText: false, matches: () => targets };
+  };
+  return begin(actor, window, makeSource, { hints: true });
 }
 
 // Labels for the controls of the whole page, frames included. They are

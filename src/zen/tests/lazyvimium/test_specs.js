@@ -41,7 +41,7 @@ add_task(function test_lazyvim_defaults() {
   const { keymap } = loadBuiltins();
   // Every implemented key from the agreed LazyVim keymap table.
   const expected = {
-    i: "input.first",
+    i: "input.choose",
     I: "mode.insert",
     "]i": "input.next",
     "[i": "input.prev",
