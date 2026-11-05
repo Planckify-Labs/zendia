@@ -280,26 +280,78 @@
   }
 }
 
-/* Floating UI uses the glass of Zen's floating urlbar (zen-omnibox.css). */
-#lazyvimium-picker,
+/* The glass and motion every floating surface shares: the urlbar, the picker,
+   which-key and the agent pill. The tint is thin so the page shows through;
+   contrast(60%) pulls the page's blacks and whites toward the middle, which
+   keeps text readable over any page at that tint. */
+:root {
+  --lazyvimium-float-radius: 18px;
+  --lazyvimium-float-solid: light-dark(rgb(255, 255, 255), rgb(24 24 24));
+  --lazyvimium-float-tint: light-dark(rgba(255, 255, 255, 0.55), rgba(22, 22, 26, 0.62));
+  --lazyvimium-float-filter: var(--zen-backdrop-underlay) blur(40px) saturate(180%) contrast(60%);
+  /* The light falling on the top of the pane. */
+  --lazyvimium-float-sheen: linear-gradient(
+    to bottom,
+    light-dark(rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.06)),
+    transparent 96px
+  );
+  --lazyvimium-float-outline: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.12));
+  --lazyvimium-float-shadow:
+    inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.14)),
+    inset 0 0 0 0.5px light-dark(rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.05)),
+    0 2px 6px light-dark(rgba(20, 22, 40, 0.1), rgba(0, 0, 0, 0.3)),
+    0 24px 64px -16px light-dark(rgba(20, 22, 40, 0.38), rgba(0, 0, 0, 0.6));
+  /* Dimmed text: anything fainter falls under 4:1 over a page of the
+     opposite brightness. */
+  --lazyvimium-float-muted: 0.78;
+
+  /* The agent panel's spring (LazyvimiumAgentDock.sys.mjs). */
+  --lazyvimium-spring: linear(0, 0.0388 4%, 0.1313 8%, 0.2498 12%, 0.3757 16%, 0.497 20%, 0.6068 24%, 0.7018 28%, 0.781 32%, 0.8448 36%, 0.8948 40%, 0.9327 44%, 0.9603 48%, 0.9804 52%, 0.994 56%, 1.0025 60%, 1.0075 64%, 1.0101 68%, 1.0109 72%, 1.0104 76%, 1.0084 84%, 1.0045 95%, 1);
+  --lazyvimium-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --lazyvimium-ease-in: cubic-bezier(0.4, 0, 1, 1);
+}
+
+@keyframes lazyvimium-float-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.96);
+  }
+}
+
+@keyframes lazyvimium-float-out {
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+@keyframes lazyvimium-float-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.lazyvimium-picker,
 #lazyvimium-which-key {
-  --lazyvimium-glass-background: light-dark(rgb(255, 255, 255), rgb(24 24 24));
+  --lazyvimium-glass-background: var(--lazyvimium-float-solid);
 
   position: fixed;
   z-index: 2147483647;
   display: flex;
   flex-direction: column;
-  padding: 8px;
-  border-radius: 15px;
+  padding: 7px;
+  border-radius: var(--lazyvimium-float-radius);
   background-color: var(--lazyvimium-glass-background);
-  box-shadow: 0 30px 140px -15px light-dark(rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0.6));
-  outline: 0.5px solid light-dark(rgba(0, 0, 0, 0.2), rgb(75, 75, 75));
+  background-image: var(--lazyvimium-float-sheen);
+  box-shadow: var(--lazyvimium-float-shadow);
+  outline: 0.5px solid var(--lazyvimium-float-outline);
   color: var(--toolbar-color, light-dark(rgb(21, 20, 26), rgb(251, 251, 254)));
   font: menu;
   font-size: 13px;
 
   &:focus-visible {
-    outline: 0.5px solid light-dark(rgba(0, 0, 0, 0.2), rgb(75, 75, 75));
+    outline: 0.5px solid var(--lazyvimium-float-outline);
   }
 
   &[hidden] {
@@ -309,31 +361,115 @@
 
 /* stylelint-disable-next-line media-query-no-invalid */
 @media -moz-pref("zen.theme.acrylic-urlbar") and (not (prefers-reduced-transparency: reduce)) {
-  :root:not([zen-no-acrylic="true"]) :is(#lazyvimium-picker, #lazyvimium-which-key) {
-    backdrop-filter: var(--zen-backdrop-underlay) blur(40px);
+  :root:not([zen-no-acrylic="true"]) :is(.lazyvimium-picker, #lazyvimium-which-key) {
+    backdrop-filter: var(--lazyvimium-float-filter);
 
     &:not(:-moz-window-inactive) {
-      --lazyvimium-glass-background: light-dark(rgba(255, 255, 255, 0.93), rgba(20, 20, 20, 0.92));
+      --lazyvimium-glass-background: var(--lazyvimium-float-tint);
+    }
+  }
+
+  /* Zen's urlbar, thinned to the same glass. */
+  :root:not([zen-no-acrylic="true"]) #urlbar[breakout-extend] .urlbar-background {
+    backdrop-filter: var(--lazyvimium-float-filter) !important;
+
+    &:not(:-moz-window-inactive) {
+      --zen-urlbar-background-transparent: var(--lazyvimium-float-tint) !important;
     }
   }
 }
 
-#lazyvimium-picker {
+#urlbar[breakout-extend] {
+  --urlbarview-separator-color: var(--lazyvimium-float-outline) !important;
+
+  &,
+  & .urlbar-background {
+    border-radius: var(--lazyvimium-float-radius) !important;
+  }
+
+  & .urlbar-background {
+    background-image: var(--lazyvimium-float-sheen) !important;
+    box-shadow: var(--lazyvimium-float-shadow) !important;
+    outline: 0.5px solid var(--lazyvimium-float-outline) !important;
+  }
+
+  /* Zen's greys are made for an opaque panel. */
+  & .urlbarView-row:not([selected]) {
+    color: light-dark(rgba(0, 0, 0, 0.85), rgba(255, 255, 255, 0.88)) !important;
+
+    & .urlbarView-url,
+    & .urlbarView-title-separator::before {
+      color: light-dark(rgba(0, 0, 0, 0.72), rgba(255, 255, 255, 0.76)) !important;
+    }
+  }
+
+  & .urlbarView-row {
+    transition: background-color 120ms ease-out;
+  }
+}
+
+/* The pane opens first, its content settles into it a moment later. Only
+   the background moves: the urlbar's own box is measured while it opens, and
+   opacity on it would cut the pane off from the page it blurs. */
+#urlbar[breakout-extend][zen-floating-urlbar="true"] {
+  & .urlbar-background {
+    transform-origin: 50% 32px;
+    animation: lazyvimium-float-in 300ms var(--lazyvimium-spring) backwards;
+  }
+
+  & :is(.urlbar-input-container, .urlbarView) {
+    animation: lazyvimium-float-content-in 200ms var(--lazyvimium-ease-out) 40ms backwards;
+  }
+}
+
+.lazyvimium-picker {
   top: 20%;
   left: 50%;
-  transform: translateX(-50%);
+  translate: -50% 0;
   width: min(560px, 80vw);
   max-height: 60vh;
+  transform-origin: 50% 0;
+  animation: lazyvimium-float-in 300ms var(--lazyvimium-spring) backwards;
+
+  /* Closed: keys already went back to the page, this is only the fade. */
+  &[leaving] {
+    pointer-events: none;
+    animation: lazyvimium-float-out 110ms var(--lazyvimium-ease-in) forwards;
+  }
 }
 
 /* which-key's "helix" preset, which LazyVim uses: one column in the bottom
-   right corner, 30 to 60 columns wide, above the statusline. */
+   right corner, 30 to 60 columns wide, above the statusline. It grows out of
+   that corner. */
 #lazyvimium-which-key {
   right: 12px;
   bottom: 44px;
   min-width: 30ch;
   max-width: min(60ch, 90vw);
   max-height: 75vh;
+  transform-origin: 100% 100%;
+  transition:
+    opacity 180ms ease-out,
+    transform 300ms var(--lazyvimium-spring);
+
+  @starting-style {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+
+  /* hideFloat(): hidden comes when this fade ends. */
+  &[leaving] {
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+    transition:
+      opacity 110ms var(--lazyvimium-ease-in),
+      transform 110ms var(--lazyvimium-ease-in);
+  }
+}
+
+:root[zen-right-side] #lazyvimium-which-key {
+  transform-origin: 0 100%;
 }
 
 /* Scrollbars in lazyvimium's own panels: thin, in its pink over no track,
@@ -370,7 +506,7 @@
 .lazyvimium-which-key-title {
   padding: 4px 8px 8px;
   font-weight: 600;
-  opacity: 0.7;
+  opacity: var(--lazyvimium-float-muted);
 }
 
 .lazyvimium-which-key-list {
@@ -411,49 +547,167 @@
 .lazyvimium-which-key-help {
   padding: 8px 8px 2px;
   font-size: 11px;
-  opacity: 0.55;
+  opacity: var(--lazyvimium-float-muted);
 }
 
 .lazyvimium-picker-title {
   padding: 6px 10px 8px;
   font-weight: 600;
-  opacity: 0.7;
+  opacity: var(--lazyvimium-float-muted);
 }
 
 .lazyvimium-picker-list {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
   overflow-y: auto;
 }
 
+/* One highlight for the whole list, gliding to the selected row, so the eye
+   follows j and k instead of hunting for the new row. */
+.lazyvimium-picker-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 11px;
+  background-color: color-mix(in srgb, var(--zen-primary-color, AccentColor) 26%, light-dark(rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.08)));
+  box-shadow:
+    inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.12)),
+    0 1px 3px light-dark(rgba(20, 22, 40, 0.1), rgba(0, 0, 0, 0.25));
+  pointer-events: none;
+  transition: transform 220ms var(--lazyvimium-spring);
+}
+
 .lazyvimium-picker-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: 10px;
+  border-radius: 11px;
+  transition: background-color 120ms ease-out;
+  /* The rows land one after another, the first few only: past those the
+     picker would still be arriving when a fast key picks. */
+  animation: lazyvimium-float-content-in 200ms var(--lazyvimium-ease-out) backwards;
+  animation-delay: calc(min(var(--lazyvimium-row, 0), 6) * 12ms + 30ms);
 
-  &[selected] {
-    background-color: color-mix(in srgb, var(--zen-primary-color, AccentColor) 22%, transparent);
+  &:hover:not([selected]) {
+    background-color: light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.07));
   }
 }
 
-/* The label colors of the user's LazyVim setup. */
+/* The label colors of the user's LazyVim setup: full strength on the selected
+   row, a tint of them on the others so a column of labels does not outweigh
+   the list. */
 .lazyvimium-picker-key {
   min-width: 18px;
   padding: 0 5px;
-  border-radius: 5px;
-  background-color: var(--lazyvimium-hint);
-  color: var(--lazyvimium-hint-text);
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--lazyvimium-hint) 20%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--lazyvimium-hint) 50%, transparent);
+  color: color-mix(in srgb, var(--lazyvimium-hint) 55%, light-dark(black, white));
   font: 700 12px/18px ui-monospace, monospace;
   text-align: center;
+  transition:
+    background-color 140ms ease-out,
+    color 140ms ease-out;
+
+  [selected] > & {
+    background-color: var(--lazyvimium-hint);
+    color: var(--lazyvimium-hint-text);
+  }
 }
 
 .lazyvimium-picker-icon {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
+}
+
+/* The list's icons are plain; the plate only exists in the grid. */
+.lazyvimium-picker-icon-plate {
+  display: contents;
+}
+
+/* Few items, known by their icon: the icon is what the eye lands on, on a
+   white plate so every brand reads the same over any page. The selected plate
+   lifts and glows in the item's own color. */
+.lazyvimium-picker[layout="grid"] {
+  width: min(500px, 80vw);
+
+  & .lazyvimium-picker-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  & .lazyvimium-picker-cursor {
+    border-radius: 14px;
+  }
+
+  & .lazyvimium-picker-item {
+    flex-direction: column;
+    gap: 0;
+    padding: 18px 8px 12px;
+    border-radius: 14px;
+  }
+
+  & .lazyvimium-picker-key {
+    position: absolute;
+    top: 7px;
+    left: 7px;
+  }
+
+  & .lazyvimium-picker-icon-plate {
+    display: grid;
+    place-items: center;
+    width: 60px;
+    height: 60px;
+    margin-bottom: 10px;
+    overflow: hidden;
+    border-radius: 16px;
+    background-color: #ffffff;
+    box-shadow:
+      0 0 0 0.5px rgba(0, 0, 0, 0.12),
+      0 3px 10px rgba(20, 22, 40, 0.16);
+    transition:
+      transform 260ms var(--lazyvimium-spring),
+      box-shadow 200ms ease-out;
+  }
+
+  & .lazyvimium-picker-icon {
+    width: 38px;
+    height: 38px;
+  }
+
+  & .lazyvimium-picker-icon-plate[fill] .lazyvimium-picker-icon {
+    width: 100%;
+    height: 100%;
+  }
+
+  & [selected] .lazyvimium-picker-icon-plate {
+    transform: translateY(-2px) scale(1.08);
+    box-shadow:
+      0 0 0 0.5px rgba(0, 0, 0, 0.12),
+      0 10px 26px -4px color-mix(in srgb, var(--lazyvimium-picker-color, var(--lazyvimium-hint)) 70%, transparent);
+  }
+
+  & .lazyvimium-picker-label {
+    flex: none;
+    max-width: 100%;
+    font-weight: 600;
+  }
+
+  & .lazyvimium-picker-detail {
+    max-width: 100%;
+    margin-top: 2px;
+  }
+
+  & [dim]:not([selected]) .lazyvimium-picker-icon-plate {
+    filter: grayscale(1);
+    opacity: 0.55;
+  }
 }
 
 .lazyvimium-picker-label {
@@ -469,13 +723,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  opacity: 0.6;
+  opacity: var(--lazyvimium-float-muted);
 }
 
 .lazyvimium-picker-help {
+  margin-top: 6px;
   padding: 8px 10px 2px;
+  border-top: 0.5px solid var(--lazyvimium-float-outline);
   font-size: 11px;
-  opacity: 0.55;
+  opacity: var(--lazyvimium-float-muted);
 }
 
 /* The agent panel, a glass panel at the side of the tab in lazyvimium's
@@ -493,9 +749,7 @@
   border: none;
   background-color: var(--lazyvimium-agent-glass);
   backdrop-filter: blur(var(--lazyvimium-glass-blur, 40px)) saturate(160%);
-  box-shadow:
-    0 24px 80px -24px light-dark(rgba(31, 35, 53, 0.45), rgba(0, 0, 0, 0.7)),
-    inset 0 0 0 0.5px light-dark(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.08));
+  box-shadow: var(--lazyvimium-float-shadow);
   outline: 0.5px solid color-mix(in srgb, var(--lazyvimium-agent-border) 80%, transparent);
   color: var(--lazyvimium-agent-text);
   font: menu;
@@ -2176,7 +2430,7 @@
 #lazyvimium-agent-pill {
   left: 50%;
   bottom: 16px;
-  transform: translateX(-50%);
+  translate: -50% 0;
   flex-direction: row;
   align-items: center;
   gap: 8px;
@@ -2184,6 +2438,24 @@
   border: none;
   border-radius: 999px;
   font-size: 12px;
+  transform-origin: 50% 100%;
+  transition:
+    opacity 180ms ease-out,
+    transform 300ms var(--lazyvimium-spring);
+
+  @starting-style {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
+  }
+
+  &[leaving] {
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+    transition:
+      opacity 110ms var(--lazyvimium-ease-in),
+      transform 110ms var(--lazyvimium-ease-in);
+  }
 
   &::before {
     content: "";
@@ -2276,7 +2548,15 @@
   .lazyvimium-agent-grip::before,
   .lazyvimium-ui-table tr[fresh],
   .lazyvimium-ui-placeholder,
-  .browserStack[lazyvimium-agent-driving]::after {
+  .browserStack[lazyvimium-agent-driving]::after,
+  .lazyvimium-picker,
+  .lazyvimium-picker-cursor,
+  .lazyvimium-picker-item,
+  .lazyvimium-picker-key,
+  .lazyvimium-picker-icon-plate,
+  #lazyvimium-which-key,
+  #lazyvimium-agent-pill,
+  #urlbar[breakout-extend] :is(.urlbar-background, .urlbar-input-container, .urlbarView, .urlbarView-row) {
     animation: none !important;
     transition: none !important;
   }

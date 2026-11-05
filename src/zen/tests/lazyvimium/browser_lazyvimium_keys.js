@@ -585,6 +585,10 @@ add_task(async function test_escape_dismisses_the_picker() {
   EventUtils.synthesizeKey("KEY_Escape");
   await TestUtils.waitForCondition(() => !picker(), "<Esc> dismisses it");
   ok(!second.splitView, "nothing was split");
+  await TestUtils.waitForCondition(
+    () => !document.querySelector(".lazyvimium-picker"),
+    "its fade ends and takes the box with it"
+  );
 
   EventUtils.synthesizeKey("j");
   await TestUtils.waitForCondition(
@@ -815,9 +819,93 @@ add_task(async function test_ctrl_w_outside_a_field_still_closes_the_tab() {
   ok(!gBrowser.tabs.includes(tab), "Ctrl+W keeps its browser meaning");
 });
 
+add_task(async function test_the_grid_picker_glides_between_tiles() {
+  const { LazyvimiumPicker } = ChromeUtils.importESModule(
+    "resource:///modules/lazyvimium/ui/LazyvimiumPicker.sys.mjs"
+  );
+  const tab = await openPage();
+  const picked = LazyvimiumPicker.open(window, {
+    title: "Tiles",
+    layout: "grid",
+    items: ["One", "Two", "Three", "Four"].map(label => ({
+      label,
+      icon: "chrome://browser/skin/zen-icons/selectable/star.svg",
+      color: "#d97757",
+    })),
+  });
+  const root = picker();
+  const list = root.querySelector(".lazyvimium-picker-list");
+  is(getComputedStyle(list).display, "grid", "the tiles sit in a grid");
+  const rows = [...root.querySelectorAll(".lazyvimium-picker-item")];
+  is(rows[1].offsetTop, rows[0].offsetTop, "the first tiles share a line");
+  ok(rows[3].offsetTop > rows[0].offsetTop, "the fourth starts the next one");
+
+  EventUtils.synthesizeKey("j");
+  ok(rows[1].hasAttribute("selected"), "j moves to the next tile");
+  const cursor = root.querySelector(".lazyvimium-picker-cursor");
+  ok(
+    cursor.style.transform.includes(`${rows[1].offsetLeft}px`),
+    "the highlight follows it sideways"
+  );
+  EventUtils.synthesizeKey("KEY_ArrowRight");
+  ok(rows[2].hasAttribute("selected"), "so does the right arrow");
+  EventUtils.synthesizeKey("KEY_Enter");
+  ok(!picker(), "a pick closes it at once");
+  ok(root.inert, "and the fading box takes no input");
+  is(await picked, 2, "the pick does not wait for the fade");
+
+  const next = LazyvimiumPicker.open(window, {
+    title: "Next",
+    items: [{ label: "Only" }],
+  });
+  is(
+    document.querySelectorAll(".lazyvimium-picker").length,
+    1,
+    "a new picker never shares the window with a fading one"
+  );
+  EventUtils.synthesizeKey("KEY_Escape");
+  await next;
+  BrowserTestUtils.removeTab(tab);
+});
+
+add_task(async function test_the_urlbar_is_thin_glass_that_opens_in_motion() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["zen.theme.acrylic-urlbar", true]],
+  });
+  const root = document.documentElement;
+  const noAcrylic = root.getAttribute("zen-no-acrylic");
+  root.removeAttribute("zen-no-acrylic");
+  // Firefox stops this animation in a remote controlled window, as this one.
+  const remote = root.getAttribute("remotecontrol");
+  root.removeAttribute("remotecontrol");
+  const tab = await openPage();
+  const background = gURLBar.querySelector(".urlbar-background");
+  gURLBar.setAttribute("breakout-extend", "");
+  gURLBar.setAttribute("zen-floating-urlbar", "true");
+  ok(background.getAnimations().length, "the pane animates in");
+  const style = getComputedStyle(background);
+  ok(
+    style.backdropFilter.includes("contrast(0.6)"),
+    "it takes the shared glass over Zen's"
+  );
+  const alpha = Number(style.backgroundColor.match(/, ([\d.]+)\)$/)?.[1]);
+  ok(alpha < 0.7, `the page shows through the tint (${alpha})`);
+  gURLBar.removeAttribute("zen-floating-urlbar");
+  gURLBar.removeAttribute("breakout-extend");
+  if (noAcrylic !== null) {
+    root.setAttribute("zen-no-acrylic", noAcrylic);
+  }
+  if (remote !== null) {
+    root.setAttribute("remotecontrol", remote);
+  }
+  BrowserTestUtils.removeTab(tab);
+});
+
 function whichKey() {
   const popup = document.getElementById("lazyvimium-which-key");
-  return popup && !popup.hidden ? popup : null;
+  return popup && !popup.hidden && !popup.hasAttribute("leaving")
+    ? popup
+    : null;
 }
 
 function whichKeyRows() {
@@ -828,6 +916,33 @@ function whichKeyRows() {
     ]
   );
 }
+
+add_task(async function test_which_key_fades_out() {
+  await SpecialPowers.pushPrefEnv({ set: [["lazyvimium.timeoutlen", 50]] });
+  const tab = await openPage();
+  EventUtils.synthesizeKey(" ");
+  await TestUtils.waitForCondition(() => whichKey(), "which-key shows");
+  const popup = whichKey();
+  let fades;
+  const leaving = BrowserTestUtils.waitForMutationCondition(
+    popup,
+    { attributes: true },
+    () => {
+      if (!popup.hasAttribute("leaving")) {
+        return false;
+      }
+      fades = popup.getAnimations().length;
+      return true;
+    }
+  );
+  EventUtils.synthesizeKey("KEY_Escape");
+  await leaving;
+  ok(fades, "it fades out");
+  ok(!whichKey(), "and counts as closed from the start of the fade");
+  await TestUtils.waitForCondition(() => popup.hidden, "then it is gone");
+  ok(!popup.hasAttribute("leaving"), "with nothing left over");
+  BrowserTestUtils.removeTab(tab);
+});
 
 add_task(async function test_which_key_popup() {
   await SpecialPowers.pushPrefEnv({ set: [["lazyvimium.timeoutlen", 50]] });

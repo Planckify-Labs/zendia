@@ -8,10 +8,45 @@ const HTML_NS = "http://www.w3.org/1999/xhtml";
 export const LABELS = "asdfghlqweruiopzxcvbnmty";
 
 /**
+ * Hide a floating element after its `[leaving]` fade in lazyvimium.css.
+ * `hidden` waits for the fade: xul.css makes it display: none !important, and
+ * Gecko does not transition display.
+ *
+ * @param {Element} element
+ */
+export function hideFloat(element) {
+  if (element.hidden || element.hasAttribute("leaving")) {
+    return;
+  }
+  element.setAttribute("leaving", "");
+  Promise.allSettled(element.getAnimations().map(a => a.finished)).then(() => {
+    if (element.hasAttribute("leaving")) {
+      element.removeAttribute("leaving");
+      element.hidden = true;
+    }
+  });
+}
+
+/**
+ * Show a floating element, taking it back mid-fade if it was leaving.
+ *
+ * @param {Element} element
+ */
+export function showFloat(element) {
+  element.removeAttribute("leaving");
+  element.hidden = false;
+}
+
+/**
  * @typedef {object} LazyvimiumPickerItem
  * @property {string} label What the item is called.
  * @property {string} [detail] Shown dimmed after the label.
  * @property {string} [icon] An image URL.
+ * @property {boolean} [iconFill] The icon is a full tile, not a mark on one.
+ * @property {string} [color] A color of its own, for the glow on a selected
+ *   grid item.
+ * @property {boolean} [dim] Shown faded, for an item that cannot be used yet.
+ * @property {string} [tooltip] Shown when the mouse rests on it.
  * @property {string} [key] The key that picks it; one is assigned otherwise.
  */
 
@@ -23,17 +58,24 @@ export class LazyvimiumPicker {
   /** @type {WeakMap<Document, LazyvimiumPicker>} */
   static #open = new WeakMap();
 
+  // A closed picker's root while it fades out.
+  /** @type {WeakMap<Document, Element>} */
+  static #leaving = new WeakMap();
+
   /**
    * @param {Window} window A browser window.
    * @param {object} options
    * @param {string} options.title
    * @param {LazyvimiumPickerItem[]} options.items
+   * @param {"list"|"grid"} [options.layout] "grid" shows large icons in
+   *   tiles, for a few items known by their icon.
    * @returns {Promise<number|null>} The index of the picked item, or null
    *   when the picker was dismissed.
    */
-  static open(window, { title, items }) {
+  static open(window, { title, items, layout = "list" }) {
     LazyvimiumPicker.#open.get(window.document)?.close(null);
-    const picker = new LazyvimiumPicker(window, title, items);
+    LazyvimiumPicker.#leaving.get(window.document)?.remove();
+    const picker = new LazyvimiumPicker(window, title, items, layout);
     LazyvimiumPicker.#open.set(window.document, picker);
     return picker.#result.promise;
   }
@@ -48,13 +90,14 @@ export class LazyvimiumPicker {
 
   #window;
   #root;
+  #cursor;
   #rows = [];
   #keys = [];
   #selected = 0;
   #result = Promise.withResolvers();
   #previousFocus;
 
-  constructor(window, title, items) {
+  constructor(window, title, items, layout) {
     this.#window = window;
     const document = window.document;
     const create = (tag, className) => {
@@ -65,8 +108,9 @@ export class LazyvimiumPicker {
       return element;
     };
 
-    this.#root = create("div");
+    this.#root = create("div", "lazyvimium-picker");
     this.#root.id = "lazyvimium-picker";
+    this.#root.setAttribute("layout", layout);
     this.#root.setAttribute("role", "dialog");
     this.#root.setAttribute("aria-label", title);
     this.#root.tabIndex = -1;
@@ -75,6 +119,9 @@ export class LazyvimiumPicker {
     heading.textContent = title;
     const list = create("div", "lazyvimium-picker-list");
     list.setAttribute("role", "listbox");
+    this.#cursor = create("div", "lazyvimium-picker-cursor");
+    this.#cursor.setAttribute("role", "presentation");
+    list.append(this.#cursor);
 
     const reserved = new Set(items.map(item => item.key).filter(Boolean));
     const free = [...LABELS].filter(label => !reserved.has(label));
@@ -83,14 +130,25 @@ export class LazyvimiumPicker {
       this.#keys.push(key);
       const row = create("div", "lazyvimium-picker-item");
       row.setAttribute("role", "option");
+      row.style.setProperty("--lazyvimium-row", index);
+      if (item.color) {
+        row.style.setProperty("--lazyvimium-picker-color", item.color);
+      }
+      row.toggleAttribute("dim", !!item.dim);
+      if (item.tooltip) {
+        row.title = item.tooltip;
+      }
       const kbd = create("kbd", "lazyvimium-picker-key");
       kbd.textContent = key;
       row.append(kbd);
       if (item.icon) {
+        const plate = create("span", "lazyvimium-picker-icon-plate");
+        plate.toggleAttribute("fill", !!item.iconFill);
         const icon = create("img", "lazyvimium-picker-icon");
         icon.src = item.icon;
         icon.alt = "";
-        row.append(icon);
+        plate.append(icon);
+        row.append(plate);
       }
       const label = create("span", "lazyvimium-picker-label");
       label.textContent = item.label;
@@ -133,9 +191,19 @@ export class LazyvimiumPicker {
       this.close(null);
     } else if (key == "Enter") {
       this.close(this.#selected);
-    } else if (key == "j" || key == "ArrowDown" || (ctrlKey && key == "n")) {
+    } else if (
+      key == "j" ||
+      key == "ArrowDown" ||
+      key == "ArrowRight" ||
+      (ctrlKey && key == "n")
+    ) {
       this.#select(this.#selected + 1);
-    } else if (key == "k" || key == "ArrowUp" || (ctrlKey && key == "p")) {
+    } else if (
+      key == "k" ||
+      key == "ArrowUp" ||
+      key == "ArrowLeft" ||
+      (ctrlKey && key == "p")
+    ) {
       this.#select(this.#selected - 1);
     } else if (!ctrlKey && !event.altKey && !event.metaKey) {
       const index = this.#keys.indexOf(key);
@@ -154,9 +222,28 @@ export class LazyvimiumPicker {
     }
     LazyvimiumPicker.#open.delete(this.#window.document);
     this.#window.removeEventListener("mousedown", this, true);
-    this.#root.remove();
+    this.#leave();
     this.#previousFocus?.focus?.();
     this.#result.resolve(index);
+  }
+
+  // Closed from here on: no id, no focus, no input. Only the fade is left,
+  // and it never delays the pick or the keys that follow.
+  #leave() {
+    const document = this.#window.document;
+    const root = this.#root;
+    root.removeEventListener("keydown", this, true);
+    root.blur();
+    root.removeAttribute("id");
+    root.inert = true;
+    root.setAttribute("leaving", "");
+    LazyvimiumPicker.#leaving.set(document, root);
+    Promise.allSettled(root.getAnimations().map(a => a.finished)).then(() => {
+      root.remove();
+      if (LazyvimiumPicker.#leaving.get(document) === root) {
+        LazyvimiumPicker.#leaving.delete(document);
+      }
+    });
   }
 
   #select(index) {
@@ -169,6 +256,9 @@ export class LazyvimiumPicker {
     const row = this.#rows[this.#selected];
     row.setAttribute("selected", "");
     row.setAttribute("aria-selected", "true");
+    this.#cursor.style.width = `${row.offsetWidth}px`;
+    this.#cursor.style.height = `${row.offsetHeight}px`;
+    this.#cursor.style.transform = `translate(${row.offsetLeft}px, ${row.offsetTop}px)`;
     row.scrollIntoView({ block: "nearest" });
   }
 }

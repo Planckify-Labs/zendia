@@ -5,6 +5,11 @@
 // A port of folke/which-key.nvim's popup as LazyVim configures it (the
 // "helix" preset): after a prefix, list what each next key does.
 
+import {
+  hideFloat,
+  showFloat,
+} from "resource:///modules/lazyvimium/ui/LazyvimiumPicker.sys.mjs";
+
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
 const KEY_LABELS = {
@@ -117,6 +122,7 @@ export class LazyvimiumWhichKey {
   #list;
   #timer = null;
   #pinned = false;
+  #depth = 0;
 
   /**
    * @param {Window} window A browser window.
@@ -144,7 +150,7 @@ export class LazyvimiumWhichKey {
   }
 
   get visible() {
-    return !this.#root.hidden;
+    return !this.#root.hidden && !this.#root.hasAttribute("leaving");
   }
 
   /**
@@ -176,7 +182,11 @@ export class LazyvimiumWhichKey {
       this.#timer = null;
       const items = whichKeyItems(keymap, state.mode, state.tokens);
       if (items) {
-        this.#render(breadcrumb(keymap, state.mode, state.tokens), items);
+        this.#render(
+          breadcrumb(keymap, state.mode, state.tokens),
+          items,
+          state.tokens.length
+        );
       } else {
         this.hide();
       }
@@ -207,7 +217,7 @@ export class LazyvimiumWhichKey {
   hide() {
     this.#cancelTimer();
     this.#pinned = false;
-    this.#root.hidden = true;
+    hideFloat(this.#root);
   }
 
   destroy() {
@@ -215,8 +225,10 @@ export class LazyvimiumWhichKey {
     this.#root.remove();
   }
 
-  #render(title, items) {
+  #render(title, items, depth = 0) {
     const document = this.#window.document;
+    const direction = this.visible ? Math.sign(depth - this.#depth) : 0;
+    this.#depth = depth;
     this.#title.textContent = title;
     const rows = items.map(({ label, desc, group }) => {
       const row = document.createElementNS(HTML_NS, "div");
@@ -237,7 +249,25 @@ export class LazyvimiumWhichKey {
       return row;
     });
     this.#list.replaceChildren(...rows);
-    this.#root.hidden = false;
+    showFloat(this.#root);
+    if (direction) {
+      this.#slideList(direction);
+    }
+  }
+
+  // A deeper group comes in from the right, BS brings the last one back from
+  // the left, so the list shows which way the keys went.
+  #slideList(direction) {
+    if (this.#window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
+    this.#list.animate(
+      {
+        opacity: [0, 1],
+        transform: [`translateX(${direction * 12}px)`, "none"],
+      },
+      { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }
+    );
   }
 
   #cancelTimer() {

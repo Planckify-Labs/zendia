@@ -50,6 +50,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "resource:///modules/lazyvimium/ui/LazyvimiumAgentInstructionsView.sys.mjs",
   LazyvimiumAgentUiView:
     "resource:///modules/lazyvimium/ui/LazyvimiumAgentUiView.sys.mjs",
+  hideFloat: "resource:///modules/lazyvimium/ui/LazyvimiumPicker.sys.mjs",
+  showFloat: "resource:///modules/lazyvimium/ui/LazyvimiumPicker.sys.mjs",
   LazyvimiumPicker:
     "resource:///modules/lazyvimium/ui/LazyvimiumPicker.sys.mjs",
   LazyvimiumTheme: "resource:///modules/lazyvimium/ui/LazyvimiumTheme.sys.mjs",
@@ -580,12 +582,19 @@ export class LazyvimiumAgentDock {
     try {
       index = await lazy.LazyvimiumPicker.open(this.#window, {
         title: "Agents",
+        layout: "grid",
         items: agents.map(agent => ({
           icon: lazy.agentIcon(agent.id) ?? undefined,
-          label: `${agent.name}${agent.id == current ? "  ·  current" : ""}`,
+          iconFill: lazy.iconIsTile(agent.id),
+          color: lazy.agentColor(agent.id),
+          label: agent.name,
           detail: agent.path
-            ? `${agent.version ?? ""} ${agent.path}`.trim()
-            : `not installed: ${agent.install}`,
+            ? [agent.version, agent.id == current && "current"]
+                .filter(Boolean)
+                .join(" · ")
+            : "Not installed",
+          dim: !agent.path,
+          tooltip: agent.path ? undefined : agent.install,
         })),
       });
     } finally {
@@ -1978,10 +1987,11 @@ export class LazyvimiumAgentDock {
     this.#handle.toggleAttribute("unseen", !!conversation?.unseen);
 
     const show = !this.#open && !slide && (running || conversation?.unseen);
-    this.#pill.hidden = !show;
     if (!show) {
+      lazy.hideFloat(this.#pill);
       return;
     }
+    lazy.showFloat(this.#pill);
     this.#pill.style.setProperty("--lazyvimium-agent-color", color);
     this.#pill.toggleAttribute("running", running);
     this.#pill.textContent = running
