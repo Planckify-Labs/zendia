@@ -974,10 +974,10 @@ add_task(async function test_toolbar_shows_the_compact_top_bar() {
       !gZenCompactModeManager.isSidebarPotentiallyOpen(),
       "and not the sidebar"
     );
-    const buttons = gZenVerticalTabsManager.actualWindowButtons;
-    ok(
-      buttons.contains(toolbar().item),
-      "the cursor starts on the window buttons"
+    is(
+      toolbar().item,
+      document.getElementById("lazyvimium-chat-topbar"),
+      "the cursor starts on Chat, the first item of the top bar"
     );
     ok(
       toolbar()

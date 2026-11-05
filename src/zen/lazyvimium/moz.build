@@ -91,6 +91,7 @@ EXTRA_JS_MODULES.lazyvimium.ui += [
     "ui/LazyvimiumAgentDock.sys.mjs",
     "ui/LazyvimiumAgentInstructionsView.sys.mjs",
     "ui/LazyvimiumAgentUiView.sys.mjs",
+    "ui/LazyvimiumChatButton.sys.mjs",
     "ui/LazyvimiumExplorer.sys.mjs",
     "ui/LazyvimiumHints.sys.mjs",
     "ui/LazyvimiumLibraryView.sys.mjs",

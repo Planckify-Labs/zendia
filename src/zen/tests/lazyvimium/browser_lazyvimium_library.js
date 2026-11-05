@@ -293,8 +293,13 @@ add_task(async function test_explorer_reaches_the_sidebar_foot() {
   is(explorer.footerButton, buttons.at(-1), "l moves right to the last one");
   press("h");
   is(explorer.footerButton, buttons.at(-2) ?? buttons[0], "h moves left");
+  // The row runs the other way with the sidebar on the right.
+  const towardsCreate =
+    buttons.indexOf(create) < buttons.indexOf(explorer.footerButton)
+      ? "h"
+      : "l";
   for (let i = 0; i < buttons.length && explorer.footerButton != create; i++) {
-    press("l");
+    press(towardsCreate);
   }
   is(explorer.footerButton, create, "the cursor reaches the + button");
 

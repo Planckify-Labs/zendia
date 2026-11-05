@@ -132,6 +132,7 @@ export class LazyvimiumAgentDock {
   #unsubscribe = null;
   #timer = null;
   #onChange;
+  #onStatus;
   #open = false;
   #closing = false;
   #animation = null;
@@ -154,10 +155,13 @@ export class LazyvimiumAgentDock {
    * @param {object} options
    * @param {() => void} options.onChange Called when the dock opens or
    *   closes.
+   * @param {() => void} [options.onStatus] Called when `status` may have
+   *   changed.
    */
-  constructor(window, { onChange }) {
+  constructor(window, { onChange, onStatus }) {
     this.#window = window;
     this.#onChange = onChange;
+    this.#onStatus = onStatus;
     const document = window.document;
     const create = (tag, className, parent) => {
       const element = document.createElementNS(HTML_NS, tag);
@@ -393,6 +397,25 @@ export class LazyvimiumAgentDock {
 
   get isOpen() {
     return this.#open;
+  }
+
+  /**
+   * What the rest of the window shows of the selected tab's conversation.
+   *
+   * @returns {{open: boolean, running: boolean, unseen: boolean,
+   *   color: string, name: string|undefined}}
+   */
+  get status() {
+    const conversation = lazy.LazyvimiumAgents.conversationFor(
+      this.#window.gBrowser.selectedBrowser
+    );
+    return {
+      open: this.#open,
+      running: !!conversation?.running,
+      unseen: !!conversation?.unseen,
+      color: lazy.agentColor(conversation?.agent.id),
+      name: conversation?.agent.name,
+    };
   }
 
   /**
@@ -1505,6 +1528,7 @@ export class LazyvimiumAgentDock {
   // Under a closed dock, for the selected tab's conversation: the pill, or
   // the slid-out panel's handle at its side.
   #syncPill() {
+    this.#onStatus?.();
     const conversation = lazy.LazyvimiumAgents.conversationFor(
       this.#window.gBrowser.selectedBrowser
     );

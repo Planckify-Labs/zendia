@@ -70,6 +70,7 @@ export class LazyvimiumToolbar {
       document.getElementById("zen-sidebar-top-buttons"),
       document.getElementById("nav-bar"),
       document.getElementById("PanelUI-button"),
+      document.getElementById("lazyvimium-chat-topbar-box"),
       this.#window.gZenVerticalTabsManager?.actualWindowButtons,
     ].filter(Boolean);
   }

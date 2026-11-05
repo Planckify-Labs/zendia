@@ -52,6 +52,10 @@ ChromeUtils.defineESModuleGetters(lazy, {
   LazyvimiumMenuKeys:
     "resource:///modules/lazyvimium/ui/LazyvimiumMenuKeys.sys.mjs",
   LazyvimiumTheme: "resource:///modules/lazyvimium/ui/LazyvimiumTheme.sys.mjs",
+  LazyvimiumChatButton:
+    "resource:///modules/lazyvimium/ui/LazyvimiumChatButton.sys.mjs",
+  LazyvimiumChatBar:
+    "resource:///modules/lazyvimium/ui/LazyvimiumChatButton.sys.mjs",
   LazyvimiumVimModeSwitch:
     "resource:///modules/lazyvimium/ui/LazyvimiumVimModeSwitch.sys.mjs",
   LazyvimiumToolbar:
@@ -247,6 +251,7 @@ class LazyvimiumService {
         for (const [document, ui] of this.#windows) {
           ui.statusline.setVisible(this.#statuslineVisibleIn(document));
           lazy.LazyvimiumVimModeSwitch.sync(document);
+          ui.chatBar?.sync();
           if (!LazyvimiumOptions.enabled) {
             ui.explorer.close();
             ui.toolbar.close();
@@ -638,6 +643,7 @@ class LazyvimiumService {
       toolbar: null,
       library: null,
       agent: null,
+      chatBar: null,
       engine: null,
     };
     const refresh = () => this.#showState(ui, this.#stateOf(window, ui));
@@ -669,16 +675,23 @@ class LazyvimiumService {
     });
     ui.agent = new lazy.LazyvimiumAgentDock(window, {
       onChange: () => onChange(ui.agent),
+      onStatus: () => ui.chatBar?.sync(),
     });
     this.#windows.set(window.document, ui);
     ui.statusline.setVisible(this.#statuslineVisibleIn(window.document));
     // Once the toolbars are restored, which init() runs too early for. A
-    // switch that fails must not take the keys down with it.
+    // widget that fails must not take the keys down with it.
     try {
-      lazy.LazyvimiumVimModeSwitch.register();
-      lazy.LazyvimiumVimModeSwitch.sync(window.document);
+      const toggleChat = target =>
+        this.run("agent.toggle", {}, { window: target }).catch(console.error);
+      lazy.LazyvimiumVimModeSwitch.install(window);
+      lazy.LazyvimiumChatButton.register({ onToggle: toggleChat });
+      ui.chatBar = new lazy.LazyvimiumChatBar(window, {
+        dock: ui.agent,
+        onToggle: () => toggleChat(window),
+      });
     } catch (e) {
-      console.error("Lazyvimium: the vim mode switch failed", e);
+      console.error("Lazyvimium: the toolbar widgets failed", e);
     }
     // The onboarding starts and ends after the window is ready.
     new window.MutationObserver(() => {

@@ -3,12 +3,9 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 // The vim mode switch: lazyvimium's Neovim-style keys, on or off at any
-// time, as the onboarding offers them. It sits in the top bar with Zen's
-// multiple toolbars. With Zen's single toolbar the row above the sidebar is
-// full (148px, its reload button already overflows), so the switch goes to
-// the row below the sidebar instead, before the + button. A toolbar widget,
-// so it can be moved or removed like any other; where the user puts it is
-// left alone.
+// time, as the onboarding offers them. A row of the app menu, above Settings:
+// it is rarely flipped, and the mode indicator already shows that vim mode is
+// on, so it takes no room in a toolbar.
 
 import { LazyvimiumOptions } from "resource:///modules/lazyvimium/config/LazyvimiumOptions.sys.mjs";
 
@@ -20,135 +17,90 @@ ChromeUtils.defineESModuleGetters(lazy, {
 });
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
-const WIDGET_ID = "lazyvimium-vim-mode-button";
-const LABEL = "vim mode";
-// What the pill itself reads; LABEL names the widget in customize mode.
-const BUTTON_TEXT = "vim";
-const PREF_SINGLE_TOOLBAR = "zen.view.use-single-toolbar";
-const FOOT_AREA = "zen-sidebar-foot-buttons";
-// The foot row's + button, which the switch goes before.
-const CREATE_BUTTON = "zen-create-new-button";
+const ITEM_ID = "lazyvimium-appmenu-vim-mode";
+const LABEL = "Vim mode";
+// The agent panel's switch, whose knob moves inside its own track.
+const SWITCH_CLASS = "lazyvimium-agent-switch";
+// The toolbar widget this row replaced, still saved in older profiles.
+const OLD_WIDGET_ID = "lazyvimium-vim-mode-button";
 
-let gRegistered = false;
-
-// Where the switch belongs in the current layout.
-function homeArea() {
-  return Services.prefs.getBoolPref(PREF_SINGLE_TOOLBAR, true)
-    ? FOOT_AREA
-    : lazy.CustomizableUI.AREA_NAVBAR;
-}
-
-// Put the switch in its home area: next to + in the foot row, at the end of
-// the top bar.
-function moveHome() {
-  const area = homeArea();
-  const placements = lazy.CustomizableUI.getWidgetIdsInArea(area).filter(
-    id => id != WIDGET_ID
-  );
-  const create = placements.indexOf(CREATE_BUTTON);
-  lazy.CustomizableUI.addWidgetToArea(
-    WIDGET_ID,
-    area,
-    area == FOOT_AREA && create != -1 ? create : undefined
-  );
-}
+let gOldWidgetRemoved = false;
 
 function tooltip(enabled) {
   return enabled
-    ? "Vim mode is on: Neovim-style keys drive the browser. Click to turn it off."
-    : "Vim mode is off. Click to drive the browser with Neovim-style keys.";
+    ? "Neovim-style keys drive the browser. Click to turn them off."
+    : "Click to drive the browser with Neovim-style keys.";
+}
+
+function syncItem(item) {
+  const enabled = String(LazyvimiumOptions.enabled);
+  item.setAttribute("aria-checked", enabled);
+  item.querySelector(`.${SWITCH_CLASS}`).setAttribute("aria-checked", enabled);
+  item.setAttribute("tooltiptext", tooltip(LazyvimiumOptions.enabled));
 }
 
 export const LazyvimiumVimModeSwitch = {
-  WIDGET_ID,
+  ITEM_ID,
 
   /**
-   * Add the widget, once per session, where the layout has room for it.
+   * Add the row to a window's app menu. The menu is built the first time it
+   * opens, so the row is too.
+   *
+   * @param {Window} window
    */
-  register() {
-    if (gRegistered) {
-      return;
-    }
-    gRegistered = true;
-    const placedBefore = !!lazy.CustomizableUI.getPlacementOfWidget(WIDGET_ID);
-    lazy.CustomizableUI.createWidget({
-      id: WIDGET_ID,
-      type: "custom",
-      label: LABEL,
-      tooltiptext: tooltip(LazyvimiumOptions.enabled),
-      defaultArea: homeArea(),
-      // Kept in sight rather than in an overflow menu.
-      overflows: false,
-      onBuild(document) {
-        const item = document.createXULElement("toolbaritem");
-        item.id = WIDGET_ID;
-        item.className = "chromeclass-toolbar-additional";
-        item.setAttribute("label", LABEL);
-        item.setAttribute("removable", "true");
-        // A custom widget's node carries this itself.
-        item.setAttribute("overflows", "false");
-
-        const button = document.createElementNS(HTML_NS, "button");
-        button.className = "lazyvimium-vim-mode";
-        button.setAttribute("role", "switch");
-        const dot = document.createElementNS(HTML_NS, "span");
-        dot.className = "lazyvimium-vim-mode-dot";
-        const label = document.createElementNS(HTML_NS, "span");
-        label.className = "lazyvimium-vim-mode-label";
-        label.textContent = BUTTON_TEXT;
-        button.append(dot, label);
-        // A click leaves the focus where it was, in the page: a focused
-        // switch would take Space, vim mode's <leader>, as another click,
-        // and keep every other key away from vim mode.
-        button.addEventListener("mousedown", event => event.preventDefault());
-        button.addEventListener("click", () => {
-          Services.prefs.setBoolPref(
-            LazyvimiumOptions.PREF_ENABLED,
-            !LazyvimiumOptions.enabled
-          );
-        });
-        item.append(button);
-        LazyvimiumVimModeSwitch.syncNode(item);
-        return item;
-      },
-    });
-    // A new widget lands at the end of its area; in the foot row it belongs
-    // before +.
-    if (!placedBefore) {
-      moveHome();
-    }
-    // Zen's layout can change while the browser runs, or while it was closed:
-    // a switch saved in the top bar by a multiple-toolbar session must not
-    // stay there once the single toolbar is back. It follows the layout from
-    // one home to the other, but stays wherever the user moved it.
-    const followLayout = () => {
-      const area = lazy.CustomizableUI.getPlacementOfWidget(WIDGET_ID)?.area;
-      const homes = [FOOT_AREA, lazy.CustomizableUI.AREA_NAVBAR];
-      if (homes.includes(area) && area != homeArea()) {
-        moveHome();
+  install(window) {
+    if (!gOldWidgetRemoved) {
+      gOldWidgetRemoved = true;
+      if (lazy.CustomizableUI.getPlacementOfWidget(OLD_WIDGET_ID)) {
+        lazy.CustomizableUI.removeWidgetFromArea(OLD_WIDGET_ID);
       }
-    };
-    followLayout();
-    Services.prefs.addObserver(PREF_SINGLE_TOOLBAR, followLayout);
+    }
+    window.addEventListener("ViewShowing", event => {
+      if (event.target.id != "appMenu-mainView") {
+        return;
+      }
+      const document = window.document;
+      const settings = document.getElementById("appMenu-settings-button");
+      if (!settings) {
+        return;
+      }
+      let item = document.getElementById(ITEM_ID);
+      if (!item) {
+        item = document.createXULElement("toolbarbutton");
+        item.id = ITEM_ID;
+        item.className = "subviewbutton";
+        item.setAttribute("label", LABEL);
+        item.setAttribute("role", "menuitemcheckbox");
+        // The menu stays open to show the switch flip.
+        item.setAttribute("closemenu", "none");
+        item.addEventListener("command", () => this.toggle());
+        settings.before(item);
+        // In a panel it waits to be shown, and a child would take its place.
+        item.render();
+        const track = document.createElementNS(HTML_NS, "span");
+        track.className = SWITCH_CLASS;
+        item.append(track);
+      }
+      syncItem(item);
+    });
+  },
+
+  toggle() {
+    Services.prefs.setBoolPref(
+      LazyvimiumOptions.PREF_ENABLED,
+      !LazyvimiumOptions.enabled
+    );
   },
 
   /**
-   * Show the current state in a window's switch, if it has one.
+   * Show the current state in a window's row, if it has one yet.
    *
    * @param {Document} document
    */
   sync(document) {
-    const item = document.getElementById(WIDGET_ID);
+    const item = document.getElementById(ITEM_ID);
     if (item) {
-      this.syncNode(item);
+      syncItem(item);
     }
-  },
-
-  syncNode(item) {
-    const enabled = LazyvimiumOptions.enabled;
-    const button = item.querySelector(".lazyvimium-vim-mode");
-    button?.setAttribute("aria-checked", String(enabled));
-    item.toggleAttribute("checked", enabled);
-    item.setAttribute("tooltiptext", tooltip(enabled));
   },
 };

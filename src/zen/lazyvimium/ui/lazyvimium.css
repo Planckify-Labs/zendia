@@ -101,96 +101,152 @@
   }
 }
 
-/* The vim mode switch, a pill with a status dot: grey while off, green while
-   on. It sits in the row below the sidebar with Zen's single toolbar, or in
-   the top bar with multiple toolbars. */
-#lazyvimium-vim-mode-button {
+/* Chat, in the agent panel's language: a soft fill and no outline, as its
+   round buttons, which also sits well by the window buttons. It is a
+   toolbarbutton, so the toolbar's keys reach it: the pill is the button
+   itself, not the icon's background as on the buttons around it. */
+#lazyvimium-chat-button,
+#lazyvimium-chat-topbar {
+  list-style-image: url("chrome://browser/skin/zen-icons/selectable/chat.svg");
+}
+
+:is(#lazyvimium-chat-button[cui-areatype="toolbar"], #lazyvimium-chat-topbar) {
+  position: relative;
+  display: flex;
+  flex: none;
   align-items: center;
-  padding-inline: 2px;
+  align-self: center;
+  /* Outside a toolbar a native button would paint over the fill. */
+  appearance: none;
+  /* Zen's rows set the height and padding of their buttons, so the spacing
+     is on the icon and label: without the label, the icon stays centered. */
+  width: auto !important;
+  height: 26px;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: none;
+  border-radius: 999px;
+  corner-shape: round;
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+  color: inherit;
+  font: menu;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color 120ms;
 
-  & .lazyvimium-vim-mode {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    height: 26px;
-    padding: 0 11px 0 9px;
-    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
-    border-radius: 999px;
-    corner-shape: round;
-    background-color: transparent;
-    color: inherit;
-    font: 700 10.5px/1 ui-monospace, monospace;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    white-space: nowrap;
-    transition:
-      background-color 0.15s ease-out,
-      border-color 0.15s ease-out,
-      color 0.15s ease-out;
-
-    &:hover {
-      background-color: var(--toolbarbutton-hover-background, color-mix(in srgb, currentColor 12%, transparent));
-    }
-
-    &:active {
-      background-color: var(--toolbarbutton-active-background, color-mix(in srgb, currentColor 20%, transparent));
-    }
-
-    &:focus-visible {
-      outline: 2px solid var(--focus-outline-color, AccentColor);
-      outline-offset: 1px;
-    }
+  #nav-bar & {
+    margin-inline: 2px;
   }
 
-  & .lazyvimium-vim-mode-label {
-    opacity: 0.7;
-    transition: opacity 0.15s ease-out;
-
-    /* Moved into a narrow row, the switch keeps only its dot; its name is in
-       the tooltip. */
-    #zen-sidebar-top-buttons &,
-    :root:not([zen-sidebar-expanded="true"]) #zen-sidebar-foot-buttons & {
-      display: none;
-    }
+  &:hover {
+    background-color: color-mix(in srgb, currentColor 18%, transparent);
   }
 
-  & .lazyvimium-vim-mode-dot {
-    flex: none;
+  &:active,
+  &[aria-pressed="true"] {
+    background-color: color-mix(in srgb, currentColor 26%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--focus-outline-color, AccentColor);
+    outline-offset: 1px;
+  }
+
+  & > .toolbarbutton-icon {
+    width: 14px !important;
+    height: 14px !important;
+    margin-inline: 8px;
+    padding: 0 !important;
+    background: none !important;
+    box-shadow: none !important;
+    -moz-context-properties: fill, fill-opacity;
+    fill: currentColor;
+  }
+
+  & > .toolbarbutton-text {
+    display: var(--lazyvimium-chat-label, flex) !important;
+    /* Taller than the pill as the toolbar sizes it, which lifts the text. */
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 11px 0 -2px !important;
+  }
+
+  /* The agent works, or has finished, with the panel closed. */
+  &:is([running], [unseen])::after {
+    content: "";
+    position: absolute;
+    top: -1px;
+    inset-inline-end: -1px;
     width: 8px;
     height: 8px;
     border-radius: 50%;
     corner-shape: round;
-    background-color: color-mix(in srgb, currentColor 40%, transparent);
-    transition:
-      background-color 0.15s ease-out,
-      box-shadow 0.15s ease-out;
+    background-color: var(--lazyvimium-agent-color);
   }
 
-  &[checked] {
-    & .lazyvimium-vim-mode {
-      border-color: color-mix(in srgb, var(--lazyvimium-success) 55%, transparent);
-      background-color: color-mix(in srgb, var(--lazyvimium-success) 16%, transparent);
-      color: var(--lazyvimium-success);
+  &[running]::after {
+    animation: lazyvimium-agent-pulse 1.2s ease-in-out infinite;
+  }
+}
 
-      &:hover {
-        background-color: color-mix(in srgb, var(--lazyvimium-success) 26%, transparent);
-      }
-    }
+/* At the end of the compact top bar, by the window buttons. */
+#lazyvimium-chat-topbar-box {
+  align-items: center;
+  margin-inline: auto 6px;
+  -moz-window-dragging: no-drag;
 
-    & .lazyvimium-vim-mode-label {
-      opacity: 1;
-    }
+  /* Their own auto margin would share the free space with Chat's, leaving it
+     in the middle of the bar. */
+  :root:not([zen-window-buttons-reversed="true"]) & + .titlebar-buttonbox-container {
+    margin-left: 0 !important;
+  }
 
-    & .lazyvimium-vim-mode-dot {
-      background-color: var(--lazyvimium-success);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--lazyvimium-success) 28%, transparent);
-    }
+  /* With the window buttons on the left, Chat keeps the right end: after
+     them, which Zen orders at 1000. */
+  :root[zen-window-buttons-reversed="true"] & {
+    order: 1001;
+  }
+}
+
+/* Where a row has no room for its name Chat keeps only its icon, with the
+   name in its tooltip. */
+#zen-sidebar-top-buttons #lazyvimium-chat-button,
+:root:not([zen-sidebar-expanded="true"]) #zen-sidebar-foot-buttons #lazyvimium-chat-button {
+  --lazyvimium-chat-label: none;
+}
+
+@media (width < 720px) {
+  #nav-bar #lazyvimium-chat-button {
+    --lazyvimium-chat-label: none;
+  }
+}
+
+/* The vim mode row of the app menu, ending in the agent panel's switch. */
+#lazyvimium-appmenu-vim-mode {
+  list-style-image: url("chrome://browser/skin/zen-icons/selectable/terminal.svg");
+
+  /* It has no size of its own, as the menu's other icons do. */
+  & > .toolbarbutton-icon {
+    width: 16px;
+    height: 16px;
+    margin-inline-end: 2px;
+  }
+
+  /* The row is what takes the click. */
+  & > .lazyvimium-agent-switch {
+    margin-inline-start: auto;
+    pointer-events: none;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #lazyvimium-vim-mode-button :is(.lazyvimium-vim-mode, .lazyvimium-vim-mode-label, .lazyvimium-vim-mode-dot) {
+  :is(#lazyvimium-chat-button, #lazyvimium-chat-topbar) {
     transition: none;
+  }
+
+  :is(#lazyvimium-chat-button, #lazyvimium-chat-topbar)::after {
+    animation: none !important;
   }
 }
 

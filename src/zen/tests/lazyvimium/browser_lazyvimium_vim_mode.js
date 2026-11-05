@@ -16,10 +16,22 @@ function statusline() {
   return document.getElementById("lazyvimium-statusline");
 }
 
-function switchButton() {
-  return document.querySelector(
-    "#lazyvimium-vim-mode-button .lazyvimium-vim-mode"
-  );
+const ITEM = "lazyvimium-appmenu-vim-mode";
+
+function menuItem() {
+  return document.getElementById(ITEM);
+}
+
+async function openAppMenu() {
+  const shown = BrowserTestUtils.waitForEvent(PanelUI.panel, "ViewShown");
+  PanelUI.show();
+  await shown;
+}
+
+async function closeAppMenu() {
+  const hidden = BrowserTestUtils.waitForEvent(PanelUI.panel, "popuphidden");
+  PanelUI.hide();
+  await hidden;
 }
 
 registerCleanupFunction(() => {
@@ -27,65 +39,44 @@ registerCleanupFunction(() => {
   document.documentElement.removeAttribute("zen-welcome-stage");
 });
 
-const WIDGET = "lazyvimium-vim-mode-button";
+const OLD_WIDGET = "lazyvimium-vim-mode-button";
 const SINGLE_TOOLBAR = "zen.view.use-single-toolbar";
 
-add_task(async function test_switch_has_room_in_either_layout() {
+add_task(async function test_switch_is_a_row_of_the_app_menu() {
   ok(
-    Services.prefs.getBoolPref(SINGLE_TOOLBAR),
-    "Zen starts with its single toolbar"
+    !CustomizableUI.getPlacementOfWidget(OLD_WIDGET),
+    "no widget in the toolbars, not even one saved by an older profile"
   );
-  const foot = CustomizableUI.getWidgetIdsInArea("zen-sidebar-foot-buttons");
+  await openAppMenu();
+  const item = menuItem();
+  ok(item, "the app menu has the row");
+  Assert.equal(item.getAttribute("label"), "Vim mode");
+  Assert.equal(item.getAttribute("role"), "menuitemcheckbox");
+  Assert.equal(item.getAttribute("aria-checked"), "true", "on by default");
   Assert.equal(
-    CustomizableUI.getPlacementOfWidget(WIDGET)?.area,
-    "zen-sidebar-foot-buttons",
-    "there the switch is in the row below the sidebar, where there is room"
+    item.nextElementSibling.id,
+    "appMenu-settings-button",
+    "right above Settings"
   );
-  Assert.equal(
-    foot.indexOf(WIDGET) + 1,
-    foot.indexOf("zen-create-new-button"),
-    "right before +"
-  );
-  const button = switchButton();
-  ok(button, "it is built");
-  Assert.equal(button.getAttribute("role"), "switch");
-  Assert.equal(button.getAttribute("aria-checked"), "true", "on by default");
-  Assert.equal(button.textContent, "vim");
-  ok(
-    !document
-      .getElementById("zen-toggle-compact-mode")
-      .hasAttribute("overflowedItem"),
-    "and it pushes none of Zen's buttons out of the row above"
-  );
+  const row = item.getBoundingClientRect();
+  const track = item
+    .querySelector(".lazyvimium-agent-switch")
+    .getBoundingClientRect();
+  const label = item
+    .querySelector(".toolbarbutton-text")
+    .getBoundingClientRect();
+  ok(row.height < 50, "the row is as tall as the rows around it");
+  ok(track.left >= label.right, "its switch comes after its label");
+  ok(row.right - track.right < 24, "at the end of the row");
+  await closeAppMenu();
 
-  Services.prefs.setBoolPref(SINGLE_TOOLBAR, false);
+  await openAppMenu();
   Assert.equal(
-    CustomizableUI.getPlacementOfWidget(WIDGET)?.area,
-    CustomizableUI.AREA_NAVBAR,
-    "with Zen's multiple toolbars it moves to the top bar"
+    document.querySelectorAll(`#${ITEM}`).length,
+    1,
+    "opening the menu again adds no second row"
   );
-  Services.prefs.clearUserPref(SINGLE_TOOLBAR);
-  Assert.equal(
-    CustomizableUI.getPlacementOfWidget(WIDGET)?.area,
-    "zen-sidebar-foot-buttons",
-    "and back"
-  );
-
-  CustomizableUI.addWidgetToArea(WIDGET, "zen-sidebar-top-buttons");
-  Services.prefs.setBoolPref(SINGLE_TOOLBAR, false);
-  Assert.equal(
-    CustomizableUI.getPlacementOfWidget(WIDGET)?.area,
-    "zen-sidebar-top-buttons",
-    "a place the user picked is left alone"
-  );
-  Services.prefs.clearUserPref(SINGLE_TOOLBAR);
-  CustomizableUI.addWidgetToArea(
-    WIDGET,
-    "zen-sidebar-foot-buttons",
-    CustomizableUI.getWidgetIdsInArea("zen-sidebar-foot-buttons").indexOf(
-      "zen-create-new-button"
-    )
-  );
+  await closeAppMenu();
 });
 
 add_task(async function test_switch_turns_vim_mode_off_and_on() {
@@ -95,9 +86,26 @@ add_task(async function test_switch_turns_vim_mode_off_and_on() {
     "vim mode's compact layout is the default while it is on"
   );
 
-  switchButton().click();
+  await openAppMenu();
+  const knobOffset = () =>
+    new DOMMatrix(
+      getComputedStyle(
+        menuItem().querySelector(".lazyvimium-agent-switch"),
+        "::before"
+      ).transform
+    ).m41;
+  await TestUtils.waitForCondition(
+    () => knobOffset() == 16,
+    "while on, the knob is at the far end of the track"
+  );
+  menuItem().doCommand();
   ok(!Services.prefs.getBoolPref(PREF), "a click turns vim mode off");
-  Assert.equal(switchButton().getAttribute("aria-checked"), "false");
+  Assert.equal(menuItem().getAttribute("aria-checked"), "false");
+  Assert.equal(PanelUI.panel.state, "open", "the menu stays to show it");
+  await TestUtils.waitForCondition(
+    () => knobOffset() == 0,
+    "and it slides back to the start"
+  );
   Assert.equal(statusline().style.display, "none", "no mode indicator");
   ok(
     !document.documentElement.hasAttribute("lazyvimium-mode"),
@@ -108,11 +116,12 @@ add_task(async function test_switch_turns_vim_mode_off_and_on() {
     "and Zen's own layout defaults are back"
   );
 
-  switchButton().click();
+  menuItem().doCommand();
   ok(Services.prefs.getBoolPref(PREF), "another click turns it back on");
-  Assert.equal(switchButton().getAttribute("aria-checked"), "true");
+  Assert.equal(menuItem().getAttribute("aria-checked"), "true");
   Assert.equal(statusline().style.display, "flex");
   ok(defaults.getBoolPref("zen.view.compact.hide-toolbar"));
+  await closeAppMenu();
 });
 
 add_task(async function test_onboarding_looks_like_plain_zen() {
@@ -141,24 +150,22 @@ add_task(async function test_onboarding_looks_like_plain_zen() {
   ok(root.hasAttribute("lazyvimium-mode"));
 });
 
-// A click on the switch must leave the keys with vim mode, not with the
-// switch: Space after it is <leader>, not another click.
-add_task(async function test_clicking_the_switch_leaves_the_keys_to_vim() {
+// Once the menu closes the keys are vim mode's again: Space after it is
+// <leader>, not another click on the row.
+add_task(async function test_turning_vim_on_leaves_the_keys_to_vim() {
   const tab = await BrowserTestUtils.openNewForegroundTab(
     gBrowser,
     "data:text/html,<title>switch</title>"
   );
   Services.prefs.setBoolPref(PREF, false);
-  EventUtils.synthesizeMouseAtCenter(switchButton(), {});
+  await openAppMenu();
+  EventUtils.synthesizeMouseAtCenter(menuItem(), {});
   await TestUtils.waitForCondition(
     () => Services.prefs.getBoolPref(PREF),
     "the click turns vim mode on"
   );
-  isnot(
-    document.activeElement,
-    switchButton(),
-    "the switch does not keep the focus"
-  );
+  await closeAppMenu();
+  tab.linkedBrowser.focus();
   EventUtils.synthesizeKey(" ");
   EventUtils.synthesizeKey("e");
   await TestUtils.waitForCondition(
