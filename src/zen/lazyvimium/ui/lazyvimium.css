@@ -338,13 +338,22 @@
   }
 }
 
+/* The sidebar is the top layer: every floating menu (picker, model card,
+   which-key, the agent handle) sits under it. A flex item takes z-index
+   without being positioned, so this holds in compact mode as well. */
+#navigator-toolbox {
+  z-index: 2147483647 !important;
+}
+
 .lazyvimium-picker,
 .lazyvimium-model-card,
 #lazyvimium-which-key {
+  /* Below the sidebar (see the rule above it): a floating menu never covers it. */
+  --lazyvimium-float-layer: 2147483000;
   --lazyvimium-glass-background: var(--lazyvimium-float-solid);
 
   position: fixed;
-  z-index: 2147483647;
+  z-index: var(--lazyvimium-float-layer);
   display: flex;
   flex-direction: column;
   padding: 7px;
