@@ -24,8 +24,11 @@ ChromeUtils.defineESModuleGetters(lazy, {
  * @property {string} bin The executable to look for.
  * @property {string[]} paths Install locations to try after PATH, with ~
  *   for the home directory.
+ * @property {string[]} [winDirs] Windows install directories to try after
+ *   PATH, with %VAR% for environment variables.
  * @property {string} install How to install it, shown when the agent is
  *   missing. Nothing here ever runs it.
+ * @property {string} [installWin] The same on Windows.
  */
 
 /** @type {LazyvimiumAgentInfo[]} In the order offered to the user. */
@@ -40,6 +43,8 @@ export const LAZYVIMIUM_AGENTS = [
       "/opt/homebrew/bin/claude",
       "/usr/local/bin/claude",
     ],
+    winDirs: ["~\\.local\\bin", "~\\.claude\\local"],
+    installWin: "irm https://claude.ai/install.ps1 | iex",
     install: "curl -fsSL https://claude.ai/install.sh | bash",
   },
   {
@@ -53,6 +58,11 @@ export const LAZYVIMIUM_AGENTS = [
       "/opt/homebrew/bin/codex",
       "/usr/local/bin/codex",
     ],
+    winDirs: [
+      "%LOCALAPPDATA%\\Programs\\OpenAI\\Codex\\bin",
+      "%CODEX_INSTALL_DIR%",
+    ],
+    installWin: "npm install -g @openai/codex",
     install: "npm install -g @openai/codex",
   },
   {
@@ -60,6 +70,8 @@ export const LAZYVIMIUM_AGENTS = [
     name: "Cursor",
     bin: "cursor-agent",
     paths: ["~/.local/bin/cursor-agent", "~/.cursor/bin/cursor-agent"],
+    winDirs: ["%LOCALAPPDATA%\\cursor-agent"],
+    installWin: "irm 'https://cursor.com/install?win32=true' | iex",
     install: "curl https://cursor.com/install -fsS | bash",
   },
   {
@@ -67,6 +79,8 @@ export const LAZYVIMIUM_AGENTS = [
     name: "Antigravity",
     bin: "agy",
     paths: ["~/.local/bin/agy", "/opt/homebrew/bin/agy", "/usr/local/bin/agy"],
+    winDirs: ["%LOCALAPPDATA%\\agy\\bin"],
+    installWin: "irm https://antigravity.google/cli/install.ps1 | iex",
     install: "Install the Antigravity CLI (agy) from antigravity.google",
   },
   {
@@ -74,6 +88,12 @@ export const LAZYVIMIUM_AGENTS = [
     name: "OpenCode",
     bin: "opencode",
     paths: ["~/.opencode/bin/opencode", "/opt/homebrew/bin/opencode"],
+    winDirs: [
+      "~\\.opencode\\bin",
+      "%LOCALAPPDATA%\\Programs\\opencode",
+      "%LOCALAPPDATA%\\opencode",
+    ],
+    installWin: "npm install -g opencode-ai",
     install: "curl -fsSL https://opencode.ai/install | bash",
   },
   {
@@ -86,6 +106,8 @@ export const LAZYVIMIUM_AGENTS = [
       "/opt/homebrew/bin/kiro-cli",
       "/usr/local/bin/kiro-cli",
     ],
+    winDirs: ["%ProgramFiles%\\Kiro-Cli", "%LOCALAPPDATA%\\Programs\\Kiro-Cli"],
+    installWin: "irm https://cli.kiro.dev/install.ps1 | iex",
     install: "curl -fsSL https://cli.kiro.dev/install | bash",
   },
 ];
@@ -99,9 +121,68 @@ const TOOLCHAIN_DIRS = [
   "~/.npm-global/bin",
   "~/.local/share/pnpm",
   "~/Library/pnpm",
+  "~/.yarn/bin",
+  "~/.config/yarn/global/node_modules/.bin",
+  "~/.local/share/mise/shims",
+  "~/.asdf/shims",
+  "~/.nix-profile/bin",
+  "/nix/var/nix/profiles/default/bin",
+  "/home/linuxbrew/.linuxbrew/bin",
   "/opt/homebrew/bin",
   "/usr/local/bin",
+  // Where the tools put theirs when told to.
+  "%BUN_INSTALL%/bin",
+  "%PNPM_HOME%",
+  "%NPM_CONFIG_PREFIX%/bin",
+  "%VOLTA_HOME%/bin",
+  "%MISE_DATA_DIR%/shims",
+  "%ASDF_DATA_DIR%/shims",
 ];
+
+// The same on Windows: where npm, pnpm, bun, volta, scoop, chocolatey and
+// winget put the shims and executables they install. The agents' own
+// installers add theirs (winDirs above).
+const WINDOWS_TOOLCHAIN_DIRS = [
+  "%APPDATA%\\npm",
+  "~\\.local\\bin",
+  "~\\.bun\\bin",
+  "%LOCALAPPDATA%\\pnpm",
+  "%PNPM_HOME%",
+  "%VOLTA_HOME%\\bin",
+  "%LOCALAPPDATA%\\Volta\\bin",
+  "%LOCALAPPDATA%\\Yarn\\bin",
+  "%LOCALAPPDATA%\\Microsoft\\WinGet\\Links",
+  "%BUN_INSTALL%\\bin",
+  "%NPM_CONFIG_PREFIX%",
+  "%SCOOP%\\shims",
+  "~\\scoop\\shims",
+  "%SCOOP_GLOBAL%\\shims",
+  "%ProgramData%\\scoop\\shims",
+  "%ProgramFiles%\\WinGet\\Links",
+  "%LOCALAPPDATA%\\mise\\shims",
+  "%MISE_DATA_DIR%\\shims",
+  "%ChocolateyInstall%\\bin",
+  "%ProgramData%\\chocolatey\\bin",
+  "%ProgramFiles%\\nodejs",
+  "%NVM_SYMLINK%",
+];
+
+// What a command can be on Windows, in the order tried within a directory:
+// a real executable before the .cmd shim that npm writes. Nothing else can
+// be started without a shell.
+const WINDOWS_EXTENSIONS = [".exe", ".cmd", ".bat"];
+
+// The package managers the agents' docs install with, and the command that
+// prints where each puts global executables. npm prints a prefix (the
+// executables sit in it on Windows, in its bin elsewhere); the others print
+// the directory itself.
+const PACKAGE_MANAGERS = [
+  { bin: "npm", args: ["config", "get", "prefix"], prefix: true },
+  { bin: "pnpm", args: ["bin", "-g"], prefix: false },
+  { bin: "yarn", args: ["global", "bin"], prefix: false },
+  { bin: "bun", args: ["pm", "bin", "-g"], prefix: false },
+];
+const MANAGER_TIMEOUT_MS = 4000;
 
 const BEGIN_MARKER = "__LAZYVIMIUM_SHELL_ENV_BEGIN__";
 const END_MARKER = "__LAZYVIMIUM_SHELL_ENV_END__";
@@ -109,14 +190,156 @@ const SHELL_TIMEOUT_MS = 5000;
 const VERSION_TIMEOUT_MS = 5000;
 const EXIT_GRACE_MS = 1000;
 
+function isWindows() {
+  return Services.appinfo.OS == "WINNT";
+}
+
 function home() {
   return Services.dirsvc.get("Home", Ci.nsIFile).path;
 }
 
-function expand(path) {
-  return path.startsWith("~/")
-    ? PathUtils.join(home(), ...path.slice(2).split("/"))
-    : path;
+/**
+ * Expand a leading ~ and, on Windows, %VAR% references.
+ *
+ * @param {string} path
+ * @param {(name: string) => string|null} [getenv] Where variables come from.
+ * @returns {string|null} Null when a variable it needs is not set.
+ */
+export function expand(path, getenv = name => Services.env.get(name) || null) {
+  if (path.startsWith("~/") || path.startsWith("~\\")) {
+    return PathUtils.join(home(), ...path.slice(2).split(/[\\/]/));
+  }
+  let missing = false;
+  const expanded = path.replace(/%([A-Za-z_][^%\\/]*)%/g, (match, name) => {
+    const value = getenv(name);
+    if (value === null || value === "") {
+      missing = true;
+    }
+    return value ?? match;
+  });
+  return missing ? null : expanded;
+}
+
+/**
+ * Whether `path` starts at a drive or a share, which is all a PATH entry
+ * can be to count on Windows (relative ones and "%UNSET%" are dropped).
+ *
+ * @param {string} path
+ * @returns {boolean}
+ */
+export function isWindowsAbsolute(path) {
+  return /^([A-Za-z]:[\\/]|\\\\)/.test(path);
+}
+
+/**
+ * The directories of a Windows PATH value, expanded.
+ *
+ * @param {string|null|undefined} value
+ * @param {(name: string) => string|null} [getenv]
+ * @returns {string[]}
+ */
+export function parseWindowsPath(value, getenv) {
+  return (value ?? "")
+    .split(";")
+    .map(dir => dir.trim().replace(/^"(.*)"$/, "$1"))
+    .map(dir => (dir ? expand(dir, getenv) : null))
+    .filter(dir => dir && isWindowsAbsolute(dir));
+}
+
+/**
+ * The files that could be `bin` in `dir`, in the order to try them.
+ *
+ * @param {string} dir
+ * @param {string} bin
+ * @param {boolean} windows
+ * @returns {string[]}
+ */
+export function candidatesIn(dir, bin, windows) {
+  return windows
+    ? WINDOWS_EXTENSIONS.map(
+        ext => `${dir.replace(/[\\/]+$/, "")}\\${bin}${ext}`
+      )
+    : [PathUtils.join(dir, bin)];
+}
+
+/**
+ * The global bin directory a package manager printed.
+ *
+ * @param {string} output What the manager printed.
+ * @param {boolean} prefix Whether it printed npm's prefix, not the directory.
+ * @param {boolean} windows
+ * @returns {string|null} Null when the last line is not a directory (yarn 2+
+ *   has no `global`, and prints an error).
+ */
+export function parseManagerDir(output, prefix, windows) {
+  const line = output
+    .split("\n")
+    .map(text => text.trim().replace(/^"(.*)"$/, "$1"))
+    .filter(Boolean)
+    .pop();
+  if (!line || !(windows ? isWindowsAbsolute(line) : line.startsWith("/"))) {
+    return null;
+  }
+  return prefix && !windows ? `${line.replace(/\/+$/, "")}/bin` : line;
+}
+
+/**
+ * The environment entries that set PATH for a child, without leaving the
+ * parent's differently-cased "Path" beside it: Windows treats the two as one
+ * variable and a child would get whichever it reads first.
+ *
+ * @param {string} path
+ * @returns {Record<string, string|null>}
+ */
+export function pathEnvironment(path) {
+  const environment = { PATH: path };
+  if (isWindows()) {
+    for (const name of Object.keys(lazy.Subprocess.getEnvironment())) {
+      if (/^path$/i.test(name) && name != "PATH") {
+        environment[name] = null;
+      }
+    }
+  }
+  return environment;
+}
+
+// PATH as the registry holds it (user entries after the machine's, like the
+// shell builds it). A browser keeps the PATH it started with, so an agent
+// installed since is on the registry's PATH only.
+function registryPath() {
+  const read = (root, subkey) => {
+    try {
+      const key = Cc["@mozilla.org/windows-registry-key;1"].createInstance(
+        Ci.nsIWindowsRegKey
+      );
+      key.open(root, subkey, Ci.nsIWindowsRegKey.ACCESS_READ);
+      try {
+        return key.readStringValue("Path");
+      } finally {
+        key.close();
+      }
+    } catch {
+      return "";
+    }
+  };
+  return [
+    read(
+      Ci.nsIWindowsRegKey.ROOT_KEY_LOCAL_MACHINE,
+      "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"
+    ),
+    read(Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER, "Environment"),
+  ].join(";");
+}
+
+// The prefix npm installs global packages to when ~/.npmrc moves it.
+async function npmPrefix() {
+  try {
+    const rc = await IOUtils.readUTF8(PathUtils.join(home(), ".npmrc"));
+    const line = rc.match(/^\s*prefix\s*=\s*(.+?)\s*$/m);
+    return line ? expand(line[1].replace(/^"(.*)"$/, "$1")) : null;
+  } catch {
+    return null;
+  }
 }
 
 function timeout(ms) {
@@ -144,7 +367,9 @@ export async function runForOutput(
     proc = await lazy.Subprocess.call({
       command,
       arguments: args,
-      environment,
+      environment: environment.PATH
+        ? { ...environment, ...pathEnvironment(environment.PATH) }
+        : environment,
       environmentAppend: true,
       stderr: "pipe",
     });
@@ -234,10 +459,23 @@ function cachePath() {
 async function isExecutable(path) {
   try {
     const info = await IOUtils.stat(path);
-    return info.type == "regular" && !!(info.permissions & 0o111);
+    if (info.type != "regular") {
+      return false;
+    }
+    // Windows has no execute bit; what runs is told by its extension.
+    return isWindows()
+      ? WINDOWS_EXTENSIONS.some(ext => path.toLowerCase().endsWith(ext))
+      : !!(info.permissions & 0o111);
   } catch {
     return false;
   }
+}
+
+// The agent's entry with the install command of this system.
+function forThisSystem(agent) {
+  return isWindows() && agent.installWin
+    ? { ...agent, install: agent.installWin }
+    : agent;
 }
 
 class LazyvimiumAgentDetector {
@@ -249,6 +487,8 @@ class LazyvimiumAgentDetector {
   #last = null;
   /** @type {Map<string, string>} Version by executable path. */
   #versions = new Map();
+  /** @type {Promise<string[]>|null} Global bin directories the managers report. */
+  #managers = null;
 
   /**
    * The PATH the user's login shell reports, asked once per session: as an
@@ -304,12 +544,31 @@ class LazyvimiumAgentDetector {
    * @returns {Promise<string>}
    */
   async childPath() {
+    if (isWindows()) {
+      return this.#windowsDirs().join(";");
+    }
     const dirs = [
       ...((await this.shellPath()) ?? "").split(":"),
       ...(Services.env.get("PATH") ?? "").split(":"),
-      ...TOOLCHAIN_DIRS.map(expand),
+      ...TOOLCHAIN_DIRS.map(dir => expand(dir)),
     ];
-    return [...new Set(dirs.filter(dir => dir.startsWith("/")))].join(":");
+    return [...new Set(dirs.filter(dir => dir?.startsWith("/")))].join(":");
+  }
+
+  // This process's PATH, then the registry's (which has what was installed
+  // since the browser started), then the usual global install directories.
+  #windowsDirs() {
+    const dirs = [
+      ...parseWindowsPath(Services.env.get("PATH")),
+      ...parseWindowsPath(registryPath()),
+      ...WINDOWS_TOOLCHAIN_DIRS.map(dir => expand(dir)).filter(Boolean),
+    ];
+    const seen = new Set();
+    return dirs.filter(dir => {
+      // Windows paths are not case sensitive, and trailing slashes vary.
+      const key = dir.toLowerCase().replace(/[\\/]+$/, "");
+      return !seen.has(key) && seen.add(key);
+    });
   }
 
   /**
@@ -319,33 +578,135 @@ class LazyvimiumAgentDetector {
    * @returns {Promise<string|null>}
    */
   async resolve(agent) {
-    const dirs = (await this.childPath()).split(":");
-    const candidates = [
-      ...dirs.map(dir => PathUtils.join(dir, agent.bin)),
-      ...agent.paths.map(expand),
-      ...(await this.#nvmBins()).map(dir => PathUtils.join(dir, agent.bin)),
-    ];
-    for (const candidate of new Set(candidates)) {
-      try {
-        const info = await IOUtils.stat(candidate);
-        if (info.type == "regular" && info.permissions & 0o111) {
-          return candidate;
-        }
-      } catch {
-        // Not there.
+    const windows = isWindows();
+    const dirs = (await this.childPath()).split(windows ? ";" : ":");
+    const found = await this.#firstIn(
+      windows
+        ? [
+            ...dirs,
+            ...(agent.winDirs ?? []).map(dir => expand(dir)).filter(Boolean),
+            ...(await this.#windowsNodeBins()),
+          ]
+        : [
+            ...dirs,
+            ...agent.paths
+              .map(path => expand(path))
+              .filter(Boolean)
+              .map(path => PathUtils.parent(path)),
+            ...(await this.#nvmBins()),
+          ],
+      agent.bin
+    );
+    if (found) {
+      return found;
+    }
+    // Not in any usual place: ask the package managers where their global
+    // installs go (a prefix set in an rc file or an environment variable
+    // lands anywhere), and look through winget's package folders.
+    return this.#firstIn(
+      [
+        ...(await this.#managerDirs(dirs)),
+        ...(windows ? await this.#wingetDirs(agent) : []),
+      ],
+      agent.bin
+    );
+  }
+
+  async #firstIn(dirs, bin) {
+    const candidates = new Set(
+      dirs.flatMap(dir => candidatesIn(dir, bin, isWindows()))
+    );
+    for (const candidate of candidates) {
+      if (await isExecutable(candidate)) {
+        return candidate;
       }
     }
     return null;
   }
 
+  /**
+   * The global bin directories npm, pnpm, yarn and bun report, which the
+   * agents installed with them land in. Asked once per session, and only
+   * when an agent was not found anywhere else.
+   *
+   * @param {string[]} dirs Where to find the managers themselves.
+   * @returns {Promise<string[]>}
+   */
+  #managerDirs(dirs) {
+    this.#managers ??= Promise.all(
+      PACKAGE_MANAGERS.map(async manager => {
+        const executable = await this.#firstIn(dirs, manager.bin);
+        if (!executable) {
+          return null;
+        }
+        const { stdout } = await runForOutput(executable, manager.args, {
+          ms: MANAGER_TIMEOUT_MS,
+          environment: { PATH: dirs.join(isWindows() ? ";" : ":") },
+        });
+        return parseManagerDir(stdout, manager.prefix, isWindows());
+      })
+    ).then(list => list.filter(Boolean));
+    return this.#managers;
+  }
+
+  // winget unpacks portable packages into one folder each; its Links
+  // directory only holds the ones that registered a command.
+  async #wingetDirs(agent) {
+    const root = expand("%LOCALAPPDATA%\\Microsoft\\WinGet\\Packages");
+    try {
+      const names = [agent.id, agent.bin].map(name => name.toLowerCase());
+      return (await IOUtils.getChildren(root)).filter(dir => {
+        const name = PathUtils.filename(dir).toLowerCase();
+        return names.some(wanted => name.includes(wanted));
+      });
+    } catch {
+      return [];
+    }
+  }
+
   // nvm's per-version bin directories, newest first.
   async #nvmBins() {
-    const root = expand("~/.nvm/versions/node");
+    return this.#versionDirs("~/.nvm/versions/node", "bin");
+  }
+
+  // Where npm puts global packages when it is not on PATH: a prefix set in
+  // ~/.npmrc, and the per-version directories of nvm-windows (the global
+  // packages sit in the version directory itself) and fnm.
+  async #windowsNodeBins() {
+    const prefix = await npmPrefix();
+    return [
+      ...(prefix ? [prefix] : []),
+      ...(await this.#versionDirs("%NVM_HOME%")),
+      ...(await this.#versionDirs("%APPDATA%\\nvm")),
+      ...(await this.#versionDirs(
+        "%APPDATA%\\fnm\\node-versions",
+        "installation"
+      )),
+      ...(await this.#versionDirs(
+        "%LOCALAPPDATA%\\fnm\\node-versions",
+        "installation"
+      )),
+    ];
+  }
+
+  async #versionDirs(root, sub = null) {
+    const expanded = expand(root);
+    if (!expanded) {
+      return [];
+    }
     try {
-      const versions = await IOUtils.getChildren(root);
+      const versions = await IOUtils.getChildren(expanded);
       return versions
-        .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
-        .map(dir => PathUtils.join(dir, "bin"));
+        .sort((a, b) =>
+          PathUtils.filename(b).localeCompare(
+            PathUtils.filename(a),
+            undefined,
+            {
+              numeric: true,
+            }
+          )
+        )
+        .map(dir => (sub ? PathUtils.join(dir, sub) : dir));
     } catch {
       return [];
     }
@@ -393,7 +754,7 @@ class LazyvimiumAgentDetector {
           const entry = cached[agent.id];
           const found = entry?.path && (await isExecutable(entry.path));
           return {
-            ...agent,
+            ...forThisSystem(agent),
             path: found ? entry.path : null,
             version: found ? (entry.version ?? null) : null,
           };
@@ -420,7 +781,7 @@ class LazyvimiumAgentDetector {
       LAZYVIMIUM_AGENTS.map(async agent => {
         const executable = await this.resolve(agent);
         return {
-          ...agent,
+          ...forThisSystem(agent),
           path: executable,
           version: executable ? (this.#versions.get(executable) ?? null) : null,
         };

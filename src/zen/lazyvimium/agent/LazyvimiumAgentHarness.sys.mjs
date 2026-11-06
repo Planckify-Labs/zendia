@@ -9,6 +9,7 @@
 // own. A driver only knows its CLI's command line and event shapes; the run
 // below is the same for every agent.
 
+import { pathEnvironment } from "resource:///modules/lazyvimium/agent/LazyvimiumAgentDetect.sys.mjs";
 import {
   UI_INSTRUCTIONS,
   UI_TOOLS,
@@ -1001,8 +1002,7 @@ export class LazyvimiumAgentRun {
           delete environment[name];
         }
       }
-      Object.assign(environment, env, {
-        PATH: this.path,
+      Object.assign(environment, env, pathEnvironment(this.path), {
         [URL_ENV]: this.turn.mcp.url,
         [TOKEN_ENV]: this.turn.mcp.token,
         NO_COLOR: "1",

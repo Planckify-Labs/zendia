@@ -3,10 +3,20 @@
 
 "use strict";
 
-const { LAZYVIMIUM_AGENTS, parseShellPath, parseVersion, runForOutput } =
-  ChromeUtils.importESModule(
-    "resource:///modules/lazyvimium/agent/LazyvimiumAgentDetect.sys.mjs"
-  );
+const {
+  LAZYVIMIUM_AGENTS,
+  candidatesIn,
+  expand,
+  isWindowsAbsolute,
+  parseManagerDir,
+  parseShellPath,
+  parseVersion,
+  parseWindowsPath,
+  pathEnvironment,
+  runForOutput,
+} = ChromeUtils.importESModule(
+  "resource:///modules/lazyvimium/agent/LazyvimiumAgentDetect.sys.mjs"
+);
 const {
   LAZYVIMIUM_DRIVERS,
   LazyvimiumAgentRun,
@@ -96,6 +106,82 @@ add_task(function test_shell_snapshot_parsing() {
   Assert.equal(parseVersion("2.1.312 (Claude Code)"), "2.1.312");
   Assert.equal(parseVersion("codex-cli 0.159.1"), "0.159.1");
   Assert.equal(parseVersion("no version"), null);
+});
+
+add_task(function test_windows_path_handling() {
+  const vars = {
+    USERPROFILE: "C:\\Users\\u",
+    LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local",
+  };
+  const getenv = name => vars[name] ?? null;
+  Assert.equal(
+    expand("%LOCALAPPDATA%\\agy\\bin", getenv),
+    "C:\\Users\\u\\AppData\\Local\\agy\\bin"
+  );
+  Assert.equal(expand("%NOT_SET%\\bin", getenv), null, "unset variable");
+  Assert.equal(expand("/usr/local/100%/x", getenv), "/usr/local/100%/x");
+
+  // What the registry holds: unexpanded variables, quotes, blanks, junk.
+  const dirs = parseWindowsPath(
+    '%LOCALAPPDATA%\\Microsoft\\WinGet\\Links;"C:\\Program Files\\nodejs\\";;relative\\bin;%GONE%\\x;C:\\Windows\\System32',
+    getenv
+  );
+  Assert.deepEqual(dirs, [
+    "C:\\Users\\u\\AppData\\Local\\Microsoft\\WinGet\\Links",
+    "C:\\Program Files\\nodejs\\",
+    "C:\\Windows\\System32",
+  ]);
+  ok(isWindowsAbsolute("D:/tools"), "drive with a slash");
+  ok(isWindowsAbsolute("\\\\server\\share"), "UNC share");
+  ok(!isWindowsAbsolute("/usr/bin"), "POSIX path");
+
+  const names = candidatesIn("C:\\bin", "claude", true).map(path =>
+    path.slice(path.lastIndexOf("claude"))
+  );
+  Assert.deepEqual(
+    names,
+    ["claude.exe", "claude.cmd", "claude.bat"],
+    "a real executable before an npm shim"
+  );
+  Assert.deepEqual(candidatesIn("/bin", "claude", false), ["/bin/claude"]);
+
+  // Every agent says where its Windows installer puts it and how to run it.
+  for (const agent of LAZYVIMIUM_AGENTS) {
+    ok(agent.winDirs?.length, `${agent.id} has Windows install directories`);
+    ok(agent.installWin, `${agent.id} has a Windows install command`);
+  }
+  Assert.equal(pathEnvironment("/x").PATH, "/x");
+});
+
+add_task(function test_package_manager_directories() {
+  // npm prints a prefix: executables sit in it on Windows, in bin elsewhere.
+  Assert.equal(
+    parseManagerDir("C:\\Users\\u\\AppData\\Roaming\\npm\r\n", true, true),
+    "C:\\Users\\u\\AppData\\Roaming\\npm"
+  );
+  Assert.equal(
+    parseManagerDir("/home/u/.npm-global\n", true, false),
+    "/home/u/.npm-global/bin"
+  );
+  // The others print the directory, after any notice.
+  Assert.equal(
+    parseManagerDir(
+      "update available\n/home/u/.local/share/pnpm\n",
+      false,
+      false
+    ),
+    "/home/u/.local/share/pnpm"
+  );
+  Assert.equal(
+    parseManagerDir('"D:\\bun\\bin"\n', false, true),
+    "D:\\bun\\bin"
+  );
+  // yarn 2+ has no `global`.
+  Assert.equal(
+    parseManagerDir("Usage Error: Couldn't find a script\n", false, false),
+    null
+  );
+  Assert.equal(parseManagerDir("", true, true), null);
 });
 
 add_task(async function test_run_for_output_times_out() {
