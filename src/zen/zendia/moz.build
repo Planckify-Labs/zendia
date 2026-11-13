@@ -1,0 +1,114 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+EXTRA_JS_MODULES.zendia += [
+    "Zendia.sys.mjs",
+]
+
+EXTRA_JS_MODULES.zendia.agent += [
+    "agent/ZendiaAgentDetect.sys.mjs",
+    "agent/ZendiaAgentHarness.sys.mjs",
+    "agent/ZendiaAgentIcons.sys.mjs",
+    "agent/ZendiaAgentInstructions.sys.mjs",
+    "agent/ZendiaAgentLog.sys.mjs",
+    "agent/ZendiaAgentNetwork.sys.mjs",
+    "agent/ZendiaAgents.sys.mjs",
+    "agent/ZendiaAgentServer.sys.mjs",
+    "agent/ZendiaAgentTools.sys.mjs",
+    "agent/ZendiaAgentUi.sys.mjs",
+]
+
+EXTRA_JS_MODULES.zendia.actors += [
+    "actors/ZendiaKeysChild.sys.mjs",
+    "actors/ZendiaKeysParent.sys.mjs",
+    "actors/ZendiaPopupChild.sys.mjs",
+    "actors/ZendiaPopupParent.sys.mjs",
+    "actors/ZendiaUiChild.sys.mjs",
+    "actors/ZendiaUiParent.sys.mjs",
+]
+
+EXTRA_JS_MODULES.zendia.config += [
+    "config/ZendiaKeymaps.sys.mjs",
+    "config/ZendiaOptions.sys.mjs",
+]
+
+EXTRA_JS_MODULES.zendia.core += [
+    "core/ZendiaActions.sys.mjs",
+    "core/ZendiaCaptcha.sys.mjs",
+    "core/ZendiaControls.sys.mjs",
+    "core/ZendiaDom.sys.mjs",
+    "core/ZendiaJumpLabels.sys.mjs",
+    "core/ZendiaKeyClaims.sys.mjs",
+    "core/ZendiaKeyEngine.sys.mjs",
+    "core/ZendiaKeymap.sys.mjs",
+    "core/ZendiaKeys.sys.mjs",
+    "core/ZendiaPageText.sys.mjs",
+    "core/ZendiaPlugins.sys.mjs",
+    "core/ZendiaPopupHints.sys.mjs",
+    "core/ZendiaShared.sys.mjs",
+    "core/ZendiaTextObjects.sys.mjs",
+    "core/ZendiaYankRing.sys.mjs",
+]
+
+EXTRA_JS_MODULES.zendia.plugins += [
+    "plugins/ZendiaAgent.sys.mjs",
+    "plugins/ZendiaAgentContent.sys.mjs",
+    "plugins/ZendiaCore.sys.mjs",
+    "plugins/ZendiaCoreContent.sys.mjs",
+    "plugins/ZendiaEdit.sys.mjs",
+    "plugins/ZendiaEditContent.sys.mjs",
+    "plugins/ZendiaExplorerSpec.sys.mjs",
+    "plugins/ZendiaExtensionsSpec.sys.mjs",
+    "plugins/ZendiaFind.sys.mjs",
+    "plugins/ZendiaInputs.sys.mjs",
+    "plugins/ZendiaInputsContent.sys.mjs",
+    "plugins/ZendiaJump.sys.mjs",
+    "plugins/ZendiaJumpContent.sys.mjs",
+    "plugins/ZendiaLibrary.sys.mjs",
+    "plugins/ZendiaNavigation.sys.mjs",
+    "plugins/ZendiaPointerContent.sys.mjs",
+    "plugins/ZendiaScroll.sys.mjs",
+    "plugins/ZendiaScrollContent.sys.mjs",
+    "plugins/ZendiaSession.sys.mjs",
+    "plugins/ZendiaTabs.sys.mjs",
+    "plugins/ZendiaToolbarSpec.sys.mjs",
+    "plugins/ZendiaUblockSpec.sys.mjs",
+    "plugins/ZendiaUi.sys.mjs",
+    "plugins/ZendiaVisual.sys.mjs",
+    "plugins/ZendiaVisualContent.sys.mjs",
+    "plugins/ZendiaWhichKeySpec.sys.mjs",
+    "plugins/ZendiaWindows.sys.mjs",
+    "plugins/ZendiaYank.sys.mjs",
+    "plugins/ZendiaYankContent.sys.mjs",
+    "plugins/ZendiaZenCommands.sys.mjs",
+]
+
+EXTRA_JS_MODULES.zendia.ublock += [
+    "ublock/ZendiaUblock.sys.mjs",
+]
+
+EXTRA_JS_MODULES.zendia.ui += [
+    "ui/ZendiaAgentDock.sys.mjs",
+    "ui/ZendiaAgentFollow.sys.mjs",
+    "ui/ZendiaAgentInstructionsView.sys.mjs",
+    "ui/ZendiaAgentModelCard.sys.mjs",
+    "ui/ZendiaAgentMotion.sys.mjs",
+    "ui/ZendiaAgentUiView.sys.mjs",
+    "ui/ZendiaChatButton.sys.mjs",
+    "ui/ZendiaExplorer.sys.mjs",
+    "ui/ZendiaHints.sys.mjs",
+    "ui/ZendiaLibraryView.sys.mjs",
+    "ui/ZendiaMarkdown.sys.mjs",
+    "ui/ZendiaMenuKeys.sys.mjs",
+    "ui/ZendiaPicker.sys.mjs",
+    "ui/ZendiaStatusline.sys.mjs",
+    "ui/ZendiaTheme.sys.mjs",
+    "ui/ZendiaToolbar.sys.mjs",
+    "ui/ZendiaVimModeSwitch.sys.mjs",
+    "ui/ZendiaWhichKey.sys.mjs",
+]
+
+FINAL_TARGET_FILES.modules.zendia.ui += [
+    "ui/zendia.css",
+]

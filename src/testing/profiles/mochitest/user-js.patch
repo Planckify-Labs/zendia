@@ -13,9 +13,9 @@ index 782258420cdce901f182897b796731a1fdf69ecf..916139c619d989475923fae26c1acb2e
 +user_pref("zen.window-sync.enabled", true);
 +user_pref("widget.macos.native-context-menus", false);
 +user_pref("zen.containers.create-default-identities", true);
-+// Lazyvimium turns compact mode on by default in vim mode; keep Zen's own
++// Zendia turns compact mode on by default in vim mode; keep Zen's own
 +// tests on Zen's default layout.
 +user_pref("zen.view.compact.enable-at-startup", false);
 +user_pref("zen.view.compact.hide-toolbar", false);
 +// Tests must not download uBlock Origin from AMO.
-+user_pref("lazyvimium.ublock.enabled", false);
++user_pref("zendia.ublock.enabled", false);

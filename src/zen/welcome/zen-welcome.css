@@ -262,12 +262,12 @@
       pointer-events: none;
     }
 
-    &[page="lazyvimium-keys"],
-    &[page="lazyvimium-agents"] {
+    &[page="zendia-keys"],
+    &[page="zendia-agents"] {
       gap: 1.25rem;
     }
 
-    .zen-welcome-lazyvimium-keys {
+    .zen-welcome-zendia-keys {
       display: grid;
       grid-template-columns: max-content 1fr;
       gap: 0.7rem 1.4rem;
@@ -286,18 +286,18 @@
       }
     }
 
-    .zen-welcome-lazyvimium-agent-version {
+    .zen-welcome-zendia-agent-version {
       order: 1;
       margin-left: auto;
       font-size: 0.9rem;
       opacity: 0.55;
     }
 
-    .zen-welcome-lazyvimium-agents-status {
+    .zen-welcome-zendia-agents-status {
       opacity: 0.7;
     }
 
-    .zen-welcome-lazyvimium-agents-missing {
+    .zen-welcome-zendia-agents-missing {
       display: flex;
       flex-direction: column;
       gap: 0.4rem;

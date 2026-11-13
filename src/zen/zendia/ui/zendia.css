@@ -1,0 +1,3317 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* The window and its sidebar take the color of the current mode, through the
+   variables Zen's space themes set (ZenGradientGenerator). */
+:root[zendia-mode] {
+  & #zen-browser-background {
+    --zen-main-browser-background: var(--zendia-mode-background) !important;
+    --zen-main-browser-background-old: var(--zendia-mode-background) !important;
+  }
+
+  & #zen-toolbar-background {
+    --zen-main-browser-background-toolbar: var(--zendia-mode-background-toolbar) !important;
+    --zen-main-browser-background-toolbar-old: var(--zendia-mode-background-toolbar) !important;
+  }
+
+  & .zen-browser-generic-background::after {
+    transition: background-color 0.15s ease-out;
+  }
+}
+
+/* The explorer's cursor and selection over the sidebar's rows, in the
+   statusline's EXPLORER and VISUAL colors. */
+:root[zendia-explorer] {
+  --zendia-explorer-color: var(--zendia-mode-e);
+  --zendia-visual-color: var(--zendia-mode-v);
+
+  & .tabbrowser-tab:is([zendia-cursor], [zendia-selected]) > .tab-stack > .tab-background,
+  & .tab-group-label-container:is([zendia-cursor], [zendia-selected]) {
+    outline: 2px solid var(--zendia-visual-color);
+    outline-offset: -2px;
+  }
+
+  & .tabbrowser-tab[zendia-selected] > .tab-stack > .tab-background,
+  & .tab-group-label-container[zendia-selected] {
+    background-color: color-mix(in srgb, var(--zendia-visual-color) 25%, transparent) !important;
+  }
+
+  & .tabbrowser-tab[zendia-cursor] > .tab-stack > .tab-background,
+  & .tab-group-label-container[zendia-cursor] {
+    outline-color: var(--zendia-explorer-color);
+  }
+
+  /* Below the last row: the buttons at the sidebar's foot. */
+  & #zen-sidebar-foot-buttons toolbarbutton[zendia-cursor] {
+    outline: 2px solid var(--zendia-explorer-color);
+    outline-offset: -2px;
+    border-radius: var(--border-radius-medium, 6px);
+    background-color: color-mix(in srgb, var(--zendia-explorer-color) 30%, transparent);
+  }
+}
+
+/* The toolbar's cursor over the top bar's buttons and urlbar, in the
+   statusline's TOOLBAR color. */
+:root[zendia-toolbar] :is(toolbarbutton, #urlbar-container)[zendia-cursor] {
+  outline: 2px solid var(--zendia-mode-t);
+  outline-offset: -2px;
+  border-radius: var(--border-radius-medium, 6px);
+
+  &#urlbar-container {
+    border-radius: 999px;
+    corner-shape: round;
+  }
+}
+
+/* The urlbar is a pill while closed, with round hovers on its icons; open,
+   it keeps Zen's corners around the results. Zen's squircle corner-shape
+   would make the pill lumpy. */
+#urlbar:not([breakout-extend]) {
+  --urlbar-icon-border-radius: 999px !important;
+
+  &,
+  & .urlbar-background,
+  & :is(.urlbar-page-action, #tracking-protection-icon-container, #identity-icon-box, #notification-popup-box) {
+    border-radius: 999px !important;
+    corner-shape: round;
+  }
+}
+
+/* The placeholder Zen leaves in the toolbar while the urlbar floats open. */
+/* stylelint-disable-next-line stylelint-plugin-mozilla/no-has-selector */
+#urlbar-container:has(#urlbar[open][zen-floating-urlbar="true"]) {
+  border-radius: 999px !important;
+  corner-shape: round;
+}
+
+/* The library's cursor over a section's rows, the media grid, the spaces'
+   headers and tabs and the filter panel, in the statusline's LIBRARY color. */
+:root[zendia-library] zen-library {
+  --zendia-library-color: var(--zendia-mode-l);
+
+  & [zendia-cursor]:not(tab),
+  & tab[zendia-cursor] > .tab-stack > .tab-background {
+    outline: 2px solid var(--zendia-library-color);
+    outline-offset: -2px;
+  }
+
+  & .zen-library-row[zendia-cursor] {
+    background-color: color-mix(in srgb, var(--zendia-library-color) 18%, transparent);
+  }
+}
+
+/* Chat, in the agent panel's language: a soft fill and no outline, as its
+   round buttons, which also sits well by the window buttons. It is a
+   toolbarbutton, so the toolbar's keys reach it: the pill is the button
+   itself, not the icon's background as on the buttons around it. */
+#zendia-chat-button,
+#zendia-chat-topbar {
+  list-style-image: url("chrome://browser/skin/zen-icons/selectable/chat.svg");
+}
+
+:is(#zendia-chat-button[cui-areatype="toolbar"], #zendia-chat-topbar) {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  align-self: center;
+  /* Outside a toolbar a native button would paint over the fill. */
+  appearance: none;
+  /* Zen's rows set the height and padding of their buttons, so the spacing
+     is on the icon and label: without the label, the icon stays centered. */
+  width: auto !important;
+  height: 26px;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: none;
+  border-radius: 999px;
+  corner-shape: round;
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+  color: inherit;
+  font: menu;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color 120ms;
+
+  #nav-bar & {
+    margin-inline: 2px;
+  }
+
+  &:hover {
+    background-color: color-mix(in srgb, currentColor 18%, transparent);
+  }
+
+  &:active,
+  &[aria-pressed="true"] {
+    background-color: color-mix(in srgb, currentColor 26%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--focus-outline-color, AccentColor);
+    outline-offset: 1px;
+  }
+
+  & > .toolbarbutton-icon {
+    width: 14px !important;
+    height: 14px !important;
+    margin-inline: 8px;
+    padding: 0 !important;
+    background: none !important;
+    box-shadow: none !important;
+    -moz-context-properties: fill, fill-opacity;
+    fill: currentColor;
+  }
+
+  & > .toolbarbutton-text {
+    display: var(--zendia-chat-label, flex) !important;
+    /* Taller than the pill as the toolbar sizes it, which lifts the text. */
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 11px 0 -2px !important;
+  }
+
+  /* The agent works, or has finished, with the panel closed. */
+  &:is([running], [unseen])::after {
+    content: "";
+    position: absolute;
+    top: -1px;
+    inset-inline-end: -1px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    corner-shape: round;
+    background-color: var(--zendia-agent-color);
+  }
+
+  &[running]::after {
+    animation: zendia-agent-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+/* At the end of the compact top bar, by the window buttons. */
+#zendia-chat-topbar-box {
+  align-items: center;
+  margin-inline: auto 6px;
+  -moz-window-dragging: no-drag;
+
+  /* Their own auto margin would share the free space with Chat's, leaving it
+     in the middle of the bar. */
+  :root:not([zen-window-buttons-reversed="true"]) & + .titlebar-buttonbox-container {
+    margin-left: 0 !important;
+  }
+
+  /* With the window buttons on the left, Chat keeps the right end: after
+     them, which Zen orders at 1000. */
+  :root[zen-window-buttons-reversed="true"] & {
+    order: 1001;
+  }
+}
+
+/* Where a row has no room for its name Chat keeps only its icon, with the
+   name in its tooltip. */
+#zen-sidebar-top-buttons #zendia-chat-button,
+:root:not([zen-sidebar-expanded="true"]) #zen-sidebar-foot-buttons #zendia-chat-button {
+  --zendia-chat-label: none;
+}
+
+@media (width < 720px) {
+  #nav-bar #zendia-chat-button {
+    --zendia-chat-label: none;
+  }
+}
+
+/* The vim mode row of the app menu, ending in the agent panel's switch. */
+#zendia-appmenu-vim-mode {
+  list-style-image: url("chrome://browser/skin/zen-icons/selectable/terminal.svg");
+
+  /* It has no size of its own, as the menu's other icons do. */
+  & > .toolbarbutton-icon {
+    width: 16px;
+    height: 16px;
+    margin-inline-end: 2px;
+  }
+
+  /* The row is what takes the click. */
+  & > .zendia-agent-switch {
+    margin-inline-start: auto;
+    pointer-events: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(#zendia-chat-button, #zendia-chat-topbar) {
+    transition: none;
+  }
+
+  :is(#zendia-chat-button, #zendia-chat-topbar)::after {
+    animation: none !important;
+  }
+}
+
+#zendia-explorer-focus,
+#zendia-toolbar-focus,
+#zendia-library-focus {
+  position: fixed;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Jump labels on the sidebar's rows, in the picker's flash colors. */
+[zendia-hint] {
+  position: relative;
+
+  &::after {
+    content: attr(zendia-hint);
+    position: absolute;
+    inset-inline-end: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: var(--zendia-hint);
+    color: var(--zendia-hint-text);
+    font: 700 11px/16px ui-monospace, monospace;
+    pointer-events: none;
+  }
+}
+
+/* The glass and motion every floating surface shares: the urlbar, the picker,
+   which-key and the agent pill. The tint is thin so the page shows through;
+   contrast(60%) pulls the page's blacks and whites toward the middle, which
+   keeps text readable over any page at that tint. */
+:root {
+  --zendia-float-radius: 18px;
+  --zendia-float-solid: light-dark(rgb(255, 255, 255), rgb(24 24 24));
+  --zendia-float-tint: light-dark(rgba(255, 255, 255, 0.55), rgba(22, 22, 26, 0.62));
+  --zendia-float-filter: var(--zen-backdrop-underlay) blur(40px) saturate(180%) contrast(60%);
+  /* The light falling on the top of the pane. */
+  --zendia-float-sheen: linear-gradient(
+    to bottom,
+    light-dark(rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.06)),
+    transparent 96px
+  );
+  --zendia-float-outline: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.12));
+  --zendia-float-shadow:
+    inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.14)),
+    inset 0 0 0 0.5px light-dark(rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.05)),
+    0 2px 6px light-dark(rgba(20, 22, 40, 0.1), rgba(0, 0, 0, 0.3)),
+    0 24px 64px -16px light-dark(rgba(20, 22, 40, 0.38), rgba(0, 0, 0, 0.6));
+  /* Dimmed text: anything fainter falls under 4:1 over a page of the
+     opposite brightness. */
+  --zendia-float-muted: 0.78;
+
+  /* The model card opens over the agent panel, not the page. The panel's own
+     surface is even, so the float glass would leave nothing to see: this one
+     blurs less and is thinner, and the conversation shows through it. */
+  --zendia-model-tint: light-dark(rgba(255, 255, 255, 0.36), rgba(22, 22, 26, 0.34));
+  --zendia-model-filter: blur(11px) saturate(190%);
+
+  /* The agent panel's spring (ZendiaAgentDock.sys.mjs). */
+  --zendia-spring: linear(0, 0.0388 4%, 0.1313 8%, 0.2498 12%, 0.3757 16%, 0.497 20%, 0.6068 24%, 0.7018 28%, 0.781 32%, 0.8448 36%, 0.8948 40%, 0.9327 44%, 0.9603 48%, 0.9804 52%, 0.994 56%, 1.0025 60%, 1.0075 64%, 1.0101 68%, 1.0109 72%, 1.0104 76%, 1.0084 84%, 1.0045 95%, 1);
+  --zendia-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --zendia-ease-in: cubic-bezier(0.4, 0, 1, 1);
+}
+
+@keyframes zendia-float-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.96);
+  }
+}
+
+@keyframes zendia-float-out {
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+@keyframes zendia-float-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* The sidebar is the top layer: every floating menu (picker, model card,
+   which-key, the agent handle) sits under it. A flex item takes z-index
+   without being positioned, so this holds in compact mode as well. */
+#navigator-toolbox {
+  z-index: 2147483647 !important;
+}
+
+.zendia-picker,
+.zendia-model-card,
+#zendia-which-key {
+  /* Below the sidebar (see the rule above it): a floating menu never covers it. */
+  --zendia-float-layer: 2147483000;
+  --zendia-glass-background: var(--zendia-float-solid);
+
+  position: fixed;
+  z-index: var(--zendia-float-layer);
+  display: flex;
+  flex-direction: column;
+  padding: 7px;
+  border-radius: var(--zendia-float-radius);
+  background-color: var(--zendia-glass-background);
+  background-image: var(--zendia-float-sheen);
+  box-shadow: var(--zendia-float-shadow);
+  outline: 0.5px solid var(--zendia-float-outline);
+  color: var(--toolbar-color, light-dark(rgb(21, 20, 26), rgb(251, 251, 254)));
+  font: menu;
+  font-size: 13px;
+
+  &:focus-visible {
+    outline: 0.5px solid var(--zendia-float-outline);
+  }
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+/* stylelint-disable-next-line media-query-no-invalid */
+@media -moz-pref("zen.theme.acrylic-urlbar") and (not (prefers-reduced-transparency: reduce)) {
+  :root:not([zen-no-acrylic="true"]) :is(.zendia-picker, #zendia-which-key) {
+    backdrop-filter: var(--zendia-float-filter);
+
+    &:not(:-moz-window-inactive) {
+      --zendia-glass-background: var(--zendia-float-tint);
+    }
+  }
+
+  :root:not([zen-no-acrylic="true"]) .zendia-model-card {
+    backdrop-filter: var(--zendia-model-filter);
+
+    &:not(:-moz-window-inactive) {
+      --zendia-glass-background: var(--zendia-model-tint);
+    }
+  }
+
+  /* Zen's urlbar, thinned to the same glass. */
+  :root:not([zen-no-acrylic="true"]) #urlbar[breakout-extend] .urlbar-background {
+    backdrop-filter: var(--zendia-float-filter) !important;
+
+    &:not(:-moz-window-inactive) {
+      --zen-urlbar-background-transparent: var(--zendia-float-tint) !important;
+    }
+  }
+}
+
+#urlbar[breakout-extend] {
+  --urlbarview-separator-color: var(--zendia-float-outline) !important;
+
+  &,
+  & .urlbar-background {
+    border-radius: var(--zendia-float-radius) !important;
+  }
+
+  & .urlbar-background {
+    background-image: var(--zendia-float-sheen) !important;
+    box-shadow: var(--zendia-float-shadow) !important;
+    outline: 0.5px solid var(--zendia-float-outline) !important;
+  }
+
+  /* Zen's greys are made for an opaque panel. */
+  & .urlbarView-row:not([selected]) {
+    color: light-dark(rgba(0, 0, 0, 0.85), rgba(255, 255, 255, 0.88)) !important;
+
+    & .urlbarView-url,
+    & .urlbarView-title-separator::before {
+      color: light-dark(rgba(0, 0, 0, 0.72), rgba(255, 255, 255, 0.76)) !important;
+    }
+  }
+
+  & .urlbarView-row {
+    transition: background-color 120ms ease-out;
+  }
+}
+
+/* The pane opens first, its content settles into it a moment later. Only
+   the background moves: the urlbar's own box is measured while it opens, and
+   opacity on it would cut the pane off from the page it blurs. */
+#urlbar[breakout-extend][zen-floating-urlbar="true"] {
+  & .urlbar-background {
+    transform-origin: 50% 32px;
+    animation: zendia-float-in 300ms var(--zendia-spring) backwards;
+  }
+
+  & :is(.urlbar-input-container, .urlbarView) {
+    animation: zendia-float-content-in 200ms var(--zendia-ease-out) 40ms backwards;
+  }
+}
+
+.zendia-picker {
+  top: 20%;
+  left: 50%;
+  translate: -50% 0;
+  width: min(560px, 80vw);
+  max-height: 60vh;
+  transform-origin: 50% 0;
+  animation: zendia-float-in 300ms var(--zendia-spring) backwards;
+
+  /* Closed: keys already went back to the page, this is only the fade. */
+  &[leaving] {
+    pointer-events: none;
+    animation: zendia-float-out 110ms var(--zendia-ease-in) forwards;
+  }
+}
+
+/* which-key's "helix" preset, which LazyVim uses: one column in the bottom
+   right corner, 30 to 60 columns wide, above the statusline. It grows out of
+   that corner. */
+#zendia-which-key {
+  right: 12px;
+  bottom: 44px;
+  min-width: 30ch;
+  max-width: min(60ch, 90vw);
+  max-height: 75vh;
+  transform-origin: 100% 100%;
+  transition:
+    opacity 180ms ease-out,
+    transform 300ms var(--zendia-spring);
+
+  @starting-style {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+
+  /* hideFloat(): hidden comes when this fade ends. */
+  &[leaving] {
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+    transition:
+      opacity 110ms var(--zendia-ease-in),
+      transform 110ms var(--zendia-ease-in);
+  }
+}
+
+:root[zen-right-side] #zendia-which-key {
+  transform-origin: 0 100%;
+}
+
+/* Scrollbars in zendia's own panels: thin, in its pink over no track,
+   brighter while the mouse is on them. */
+:is(
+    .zendia-which-key-list,
+    .zendia-picker-list,
+    .zendia-agent-log,
+    .zendia-md pre,
+    .zendia-md-table,
+    .zendia-ui-scroll
+  ) {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--zendia-scrollbar) 45%, transparent) transparent;
+
+  &:hover {
+    scrollbar-color: var(--zendia-scrollbar) transparent;
+  }
+}
+
+#zendia-statusline {
+  right: 12px;
+  bottom: 12px;
+}
+
+/* With the sidebar on the right, the mode indicator and which-key take the
+   bottom left corner, lualine's side for the mode, so they never cover the
+   sidebar's buttons. */
+:root[zen-right-side] :is(#zendia-statusline, #zendia-which-key) {
+  right: auto;
+  left: 12px;
+}
+
+.zendia-which-key-title {
+  padding: 4px 8px 8px;
+  font-weight: 600;
+  opacity: var(--zendia-float-muted);
+}
+
+.zendia-which-key-list {
+  display: grid;
+  grid-template-columns: max-content max-content 1fr;
+  column-gap: 8px;
+  row-gap: 3px;
+  padding: 0 8px;
+  overflow-y: auto;
+}
+
+.zendia-which-key-item {
+  display: contents;
+}
+
+.zendia-which-key-key {
+  justify-self: end;
+  color: var(--zendia-which-key-key);
+  font: 700 12px/18px ui-monospace, monospace;
+}
+
+.zendia-which-key-separator {
+  line-height: 18px;
+  opacity: 0.5;
+}
+
+.zendia-which-key-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 18px;
+
+  [group] > & {
+    color: var(--zendia-which-key-group);
+  }
+}
+
+.zendia-which-key-help {
+  padding: 8px 8px 2px;
+  font-size: 11px;
+  opacity: var(--zendia-float-muted);
+}
+
+.zendia-picker-title {
+  padding: 6px 10px 8px;
+  font-weight: 600;
+  opacity: var(--zendia-float-muted);
+}
+
+.zendia-picker-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+/* One highlight for the whole list, gliding to the selected row, so the eye
+   follows j and k instead of hunting for the new row. */
+.zendia-picker-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 11px;
+  background-color: color-mix(in srgb, var(--zen-primary-color, AccentColor) 26%, light-dark(rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.08)));
+  box-shadow:
+    inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.12)),
+    0 1px 3px light-dark(rgba(20, 22, 40, 0.1), rgba(0, 0, 0, 0.25));
+  pointer-events: none;
+  transition: transform 220ms var(--zendia-spring);
+}
+
+.zendia-picker-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  transition: background-color 120ms ease-out;
+  /* The rows land one after another, the first few only: past those the
+     picker would still be arriving when a fast key picks. */
+  animation: zendia-float-content-in 200ms var(--zendia-ease-out) backwards;
+  animation-delay: calc(min(var(--zendia-row, 0), 6) * 12ms + 30ms);
+
+  &:hover:not([selected]) {
+    background-color: light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.07));
+  }
+}
+
+/* The label colors of the user's LazyVim setup: full strength on the selected
+   row, a tint of them on the others so a column of labels does not outweigh
+   the list. */
+.zendia-picker-key {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--zendia-hint) 20%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-hint) 50%, transparent);
+  color: color-mix(in srgb, var(--zendia-hint) 55%, light-dark(black, white));
+  font: 700 12px/18px ui-monospace, monospace;
+  text-align: center;
+  transition:
+    background-color 140ms ease-out,
+    color 140ms ease-out;
+
+  [selected] > & {
+    background-color: var(--zendia-hint);
+    color: var(--zendia-hint-text);
+  }
+}
+
+.zendia-picker-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+/* The list's icons are plain; the plate only exists in the grid. */
+.zendia-picker-icon-plate {
+  display: contents;
+}
+
+/* Few items, known by their icon: the icon is what the eye lands on, on a
+   white plate so every brand reads the same over any page. The selected plate
+   lifts and glows in the item's own color. */
+.zendia-picker[layout="grid"] {
+  width: min(500px, 80vw);
+
+  & .zendia-picker-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  & .zendia-picker-cursor {
+    border-radius: 14px;
+  }
+
+  & .zendia-picker-item {
+    flex-direction: column;
+    gap: 0;
+    padding: 18px 8px 12px;
+    border-radius: 14px;
+  }
+
+  & .zendia-picker-key {
+    position: absolute;
+    top: 7px;
+    left: 7px;
+  }
+
+  & .zendia-picker-icon-plate {
+    display: grid;
+    place-items: center;
+    width: 60px;
+    height: 60px;
+    margin-bottom: 10px;
+    overflow: hidden;
+    border-radius: 16px;
+    background-color: #ffffff;
+    box-shadow:
+      0 0 0 0.5px rgba(0, 0, 0, 0.12),
+      0 3px 10px rgba(20, 22, 40, 0.16);
+    transition:
+      transform 260ms var(--zendia-spring),
+      box-shadow 200ms ease-out;
+  }
+
+  & .zendia-picker-icon {
+    width: 38px;
+    height: 38px;
+  }
+
+  & .zendia-picker-icon-plate[fill] .zendia-picker-icon {
+    width: 100%;
+    height: 100%;
+  }
+
+  & [selected] .zendia-picker-icon-plate {
+    transform: translateY(-2px) scale(1.08);
+    box-shadow:
+      0 0 0 0.5px rgba(0, 0, 0, 0.12),
+      0 10px 26px -4px color-mix(in srgb, var(--zendia-picker-color, var(--zendia-hint)) 70%, transparent);
+  }
+
+  & .zendia-picker-label {
+    flex: none;
+    max-width: 100%;
+    font-weight: 600;
+  }
+
+  & .zendia-picker-detail {
+    max-width: 100%;
+    margin-top: 2px;
+  }
+
+  & [dim]:not([selected]) .zendia-picker-icon-plate {
+    filter: grayscale(1);
+    opacity: 0.55;
+  }
+}
+
+.zendia-picker-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zendia-picker-detail {
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  opacity: var(--zendia-float-muted);
+}
+
+.zendia-picker-help {
+  margin-top: 6px;
+  padding: 8px 10px 2px;
+  border-top: 0.5px solid var(--zendia-float-outline);
+  font-size: 11px;
+  opacity: var(--zendia-float-muted);
+}
+
+/* The agent panel, a glass panel at the side of the tab in zendia's
+   colors (ZendiaTheme.sys.mjs). Its own surface and text colors, not
+   the space theme's, keep its text readable over any page, in any layout
+   and vim mode color. */
+#zendia-agent-dock,
+#zendia-agent-pill {
+  --zendia-agent-glass: color-mix(in srgb, var(--zendia-agent-surface) var(--zendia-glass-opacity, 78%), transparent);
+
+  position: absolute;
+  z-index: 2147483646;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  background-color: var(--zendia-agent-glass);
+  backdrop-filter: blur(var(--zendia-glass-blur, 40px)) saturate(160%);
+  box-shadow: var(--zendia-float-shadow);
+  outline: 0.5px solid color-mix(in srgb, var(--zendia-agent-border) 80%, transparent);
+  color: var(--zendia-agent-text);
+  font: menu;
+  font-size: 13px;
+
+  &[hidden] {
+    display: none;
+  }
+
+  /* Without glass (Zen's software rendering, the user's settings) the
+     surface is solid. */
+  :root[zen-no-acrylic="true"] & {
+    background-color: var(--zendia-agent-surface);
+    backdrop-filter: none;
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    background-color: var(--zendia-agent-surface);
+    backdrop-filter: none;
+  }
+}
+
+/* float: a card over the page, inset from its side. */
+#zendia-agent-dock {
+  outline: none;
+  top: 10px;
+  bottom: 10px;
+  width: var(--zendia-agent-width, 420px);
+  max-width: calc(100% - 20px);
+  border-radius: 16px;
+  overflow: hidden;
+
+  &[side="right"] {
+    right: 10px;
+  }
+
+  &[side="left"] {
+    left: 10px;
+  }
+
+  /* slide: against the page's side, as Zen's compact sidebar. */
+  &[layout="slide"] {
+    top: 0;
+    bottom: 0;
+    border-radius: var(--zen-native-inner-radius, 10px);
+
+    &[side="right"] {
+      right: 0;
+    }
+
+    &[side="left"] {
+      left: 0;
+    }
+  }
+
+  /* split: beside the tab, which makes room, as a split view pane. */
+  &[layout="split"] {
+    position: relative;
+    inset: auto;
+    flex: none;
+    order: 1;
+    max-width: none;
+    margin-inline-start: var(--zen-element-separation, 8px);
+    border-radius: var(--zen-native-inner-radius, 10px);
+    box-shadow: var(--zen-big-shadow, none);
+    /* Its size is the tab box's height and its own width, never its
+       content's: a long conversation would otherwise stretch the tab box
+       past the window. */
+    contain: size;
+
+    &[side="left"] {
+      order: -1;
+      margin-inline: 0 var(--zen-element-separation, 8px);
+    }
+  }
+
+  &[resizing] {
+    user-select: none;
+  }
+}
+
+/* The panel's edge on the page's side: dragging it resizes the panel. */
+.zendia-agent-grip {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+
+  #zendia-agent-dock[side="right"] > & {
+    left: 0;
+  }
+
+  #zendia-agent-dock[side="left"] > & {
+    right: 0;
+  }
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 3px;
+    height: 40px;
+    border-radius: 2px;
+    background-color: var(--zendia-accent);
+    opacity: 0;
+    translate: -50% -50%;
+    transition:
+      height 0.15s ease-out,
+      opacity 0.15s ease-out;
+  }
+
+  &:hover::before,
+  #zendia-agent-dock[resizing] > &::before {
+    height: 72px;
+    opacity: 1;
+  }
+
+  &[disabled] {
+    cursor: default;
+
+    &::before {
+      display: none;
+    }
+  }
+}
+
+.zendia-agent-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 10px 8px 14px;
+  border-bottom: 0.5px solid color-mix(in srgb, var(--zendia-agent-border) 70%, transparent);
+  font-size: 12px;
+}
+
+.zendia-agent-spacer {
+  flex: 1;
+}
+
+.zendia-agent-layouts {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--zendia-raised) 70%, transparent);
+}
+
+.zendia-agent-icon-button {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background-color: transparent;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 14px;
+  -moz-context-properties: fill;
+  fill: var(--zendia-agent-muted);
+  color: inherit;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--zendia-agent-text) 10%, transparent);
+    fill: var(--zendia-agent-text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: -2px;
+  }
+
+  &[aria-pressed="true"] {
+    background-color: color-mix(in srgb, var(--zendia-accent) 24%, transparent);
+    fill: var(--zendia-accent);
+  }
+
+  &.layout-float {
+    background-image: url("chrome://browser/skin/zen-icons/popup.svg");
+  }
+
+  &.layout-slide {
+    background-image: url("chrome://browser/skin/zen-icons/sidebar-right.svg");
+  }
+
+  &.layout-split {
+    background-image: url("chrome://browser/skin/zen-icons/split.svg");
+
+    /* Picked, but floating while the tab has no room for it. */
+    #zendia-agent-dock[fallback] &[aria-pressed="true"] {
+      background-color: color-mix(in srgb, var(--zendia-warning) 22%, transparent);
+      fill: var(--zendia-warning);
+    }
+  }
+
+  &.side {
+    background-image: url("chrome://browser/skin/zen-icons/arrow-left.svg");
+
+    &[side="left"] {
+      background-image: url("chrome://browser/skin/zen-icons/arrow-right.svg");
+    }
+  }
+
+  &.close {
+    background-image: url("chrome://browser/skin/zen-icons/close.svg");
+  }
+
+  &.new-chat {
+    background-image: url("chrome://browser/skin/zen-icons/plus.svg");
+  }
+
+  &.back {
+    background-image: url("chrome://browser/skin/zen-icons/arrow-left.svg");
+  }
+
+  &.trash {
+    background-image: url("chrome://browser/skin/zen-icons/trash.svg");
+  }
+}
+
+.zendia-agent-log {
+  /* Rows measure their offsetTop from here (ZendiaAgentFollow.sys.mjs). */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  overflow-y: auto;
+  /* The conversation scrolls only up and down; anything wide scrolls in
+     its own box. */
+  overflow-x: hidden;
+  min-height: 0;
+  flex: 1;
+}
+
+.zendia-agent-empty {
+  margin: auto 8px;
+  text-align: center;
+}
+
+.zendia-agent-empty-title {
+  margin-bottom: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--zendia-accent);
+}
+
+.zendia-agent-empty-detail {
+  line-height: 1.45;
+  color: var(--zendia-agent-muted);
+}
+
+.zendia-agent-message {
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+
+  &[type="user"] {
+    align-self: flex-end;
+    max-width: 85%;
+    padding: 7px 12px;
+    border-radius: 14px 14px 4px 14px;
+    background-color: color-mix(in srgb, var(--zendia-agent-user) 20%, transparent);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-user) 40%, transparent);
+  }
+
+  &[type="agent"] {
+    white-space: normal;
+  }
+
+  &:is([type="step"], [type="tool"]) {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    font-size: 12px;
+    color: var(--zendia-agent-muted);
+  }
+
+  &[type="tool"] {
+    padding-inline-start: 20px;
+    font-style: italic;
+  }
+
+  &[type="note"] {
+    align-self: center;
+    font-size: 11px;
+    color: var(--zendia-agent-muted);
+  }
+
+  &[type="error"] {
+    color: var(--zendia-error);
+  }
+
+  &[type="confirm"] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background-color: color-mix(in srgb, var(--zendia-agent-confirm) 18%, transparent);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-confirm) 50%, transparent);
+  }
+
+  /* A table or page the agent shows (ZendiaAgentUiView). */
+  &[type="ui"] {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background-color: color-mix(in srgb, var(--zendia-agent-border) 18%, transparent);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-border) 70%, transparent);
+    white-space: normal;
+    overflow-wrap: normal;
+    /* Never wider than the log: what is wider scrolls inside it. */
+    min-width: 0;
+  }
+}
+
+/* In a narrow panel the filter and buttons go below the title rather than
+   squeeze it away. */
+.zendia-ui-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.zendia-ui-title {
+  flex: 1 0 10em;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zendia-ui-count {
+  flex: none;
+  color: var(--zendia-agent-muted);
+  font-size: 11px;
+}
+
+.zendia-ui-filter,
+.zendia-ui-button {
+  flex: none;
+  height: 24px;
+  border: 0.5px solid var(--zendia-agent-border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: 1px;
+  }
+}
+
+.zendia-ui-filter {
+  width: 9em;
+  padding: 0 8px;
+
+  &[hidden] {
+    display: none;
+  }
+
+  &::placeholder {
+    color: var(--zendia-agent-muted);
+    opacity: 1;
+  }
+}
+
+.zendia-ui-button {
+  padding: 0 10px;
+  cursor: pointer;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--zendia-agent-border) 35%, transparent);
+  }
+}
+
+/* A table wider than the panel scrolls sideways in its own box, its cells
+   wrapping only between words. */
+.zendia-ui-scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.zendia-ui-table {
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+
+  & :is(th, td) {
+    padding: 4px 8px;
+    border-bottom: 0.5px solid var(--zendia-md-rule);
+    text-align: start;
+    vertical-align: top;
+
+    &[numeric] {
+      text-align: end;
+      font-variant-numeric: tabular-nums;
+    }
+  }
+
+  & th {
+    padding: 0;
+    white-space: nowrap;
+  }
+
+  & tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  & tr[link] {
+    cursor: pointer;
+
+    &:hover {
+      background-color: color-mix(in srgb, var(--zendia-accent) 10%, transparent);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--zendia-accent);
+      outline-offset: -2px;
+    }
+  }
+
+  /* Rows an update from the agent added. */
+  & tr[fresh] {
+    animation: zendia-ui-fresh 1.6s ease-out;
+  }
+}
+
+@keyframes zendia-ui-fresh {
+  from {
+    background-color: color-mix(in srgb, var(--zendia-accent) 28%, transparent);
+  }
+}
+
+.zendia-ui-sort {
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--zendia-md-table-head);
+  font: inherit;
+  font-weight: 700;
+  text-align: inherit;
+  cursor: pointer;
+
+  th[numeric] > & {
+    text-align: end;
+  }
+
+  th[aria-sort="ascending"] > &::after {
+    content: " ▲";
+  }
+
+  th[aria-sort="descending"] > &::after {
+    content: " ▼";
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: -2px;
+  }
+}
+
+.zendia-ui-note {
+  margin: 0;
+  color: var(--zendia-agent-muted);
+  font-size: 11px;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.zendia-ui-placeholder {
+  color: var(--zendia-agent-muted);
+  font-size: 12px;
+  animation: zendia-agent-pulse 1.2s ease-in-out infinite;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+/* A page, in a content process of its own; its height follows the page. */
+.zendia-ui-browser {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  border-radius: 8px;
+  overflow: hidden;
+
+  &[collapsed-page] {
+    visibility: hidden;
+  }
+}
+
+/* The agent's answers, in Markdown, each part in its theme color. */
+.zendia-md {
+  & > :first-child {
+    margin-top: 0;
+  }
+
+  & > :last-child {
+    margin-bottom: 0;
+  }
+
+  & :is(p, ul, ol, pre, blockquote, .zendia-md-table) {
+    margin: 0 0 8px;
+  }
+
+  & :is(h1, h2, h3, h4, h5, h6) {
+    margin: 14px 0 6px;
+    font-size: 1em;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+
+  & h1 {
+    font-size: 1.3em;
+    color: var(--zendia-md-h1);
+  }
+
+  & h2 {
+    font-size: 1.15em;
+    color: var(--zendia-md-h2);
+  }
+
+  & h3 {
+    font-size: 1.05em;
+    color: var(--zendia-md-h3);
+  }
+
+  & h4 {
+    color: var(--zendia-md-h4);
+  }
+
+  & h5 {
+    color: var(--zendia-md-h5);
+  }
+
+  & h6 {
+    color: var(--zendia-md-h6);
+  }
+
+  & strong {
+    font-weight: 700;
+    color: var(--zendia-md-strong);
+  }
+
+  & em {
+    color: var(--zendia-md-em);
+  }
+
+  & del {
+    color: var(--zendia-agent-muted);
+  }
+
+  & a {
+    color: var(--zendia-md-link);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--zendia-md-link) 45%, transparent);
+    text-underline-offset: 2px;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration-color: currentColor;
+    }
+  }
+
+  & code {
+    padding: 1px 5px;
+    border-radius: 5px;
+    background-color: color-mix(in srgb, var(--zendia-md-code-background) 85%, transparent);
+    color: var(--zendia-md-code);
+    font: 0.92em/1.4 ui-monospace, monospace;
+  }
+
+  & pre {
+    padding: 10px 12px;
+    border-radius: 10px;
+    border-inline-start: 2px solid var(--zendia-accent);
+    background-color: color-mix(in srgb, var(--zendia-md-code-background) 85%, transparent);
+    overflow-x: auto;
+
+    &[data-lang]::before {
+      content: attr(data-lang);
+      display: block;
+      margin-bottom: 6px;
+      color: var(--zendia-agent-muted);
+      font: 600 10px/1 ui-monospace, monospace;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    & code {
+      padding: 0;
+      background: none;
+      color: var(--zendia-agent-text);
+      white-space: pre;
+    }
+  }
+
+  & :is(ul, ol) {
+    padding-inline-start: 20px;
+  }
+
+  & li {
+    margin: 3px 0;
+
+    & > p {
+      margin: 0;
+    }
+
+    & > :is(ul, ol) {
+      margin: 3px 0 0;
+    }
+
+    &::marker {
+      color: var(--zendia-md-bullet);
+    }
+  }
+
+  & ol > li::marker {
+    font-variant-numeric: tabular-nums;
+  }
+
+  & blockquote {
+    padding-inline-start: 10px;
+    border-inline-start: 3px solid var(--zendia-md-quote);
+    color: var(--zendia-agent-muted);
+  }
+
+  & hr {
+    margin: 12px 0;
+    border: none;
+    border-top: 1px solid var(--zendia-md-rule);
+  }
+
+  /* A table wider than the panel scrolls sideways. Its cells wrap only
+     between words: the message's overflow-wrap: anywhere would squeeze the
+     table to fit, a letter or two per line. */
+  & .zendia-md-table {
+    overflow-x: auto;
+  }
+
+  & table {
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  & :is(th, td) {
+    padding: 4px 8px;
+    border: 1px solid var(--zendia-md-rule);
+    text-align: start;
+    overflow-wrap: normal;
+  }
+
+  & th {
+    white-space: nowrap;
+    color: var(--zendia-md-table-head);
+    font-weight: 700;
+  }
+}
+
+.zendia-agent-step-icon {
+  width: 12px;
+  flex-shrink: 0;
+  text-align: center;
+
+  [status="done"] > & {
+    color: var(--zendia-success);
+  }
+
+  [status="failed"] > & {
+    color: var(--zendia-error);
+  }
+}
+
+.zendia-agent-step-detail {
+  opacity: 0.8;
+}
+
+@keyframes zendia-agent-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+/* A status dot ticks rather than breathes: six quick steps down, a long
+   hold, six steps back, a long hold. */
+@keyframes zendia-agent-tick {
+  0% {
+    opacity: 1;
+    animation-timing-function: steps(6);
+  }
+
+  10% {
+    opacity: 0.5;
+  }
+
+  50% {
+    opacity: 0.5;
+    animation-timing-function: steps(6);
+  }
+
+  60%,
+  100% {
+    opacity: 1;
+  }
+}
+
+.zendia-agent-composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 10px 10px;
+  padding: 12px 10px 8px 14px;
+  border-radius: 22px;
+  background-color: color-mix(in srgb, var(--zendia-raised) 55%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-border) 80%, transparent);
+
+  &:focus-within {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--zendia-accent) 70%, transparent);
+  }
+
+}
+
+/* Files held over the panel, to be dropped on it. */
+#zendia-agent-dock[dragging]::after {
+  content: "Drop to attach";
+  position: absolute;
+  z-index: 3;
+  inset: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--zendia-accent);
+  border-radius: 14px;
+  background-color: color-mix(in srgb, var(--zendia-accent) 16%, var(--zendia-agent-surface));
+  color: var(--zendia-accent);
+  font-size: 15px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* The composer's bottom row: attach on the left, the instructions and send on
+   the right, all round. */
+.zendia-agent-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.zendia-agent-round-button {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  corner-shape: round;
+  background-color: color-mix(in srgb, var(--zendia-agent-text) 10%, transparent);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 16px;
+  -moz-context-properties: fill;
+  fill: var(--zendia-agent-text);
+  color: inherit;
+  transition: background-color 120ms, fill 120ms, opacity 120ms;
+
+  &:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--zendia-agent-text) 18%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: 2px;
+  }
+
+  /* Bare until the mouse is on it, so the send button is the one that
+     stands out. */
+  &.attach {
+    background-color: transparent;
+    color: var(--zendia-agent-muted);
+
+    &::before {
+      content: "";
+      width: 18px;
+      height: 18px;
+      background-color: currentColor;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21 11-8.9 8.9a6 6 0 0 1-8.5-8.5l8.9-8.9a4 4 0 0 1 5.7 5.7l-8.9 8.9a2 2 0 0 1-2.8-2.8l8.2-8.2'/%3E%3C/svg%3E") center / contain no-repeat;
+    }
+
+    &:hover {
+      color: var(--zendia-agent-text);
+    }
+  }
+
+  /* Opens the instructions: tinted in the brand's accent, solid while any is
+     on. */
+  &.instructions {
+    background-color: color-mix(in srgb, var(--zendia-accent) 24%, transparent);
+    background-image: url("chrome://browser/skin/zen-icons/sparkles.svg");
+    fill: var(--zendia-accent);
+
+    &:hover {
+      background-color: color-mix(in srgb, var(--zendia-accent) 36%, transparent);
+    }
+
+    &[active] {
+      background-color: var(--zendia-accent);
+      fill: light-dark(#ffffff, var(--zendia-ink));
+
+      &:hover {
+        background-color: color-mix(in srgb, var(--zendia-accent) 85%, var(--zendia-agent-text));
+      }
+    }
+  }
+
+  &.send {
+    background-color: var(--zendia-accent);
+    background-image: url("chrome://browser/skin/zen-icons/arrow-up.svg");
+    fill: light-dark(#ffffff, var(--zendia-ink));
+
+    &:hover:not(:disabled) {
+      background-color: color-mix(in srgb, var(--zendia-accent) 85%, var(--zendia-agent-text));
+    }
+
+    &:disabled {
+      background-color: color-mix(in srgb, var(--zendia-agent-text) 10%, transparent);
+      fill: var(--zendia-agent-muted);
+      opacity: 0.7;
+    }
+
+    /* While the agent works it stops it: a square in place of the arrow. */
+    &[running] {
+      background-image: none;
+
+      &::before {
+        content: "";
+        width: 11px;
+        height: 11px;
+        border-radius: 2px;
+        background-color: light-dark(#ffffff, var(--zendia-ink));
+      }
+    }
+  }
+}
+
+.zendia-agent-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.zendia-agent-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  corner-shape: round;
+  background-color: color-mix(in srgb, var(--zendia-agent-text) 10%, transparent);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.zendia-agent-attachment-name {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zendia-agent-attachment-size {
+  flex: none;
+  font-size: 11px;
+  color: var(--zendia-agent-muted);
+}
+
+.zendia-agent-attachment-x {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  corner-shape: round;
+  background-color: transparent;
+  background-image: url("chrome://browser/skin/zen-icons/close.svg");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 10px;
+  -moz-context-properties: fill;
+  fill: var(--zendia-agent-muted);
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--zendia-agent-text) 16%, transparent);
+    fill: var(--zendia-agent-text);
+  }
+}
+
+/* A picture or video attached: its preview, rounded, with a cross on its
+   corner. */
+.zendia-agent-attachment-tile {
+  position: relative;
+  /* A span is sized only as a flex item; the instructions' slot is a block. */
+  display: block;
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  overflow: hidden;
+  background-color: color-mix(in srgb, var(--zendia-agent-text) 10%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-border) 80%, transparent);
+
+  & > :is(img, video) {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  /* A mark that it is a video. */
+  &[kind="video"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background-color: rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+  }
+
+  &[kind="video"]::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    margin: auto;
+    width: 0;
+    height: 0;
+    border-block: 6px solid transparent;
+    border-inline-start: 10px solid #ffffff;
+    translate: 2px 0;
+    pointer-events: none;
+  }
+
+  & > .zendia-agent-attachment-x {
+    position: absolute;
+    z-index: 2;
+    top: 4px;
+    inset-inline-end: 4px;
+    width: 20px;
+    height: 20px;
+    background-color: rgba(0, 0, 0, 0.6);
+    background-size: 10px;
+    fill: #ffffff;
+
+    &:hover {
+      background-color: rgba(0, 0, 0, 0.85);
+      fill: #ffffff;
+    }
+  }
+}
+
+/* The files of a request already sent, under its text. */
+.zendia-agent-sent-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+
+  & .zendia-agent-attachment {
+    padding: 1px 9px;
+    background-color: color-mix(in srgb, var(--zendia-agent-user) 22%, transparent);
+  }
+}
+
+/* The instructions page, over the whole panel. */
+.zendia-agent-instructions {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px;
+  background-color: var(--zendia-agent-surface);
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+/* Padding counts inside each box's width, so nothing is wider than the page. */
+.zendia-agent-instructions :is(*, ::before, ::after) {
+  box-sizing: border-box;
+}
+
+.zendia-agent-instructions-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.zendia-agent-instructions-title {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.zendia-agent-instructions-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  /* The page scrolls only up and down. */
+  overflow-x: hidden;
+}
+
+.zendia-agent-instructions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.zendia-agent-instructions-empty {
+  margin: 4px 6px;
+  line-height: 1.45;
+  color: var(--zendia-agent-muted);
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.zendia-agent-instruction {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  background-color: color-mix(in srgb, var(--zendia-raised) 70%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-border) 80%, transparent);
+
+  &:focus-within {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--zendia-accent) 70%, transparent);
+  }
+
+  animation: zendia-agent-rise 260ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+
+  /* Cards come in one after another. */
+  &:nth-child(2) {
+    animation-delay: 50ms;
+  }
+
+  &:nth-child(3) {
+    animation-delay: 100ms;
+  }
+
+  &:nth-child(n + 4) {
+    animation-delay: 140ms;
+  }
+
+  /* Switched off: kept, but not followed. */
+  &[off] .zendia-agent-instruction-title,
+  &[off] .zendia-agent-instruction-text {
+    opacity: 0.55;
+  }
+}
+
+.zendia-agent-instruction-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.zendia-agent-switch {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  corner-shape: round;
+  background-color: color-mix(in srgb, var(--zendia-agent-text) 22%, transparent);
+  transition: background-color 160ms;
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    inset-inline-start: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    corner-shape: round;
+    background-color: light-dark(#ffffff, var(--zendia-agent-text));
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    transition: transform 220ms cubic-bezier(0.34, 1.4, 0.64, 1), background-color 160ms;
+  }
+
+  &[aria-checked="true"] {
+    background-color: var(--zendia-accent);
+
+    &::before {
+      transform: translateX(16px);
+      background-color: light-dark(#ffffff, var(--zendia-ink));
+    }
+
+    &:dir(rtl)::before {
+      transform: translateX(-16px);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: 2px;
+  }
+}
+
+.zendia-agent-instruction-title {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+
+  &::placeholder {
+    color: var(--zendia-agent-muted);
+    opacity: 1;
+  }
+}
+
+/* The file beside the text: a button to attach one, or its preview. */
+.zendia-agent-instruction-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.zendia-agent-instruction-file {
+  flex: none;
+  width: 72px;
+}
+
+.zendia-agent-instruction-file-add {
+  display: block;
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border: 1.5px dashed color-mix(in srgb, var(--zendia-agent-muted) 70%, transparent);
+  border-radius: 16px;
+  background-color: transparent;
+  background-image: url("chrome://browser/skin/zen-icons/plus.svg");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 18px;
+  -moz-context-properties: fill;
+  fill: var(--zendia-agent-muted);
+  transition: border-color 120ms, background-color 120ms, fill 120ms;
+
+  &:hover {
+    border-color: var(--zendia-accent);
+    background-color: color-mix(in srgb, var(--zendia-accent) 12%, transparent);
+    fill: var(--zendia-accent);
+  }
+}
+
+/* A file held over the card, to be dropped on it. */
+.zendia-agent-instruction[dragging] {
+  box-shadow: inset 0 0 0 1.5px var(--zendia-accent);
+
+  & .zendia-agent-instruction-file-add {
+    border-color: var(--zendia-accent);
+    background-color: color-mix(in srgb, var(--zendia-accent) 20%, transparent);
+    fill: var(--zendia-accent);
+  }
+}
+
+/* A document in place of a picture: its kind, then its name. */
+.zendia-agent-attachment-tile[kind="doc"] {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px;
+  background-color: color-mix(in srgb, var(--zendia-accent) 16%, transparent);
+}
+
+.zendia-agent-doc-ext {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--zendia-accent);
+}
+
+.zendia-agent-doc-name {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 10px;
+  color: var(--zendia-agent-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zendia-agent-instruction-error {
+  font-size: 11px;
+  color: var(--zendia-warning);
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.zendia-agent-instruction-text {
+  flex: 1;
+  min-width: 0;
+  min-height: 72px;
+  margin: 0;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  outline: none;
+  /* It grows with its text (the view fits its height), so no grip. */
+  resize: none;
+  max-height: 260px;
+  overflow-y: auto;
+  background-color: color-mix(in srgb, var(--zendia-agent-surface) 60%, transparent);
+  color: inherit;
+  font: inherit;
+  line-height: 1.45;
+
+  &::placeholder {
+    color: var(--zendia-agent-muted);
+    opacity: 1;
+  }
+}
+
+.zendia-agent-instructions-add,
+.zendia-agent-instructions-done {
+  flex: none;
+  padding: 9px 16px;
+  border-radius: 999px;
+  corner-shape: round;
+  font: inherit;
+  font-weight: 600;
+}
+
+.zendia-agent-instructions-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0.5px solid var(--zendia-agent-border);
+  background: transparent;
+  color: inherit;
+
+  &:hover {
+    border-color: var(--zendia-accent);
+  }
+
+  & .plus {
+    width: 14px;
+    height: 14px;
+    background-color: currentColor;
+    mask: url("chrome://browser/skin/zen-icons/plus.svg") center / contain no-repeat;
+  }
+}
+
+.zendia-agent-instructions-done {
+  border: none;
+  background-color: var(--zendia-accent);
+  color: light-dark(#ffffff, var(--zendia-ink));
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--zendia-accent) 85%, var(--zendia-agent-text));
+  }
+}
+
+.zendia-agent-instructions :is(button:focus-visible) {
+  outline: 2px solid var(--zendia-accent);
+  outline-offset: 2px;
+}
+
+.zendia-agent-chip {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 9px 3px 5px;
+  border: none;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--zendia-agent-color) 18%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-color) 38%, transparent);
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  transition: background-color 120ms ease;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--zendia-agent-color) 28%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: 1px;
+  }
+}
+
+/* A small caret that says the chip opens a list. */
+.zendia-agent-chip-caret {
+  width: 5px;
+  height: 5px;
+  margin-top: -2px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  opacity: 0.55;
+  transform: rotate(45deg);
+}
+
+/* An agent's logo, a circle: a brand tile (Kiro) fills it, any other
+   mark sits on a white badge, one-color ones in dark ink. */
+.zendia-agent-logo {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  overflow: hidden;
+  border-radius: 50%;
+  background-color: #ffffff;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.14);
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 17%;
+    background: var(--zendia-agent-logo) center / contain no-repeat;
+  }
+
+  &[full]::before {
+    inset: 5%;
+  }
+
+  &[tile] {
+    background: none;
+
+    &::before {
+      inset: 0;
+      background-size: cover;
+    }
+  }
+
+  &[mono]::before {
+    inset: 25%;
+    background: #211e1e;
+    mask: var(--zendia-agent-logo) center / contain no-repeat;
+  }
+
+  &[none] {
+    background: var(--zendia-agent-color);
+    transform: scale(0.45);
+    box-shadow: none;
+
+    &::before {
+      display: none;
+    }
+  }
+
+  &.large {
+    width: 44px;
+    height: 44px;
+    margin-bottom: 12px;
+    filter: drop-shadow(0 4px 12px color-mix(in srgb, var(--zendia-agent-color, var(--zendia-accent)) 35%, transparent));
+  }
+}
+
+.zendia-agent-empty > .zendia-agent-logo {
+  display: block;
+  margin-inline: auto;
+}
+
+.zendia-agent-install-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  & .zendia-agent-logo {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+/* The composer's model chip: the agent's mark, the model and the level that
+   is sent. It opens the card over itself. */
+.zendia-agent-model {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 220px;
+  height: 32px;
+  padding: 0 10px 0 7px;
+  overflow: hidden;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: color-mix(in srgb, var(--zendia-agent-text) 90%, transparent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background-color 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  &:hover,
+  &[aria-expanded] {
+    background-color: color-mix(in srgb, var(--zendia-agent-text) 11%, transparent);
+    color: var(--zendia-agent-text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: 1px;
+  }
+
+  &[hidden] {
+    display: none;
+  }
+
+  /* A model that cannot read pictures. */
+  &[text-only]::after {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--zendia-warning);
+  }
+}
+
+.zendia-agent-model-logo {
+  display: flex;
+  flex: none;
+
+  & .zendia-agent-logo {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.zendia-agent-model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Gives way first when the chip runs out of room. */
+.zendia-agent-model-effort {
+  flex-shrink: 1000;
+  min-width: 0;
+  color: var(--zendia-agent-muted);
+}
+
+/* The chip's card. Its height eases to whichever page it shows, from the end
+   nearest the chip, so it needs a height set by hand. */
+@property --zendia-effort-f {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+@keyframes zendia-model-in {
+  from {
+    opacity: 0.3;
+    translate: 0 var(--zendia-model-travel);
+  }
+}
+
+@keyframes zendia-model-out {
+  to {
+    opacity: 0;
+    translate: 0 calc(var(--zendia-model-travel) / 2);
+  }
+}
+
+.zendia-model-card {
+  --zendia-model-travel: 4px;
+  --zendia-model-inner: calc(var(--zendia-float-radius) - 4px);
+  /* Everything that lights up under the mouse or the keys. */
+  --zendia-model-wash: color-mix(in srgb, var(--zendia-accent) 14%, transparent);
+  --zendia-model-active: color-mix(in srgb, var(--zendia-accent) 22%, transparent);
+
+  box-sizing: border-box;
+  /* No shadow, and the composer's border at rest. */
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-border) 80%, transparent);
+  color: var(--zendia-agent-text);
+  width: 256px;
+  max-height: var(--zendia-model-room, none);
+  padding: 0;
+  overflow: hidden;
+  animation: zendia-model-in 140ms cubic-bezier(0.25, 0.1, 0.25, 1) backwards;
+  transition: height 200ms cubic-bezier(0, 0, 0.58, 1);
+
+  &,
+  &:focus-visible {
+    outline: none;
+  }
+
+  &[placement="below"] {
+    --zendia-model-travel: -4px;
+  }
+
+  /* Faster out than in, and only part of the way back to the chip. */
+  &[leaving] {
+    pointer-events: none;
+    animation: zendia-model-out 100ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+  }
+
+  &[submenu] {
+    --zendia-model-travel: -2px;
+
+    gap: 2px;
+    width: 232px;
+    padding: 4px;
+  }
+}
+
+.zendia-model-page {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 4px;
+}
+
+.zendia-model-title {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  height: 48px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--zendia-model-inner);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  transition: background-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  &[single] {
+    height: 36px;
+
+    & .zendia-model-name {
+      color: inherit;
+      font-size: 14px;
+      font-weight: 600;
+    }
+  }
+
+  &:hover {
+    background-color: var(--zendia-model-wash);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: -2px;
+  }
+}
+
+.zendia-model-effort {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 17px;
+}
+
+.zendia-model-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  color: var(--zendia-agent-muted);
+  font-size: 12px;
+  line-height: 15px;
+  transition: color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  .zendia-model-title:hover & {
+    color: inherit;
+  }
+}
+
+.zendia-model-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Leans toward what it opens while the mouse is on its row. */
+.zendia-model-chevron {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border: solid currentColor;
+  border-width: 1.5px 1.5px 0 0;
+  opacity: 0.55;
+  transform: rotate(45deg);
+  transition:
+    opacity 150ms var(--zendia-ease-out),
+    translate 150ms var(--zendia-ease-out);
+
+  :is(.zendia-model-title, .zendia-model-option[choice]):hover & {
+    opacity: 1;
+    translate: 3px 0;
+  }
+}
+
+/* The rail runs behind everything; the fill and the dots follow one eased
+   number, so they stay together. While held, the number is the pointer's. */
+.zendia-effort {
+  --zendia-effort-span: calc(100% - 40px);
+
+  position: relative;
+  flex: none;
+  height: 28px;
+  margin: 2px 8px 4px;
+  container-type: inline-size;
+  outline: none;
+  touch-action: none;
+  transition: --zendia-effort-f 200ms cubic-bezier(0, 0, 0.58, 1);
+
+  &[dragging] {
+    transition: none;
+  }
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 4px 0;
+    border-radius: 999px;
+    background-color: color-mix(in srgb, var(--zendia-agent-border) 38%, transparent);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-border) 60%, transparent);
+  }
+}
+
+.zendia-effort-stops {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100cqw;
+  height: 28px;
+
+  .zendia-effort-fill > & {
+    top: -4px;
+  }
+}
+
+.zendia-effort-stop {
+  position: absolute;
+  top: 12px;
+  left: calc(20px + var(--zendia-effort-stop) * (100cqw - 40px) - 2px);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: color-mix(in srgb, var(--zendia-agent-muted) 55%, transparent);
+
+  /* The level colors are deep in a light theme and pale in a dark one. */
+  .zendia-effort-fill & {
+    background-color: light-dark(rgba(255, 255, 255, 0.6), rgba(27, 29, 43, 0.4));
+  }
+}
+
+/* Ends under the thumb, which hides its rounded end. */
+.zendia-effort-fill {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  width: calc(32px + var(--zendia-effort-f) * var(--zendia-effort-span));
+  height: 20px;
+  overflow: hidden;
+  border-radius: 999px;
+  background-color: var(--zendia-effort-color, var(--zendia-accent));
+  background-image: linear-gradient(rgba(255, 255, 255, 0.16), transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transition:
+    background-color 200ms cubic-bezier(0, 0, 0.58, 1),
+    opacity 150ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* The agent's own setting decides until a level is picked. */
+  .zendia-effort[unset] > & {
+    opacity: 0.5;
+  }
+}
+
+/* Taller than the rail so it reads as the thing to grab. It keeps its size
+   when pressed and only lifts. */
+.zendia-effort-thumb {
+  position: absolute;
+  top: 1px;
+  left: calc(var(--zendia-effort-f) * var(--zendia-effort-span));
+  width: 40px;
+  height: 26px;
+  border-radius: 999px;
+  background-image: linear-gradient(#ffffff, #f6f6f6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 0 0 0.5px rgba(0, 0, 0, 0.12),
+    0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: box-shadow 200ms cubic-bezier(0, 0, 0.58, 1);
+
+  .zendia-effort[dragging] > & {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.8),
+      0 0 0 0.5px rgba(0, 0, 0, 0.12),
+      0 1px 2px rgba(0, 0, 0, 0.2),
+      0 2px 8px rgba(0, 0, 0, 0.14);
+  }
+
+  .zendia-effort:focus-visible > & {
+    outline: 2px solid var(--zendia-effort-color, var(--zendia-accent));
+    outline-offset: 1px;
+  }
+}
+
+.zendia-model-option {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  margin-top: 2px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 13px;
+  transition: background-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  & > :first-child {
+    flex: 1;
+    min-width: 0;
+  }
+
+  &[choice]:hover,
+  &[choice][open] {
+    background-color: var(--zendia-model-active);
+  }
+}
+
+.zendia-model-value {
+  color: var(--zendia-agent-muted);
+}
+
+.zendia-model-tag {
+  color: var(--zendia-agent-muted);
+  font-size: 10px;
+  font-weight: 600;
+
+  &[tone="warn"] {
+    color: var(--zendia-warning);
+  }
+
+  &[tone="good"] {
+    color: var(--zendia-success);
+  }
+}
+
+.zendia-model-choice {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 13px;
+
+  & > :first-child {
+    flex: 1;
+  }
+
+  &:hover,
+  &[active] {
+    background-color: var(--zendia-model-active);
+  }
+
+  &[selected] {
+    color: var(--zendia-accent);
+    font-weight: 600;
+  }
+
+  &[selected]::after {
+    content: "✓";
+    font-size: 12px;
+  }
+}
+
+.zendia-model-list-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 36px;
+  padding-bottom: 4px;
+  border-bottom: 0.5px solid var(--zendia-agent-border);
+}
+
+.zendia-model-back {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--zendia-model-inner);
+  background: transparent;
+  color: inherit;
+
+  &::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border: solid currentColor;
+    border-width: 0 0 1.5px 1.5px;
+    transform: translateX(1px) rotate(45deg);
+  }
+
+  &:hover {
+    background-color: var(--zendia-model-wash);
+  }
+}
+
+.zendia-model-search {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 4px;
+  border: none;
+  outline: none;
+  background: transparent;
+  caret-color: var(--zendia-accent);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+
+  &::placeholder {
+    color: var(--zendia-agent-muted);
+    opacity: 1;
+  }
+}
+
+/* Seven rows, or what fits, then it scrolls. */
+.zendia-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: min(246px, calc(var(--zendia-model-room, 246px) - 78px));
+  margin-top: 4px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--zendia-scrollbar) 45%, transparent) transparent;
+}
+
+/* The highlight follows the keys and the mouse at once, with no fade. */
+.zendia-model-row {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+
+  &[active] {
+    background-color: var(--zendia-model-active);
+  }
+
+  &[selected] {
+    color: var(--zendia-accent);
+    font-weight: 600;
+  }
+
+  &[selected]::after {
+    content: "✓";
+    margin-inline-start: auto;
+    font-size: 12px;
+  }
+}
+
+/* The highlighted model's id and what its CLI says about it. */
+.zendia-model-detail {
+  flex: none;
+  box-sizing: border-box;
+  height: 26px;
+  margin-top: 4px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-top: 0.5px solid var(--zendia-agent-border);
+  color: var(--zendia-agent-muted);
+  font-size: 11px;
+  line-height: 25px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zendia-model-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zendia-model-none {
+  padding: 8px;
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+/* The end of the conversation. The lane stays when the working row leaves,
+   so the end of a turn moves nothing; while a request rests at the top of
+   the view it grows to hold that room (ZendiaAgentFollow.sys.mjs). */
+.zendia-agent-foot {
+  flex: none;
+  box-sizing: border-box;
+  min-height: 32px;
+  margin-top: -6px;
+}
+
+.zendia-agent-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  color: var(--zendia-agent-muted);
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+
+  &[shown] {
+    opacity: 1;
+    transition-duration: 120ms;
+  }
+}
+
+/* A ring takes its color from here, and each agent's is its own. */
+.zendia-working-ring {
+  flex: none;
+  color: var(--zendia-agent-color, var(--zendia-accent));
+}
+
+.zendia-agent-working-clock {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+/* A run of steps. Open while it works, folded once it is done, unless the
+   reader chose. */
+.zendia-agent-group {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.zendia-agent-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--zendia-agent-muted);
+  font: inherit;
+  font-size: 12px;
+  align-self: flex-start;
+  transition: color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  &:hover {
+    color: var(--zendia-agent-text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: 1px;
+  }
+}
+
+.zendia-agent-group-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+
+  /* One band of light crossing what it is doing now. */
+  .zendia-agent-group[live] & {
+    background-image: linear-gradient(
+      90deg,
+      var(--zendia-agent-muted) 38%,
+      var(--zendia-agent-text) 50%,
+      var(--zendia-agent-muted) 62%
+    );
+    background-size: 300% 100%;
+    background-clip: text;
+    color: transparent;
+    animation: zendia-agent-shimmer 3.4s linear infinite;
+  }
+}
+
+@keyframes zendia-agent-shimmer {
+  from {
+    background-position-x: 200%;
+  }
+
+  to {
+    background-position-x: -100%;
+  }
+}
+
+.zendia-agent-group-chevron {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  opacity: 0.55;
+  transform: rotate(-45deg);
+  transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1);
+
+  .zendia-agent-group[open] & {
+    transform: rotate(45deg);
+  }
+}
+
+.zendia-agent-group-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 200ms cubic-bezier(0.25, 1, 0.5, 1);
+
+  .zendia-agent-group[open] > & {
+    grid-template-rows: 1fr;
+  }
+}
+
+/* One hairline for the whole run: separate lines would darken where they
+   meet. */
+.zendia-agent-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  margin-inline-start: 5px;
+  padding-inline-start: 11px;
+  overflow: hidden;
+  border-inline-start: 1px solid color-mix(in srgb, var(--zendia-agent-text) 12%, transparent);
+
+  /* The line already sets it apart from the conversation. */
+  & > .zendia-agent-message[type="tool"] {
+    padding-inline-start: 0;
+    font-style: normal;
+  }
+
+  & > [fresh] {
+    animation: zendia-agent-step-in 360ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+}
+
+@keyframes zendia-agent-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* Over the composer once the reader has scrolled far from the end. */
+.zendia-agent-jump {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  height: 30px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 16px;
+  background-color: var(--zendia-agent-surface);
+  box-shadow:
+    inset 0 0 0 0.5px var(--zendia-float-outline),
+    0 4px 12px rgba(0, 0, 0, 0.18);
+  color: var(--zendia-agent-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  translate: -50% 8px;
+  transition:
+    opacity 120ms ease-out,
+    translate 120ms ease-out;
+
+  &[shown] {
+    opacity: 1;
+    pointer-events: auto;
+    translate: -50% 0;
+    transition:
+      opacity 180ms cubic-bezier(0.5, 1, 0.89, 1),
+      translate 180ms cubic-bezier(0.5, 1, 0.89, 1);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: 1px;
+  }
+}
+
+.zendia-agent-tab {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--zendia-agent-muted);
+}
+
+.zendia-agent-input {
+  width: 100%;
+  min-height: 22px;
+  margin: 0;
+  padding: 2px 0;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+
+  &::placeholder {
+    color: var(--zendia-agent-muted);
+    opacity: 1;
+  }
+}
+
+/* One line at most, so the composer does not grow with the hint. */
+.zendia-agent-hint {
+  padding-inline-start: 4px;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--zendia-agent-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &[warning] {
+    color: var(--zendia-warning);
+  }
+}
+
+.zendia-agent-button {
+  padding: 3px 10px;
+  border: 0.5px solid var(--zendia-agent-border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+
+  &.primary {
+    border-color: transparent;
+    background-color: var(--zendia-accent);
+    color: light-dark(#ffffff, var(--zendia-ink));
+    font-weight: 600;
+  }
+}
+
+/* What the attached files need and the model cannot read. */
+.zendia-agent-media-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background-color: color-mix(in srgb, var(--zendia-warning) 15%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-warning) 55%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+
+  &[hidden] {
+    display: none;
+  }
+
+  &[nudge] {
+    animation: zendia-agent-nudge 320ms ease;
+    box-shadow: inset 0 0 0 1.5px var(--zendia-warning);
+  }
+
+  & b {
+    font-weight: 600;
+  }
+}
+
+.zendia-agent-media-text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.zendia-agent-media-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@keyframes zendia-agent-nudge {
+  25% {
+    transform: translateX(-3px);
+  }
+
+  75% {
+    transform: translateX(3px);
+  }
+}
+
+/* Copy: on an answer's foot, a code block's corner and a request's top. */
+.zendia-agent-copy {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px 2px 5px;
+  border: none;
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--zendia-agent-muted);
+  font: inherit;
+  font-size: 11px;
+  -moz-context-properties: fill;
+  fill: currentColor;
+
+  &::before {
+    content: "";
+    width: 13px;
+    height: 13px;
+    background: url("chrome://browser/skin/zen-icons/edit-copy.svg") center / contain no-repeat;
+  }
+
+  &.labelled::after {
+    content: "Copy";
+  }
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--zendia-agent-text) 10%, transparent);
+    color: var(--zendia-agent-text);
+  }
+
+  &[copied] {
+    color: var(--zendia-success, var(--zendia-accent));
+
+    &::before {
+      background-image: url("chrome://browser/skin/zen-icons/check.svg");
+    }
+
+    &.labelled::after {
+      content: "Copied";
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+  }
+
+  /* On code, and on a request, only where the pointer is. */
+  &:is(.on-code, .on-user) {
+    position: absolute;
+    padding: 3px;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    background-color: color-mix(in srgb, var(--zendia-agent-surface) 80%, transparent);
+  }
+
+  &.on-code {
+    top: 6px;
+    right: 6px;
+  }
+
+  &.on-user {
+    top: -9px;
+    right: 8px;
+  }
+}
+
+.zendia-agent-actions {
+  display: flex;
+  margin-top: 4px;
+  margin-inline-start: -5px;
+
+  & .zendia-agent-copy {
+    opacity: 0.55;
+    transition: opacity 120ms ease;
+  }
+}
+
+.zendia-agent-message:hover .zendia-agent-actions .zendia-agent-copy,
+.zendia-agent-actions .zendia-agent-copy:focus-visible,
+.zendia-agent-actions .zendia-agent-copy[copied] {
+  opacity: 1;
+}
+
+.zendia-md pre:hover > .zendia-agent-copy.on-code,
+.zendia-agent-message[type="user"]:hover > .zendia-agent-copy.on-user,
+.zendia-agent-copy:is(.on-code, .on-user):is(:focus-visible, [copied]) {
+  opacity: 1;
+}
+
+.zendia-md pre,
+.zendia-agent-message[type="user"] {
+  position: relative;
+}
+
+.zendia-agent-install {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+
+  & code {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.7;
+    user-select: text;
+  }
+}
+
+.zendia-agent-install-row {
+  display: contents;
+}
+
+.zendia-agent-install-name {
+  font-weight: 600;
+}
+
+/* Under a closed dock: the agent still works on the tab, or has finished. */
+#zendia-agent-pill {
+  left: 50%;
+  bottom: 16px;
+  translate: -50% 0;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 12px;
+  border: none;
+  border-radius: 999px;
+  font-size: 12px;
+  transform-origin: 50% 100%;
+  transition:
+    opacity 180ms ease-out,
+    transform 300ms var(--zendia-spring);
+
+  @starting-style {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
+  }
+
+  &[leaving] {
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+    transition:
+      opacity 110ms var(--zendia-ease-in),
+      transform 110ms var(--zendia-ease-in);
+  }
+
+  &::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--zendia-agent-color);
+  }
+
+  &[running]::before {
+    animation: zendia-agent-tick 2s infinite;
+  }
+}
+
+/* The slid-out panel's edge, a strip along the page's side with a bar in
+   the agent's color; resting the mouse on it slides the panel back in. */
+#zendia-agent-handle {
+  position: absolute;
+  z-index: 2147483646;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+
+  &[side="right"] {
+    right: -4px;
+  }
+
+  &[side="left"] {
+    left: -4px;
+  }
+
+  &[hidden] {
+    display: none;
+  }
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    inset-inline-start: 3px;
+    width: 4px;
+    height: 56px;
+    border-radius: 2px;
+    background-color: var(--zendia-agent-color);
+    opacity: 0.6;
+    translate: 0 -50%;
+    transition:
+      height 0.15s ease-out,
+      opacity 0.15s ease-out;
+  }
+
+  &:hover::before,
+  &[unseen]::before {
+    height: 88px;
+    opacity: 1;
+  }
+
+  &[running]::before {
+    animation: zendia-agent-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes zendia-agent-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* The tab the agent works on glows in the agent's color, over the page. */
+.browserStack[zendia-agent-driving]::after {
+  content: "";
+  grid-area: 1 / 1;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 2px var(--zendia-agent-color),
+    inset 0 0 28px color-mix(in srgb, var(--zendia-agent-color) 45%, transparent);
+  animation: zendia-agent-pulse 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zendia-agent-step-icon,
+  .zendia-agent-instruction,
+  .zendia-agent-switch,
+  .zendia-agent-switch::before,
+  .zendia-agent-logo,
+  #zendia-agent-pill::before,
+  #zendia-agent-handle::before,
+  .zendia-agent-grip::before,
+  .zendia-ui-table tr[fresh],
+  .zendia-ui-placeholder,
+  .browserStack[zendia-agent-driving]::after,
+  .zendia-picker,
+  .zendia-picker-cursor,
+  .zendia-picker-item,
+  .zendia-picker-key,
+  .zendia-picker-icon-plate,
+  .zendia-model-card,
+  .zendia-model-title,
+  .zendia-model-name,
+  .zendia-model-chevron,
+  .zendia-model-option,
+  .zendia-effort,
+  .zendia-effort-fill,
+  .zendia-effort-thumb,
+  .zendia-agent-model,
+  .zendia-agent-working,
+  .zendia-agent-group-head,
+  .zendia-agent-group-title,
+  .zendia-agent-group-chevron,
+  .zendia-agent-group-fold,
+  .zendia-agent-group-body > [fresh],
+  .zendia-agent-jump,
+  #zendia-which-key,
+  #zendia-agent-pill,
+  #urlbar[breakout-extend] :is(.urlbar-background, .urlbar-input-container, .urlbarView, .urlbarView-row) {
+    animation: none !important;
+    transition: none !important;
+  }
+}

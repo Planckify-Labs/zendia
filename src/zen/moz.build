@@ -13,7 +13,6 @@ DIRS += [
     "drag-and-drop",
     "glance",
     "kbs",
-    "lazyvimium",
     "library",
     "live-folders",
     "media",
@@ -29,4 +28,5 @@ DIRS += [
     "sync",
     "tabs",
     "window-drag",
+    "zendia",
 ]

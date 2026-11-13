@@ -11,7 +11,6 @@ BROWSER_CHROME_MANIFESTS += [
     "folders/browser.toml",
     "glance/browser.toml",
     "kbs/browser.toml",
-    "lazyvimium/browser.toml",
     "library/browser.toml",
     "live-folders/browser.toml",
     "media/browser.toml",
@@ -31,10 +30,11 @@ BROWSER_CHROME_MANIFESTS += [
     "welcome/browser.toml",
     "window_drag/browser.toml",
     "window_sync/browser.toml",
+    "zendia/browser.toml",
 ]
 
 XPCSHELL_TESTS_MANIFESTS += [
-    "lazyvimium/xpcshell.toml",
+    "zendia/xpcshell.toml",
 ]
 
 DIRS += [

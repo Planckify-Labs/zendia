@@ -1,0 +1,48 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+- name: zendia.enabled
+  value: true
+
+- name: zendia.leader
+  value: "<Space>"
+
+- name: zendia.timeoutlen
+  value: 300 # in milliseconds; LazyVim lowers vim's 1000 for which-key
+
+- name: zendia.statusline.enabled
+  value: true
+
+- name: zendia.ublock.enabled
+  value: true # install uBlock Origin from AMO when it is missing; turned off when the user removes it
+
+- name: zendia.agent.default
+  value: "" # an agent id (claude, codex, cursor, antigravity, opencode, kiro); empty picks the first installed
+
+- name: zendia.agent.layout
+  value: "float" # float over the page, slide in from the side and hide when the mouse leaves, or split beside the tab
+
+- name: zendia.agent.side
+  value: "right" # the side the agent panel slides in from: left or right
+
+- name: zendia.agent.width
+  value: 420 # the agent panel's width, in pixels; dragging its inner edge sets it, and it never gets narrower than 420
+
+- name: zendia.agent.split-fallback
+  value: "float" # how a split agent panel lays out while the tab has no room for it: float or slide
+
+- name: zendia.theme
+  value: "" # JSON overrides for zendia's colors, see ui/ZendiaTheme.sys.mjs
+
+- name: zendia.agent.log.enabled
+  value: true # a JSONL trace per conversation in <profile>/zendia/agent/logs, <leader>al opens it
+
+- name: zendia.agent.log.stdout
+  value: false # also a one-line summary per entry on stdout; npm run dev turns it on
+
+- name: zendia.agent.network
+  value: true # agents read the requests a page made (network_list, network_read); recording starts when the agent panel first opens and keeps the latest 300 requests per tab, text bodies up to 1 MB each, 24 MB in all
+
+- name: zendia.agent.a11y
+  value: false # agents read control names, descriptions and states from Gecko's accessibility tree; off by default: it keeps the engine on in the page's process (tens of MB, slower loads) and adds about 1% to what an agent reads

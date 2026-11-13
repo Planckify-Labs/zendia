@@ -84,14 +84,11 @@ add_task(async function test_Welcome_Steps() {
   ok(true, "Welcome start button clicked successfully");
   // Vim mode is offered later in the onboarding, not assumed before it.
   Assert.equal(
-    document.getElementById("lazyvimium-statusline")?.style.display,
+    document.getElementById("zendia-statusline")?.style.display,
     "none",
     "No vim mode indicator during the onboarding"
   );
-  ok(
-    !root.hasAttribute("lazyvimium-mode"),
-    "Nor a vim mode color on the window"
-  );
+  ok(!root.hasAttribute("zendia-mode"), "Nor a vim mode color on the window");
   Assert.notEqual(
     window.windowState,
     window.STATE_MAXIMIZED,
@@ -237,35 +234,35 @@ add_task(async function test_Welcome_Steps() {
   );
   await BrowserTestUtils.closeWindow(wizardWin);
   await TestUtils.waitForCondition(
-    () => currentPageContent()?.getAttribute("page") === "lazyvimium-keys",
+    () => currentPageContent()?.getAttribute("page") === "zendia-keys",
     "the onboarding to move on once the wizard closes"
   );
   await wait(800); // Let the page transition settle.
 
   const keys = currentPageContent();
   Assert.greater(
-    keys.querySelectorAll(".zen-welcome-lazyvimium-keys kbd").length,
+    keys.querySelectorAll(".zen-welcome-zendia-keys kbd").length,
     0,
     "The keyboard page shows the keys"
   );
   ok(
-    keys.querySelector("#zen-welcome-lazyvimium-keys-yes").checked,
+    keys.querySelector("#zen-welcome-zendia-keys-yes").checked,
     "Vim keys are on by default"
   );
   await goNextWelcomePage("zen-generic-next");
   ok(
-    Services.prefs.getBoolPref("lazyvimium.enabled"),
+    Services.prefs.getBoolPref("zendia.enabled"),
     "Keeping vim keys leaves them on"
   );
 
   await TestUtils.waitForCondition(
-    () => currentPageContent()?.getAttribute("page") === "lazyvimium-agents",
+    () => currentPageContent()?.getAttribute("page") === "zendia-agents",
     "the agents page follows"
   );
   await TestUtils.waitForCondition(
     () =>
       !currentPageContent().querySelector(
-        "[data-l10n-id='zen-welcome-lazyvimium-agents-looking']"
+        "[data-l10n-id='zen-welcome-zendia-agents-looking']"
       ),
     "the agents on this computer are looked up",
     100,
@@ -273,7 +270,7 @@ add_task(async function test_Welcome_Steps() {
   );
   ok(
     currentPageContent().querySelector(
-      ".zen-welcome-option, [data-l10n-id='zen-welcome-lazyvimium-agents-none']"
+      ".zen-welcome-option, [data-l10n-id='zen-welcome-zendia-agents-none']"
     ),
     "It offers the agents found, or says none were"
   );
@@ -329,7 +326,7 @@ add_task(async function test_Welcome_Steps() {
   );
   await goNextWelcomePage("zen-generic-next");
   ok(
-    !Services.prefs.getBoolPref("lazyvimium.ublock.enabled"),
+    !Services.prefs.getBoolPref("zendia.ublock.enabled"),
     "Turning ad blocking down should keep uBlock Origin away"
   );
 
@@ -390,7 +387,7 @@ add_task(async function test_Welcome_Steps() {
 
   await wait(3000); // Wait for the finish animation to complete
   Assert.equal(
-    document.getElementById("lazyvimium-statusline")?.style.display,
+    document.getElementById("zendia-statusline")?.style.display,
     "flex",
     "Vim mode, kept on, shows its mode once the onboarding is over"
   );

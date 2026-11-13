@@ -6,10 +6,8 @@
   let lazy = {};
 
   ChromeUtils.defineESModuleGetters(lazy, {
-    LazyvimiumAgents:
-      "resource:///modules/lazyvimium/agent/LazyvimiumAgents.sys.mjs",
-    LazyvimiumUblock:
-      "resource:///modules/lazyvimium/ublock/LazyvimiumUblock.sys.mjs",
+    ZendiaAgents: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
+    ZendiaUblock: "resource:///modules/zendia/ublock/ZendiaUblock.sys.mjs",
     SearchService: "moz-src:///toolkit/components/search/SearchService.sys.mjs",
   });
 
@@ -30,16 +28,16 @@
     { url: "https://figma.com", icon: "figma", color: "#f24e1e" },
   ];
 
-  const kVimModePref = "lazyvimium.enabled";
+  const kVimModePref = "zendia.enabled";
 
   // The keys shown on the keyboard page, LazyVim's own.
-  const kLazyvimiumKeys = [
-    ["j  k", "zen-welcome-lazyvimium-key-scroll"],
-    ["⇧H  ⇧L", "zen-welcome-lazyvimium-key-tabs"],
-    ["Space", "zen-welcome-lazyvimium-key-leader"],
-    ["Space e", "zen-welcome-lazyvimium-key-explorer"],
-    ["Space a a", "zen-welcome-lazyvimium-key-agent"],
-    ["Esc", "zen-welcome-lazyvimium-key-escape"],
+  const kZendiaKeys = [
+    ["j  k", "zen-welcome-zendia-key-scroll"],
+    ["⇧H  ⇧L", "zen-welcome-zendia-key-tabs"],
+    ["Space", "zen-welcome-zendia-key-leader"],
+    ["Space e", "zen-welcome-zendia-key-explorer"],
+    ["Space a a", "zen-welcome-zendia-key-agent"],
+    ["Esc", "zen-welcome-zendia-key-escape"],
   ];
 
   const gChoices = {
@@ -659,14 +657,14 @@
         },
       },
       {
-        id: "lazyvimium-keys",
-        title: "zen-welcome-lazyvimium-keys-title",
-        descriptions: ["zen-welcome-lazyvimium-keys-description"],
+        id: "zendia-keys",
+        title: "zen-welcome-zendia-keys-title",
+        descriptions: ["zen-welcome-zendia-keys-description"],
         buttons: [kNextButton],
         render(content) {
           const sheet = document.createElement("div");
-          sheet.className = "zen-welcome-lazyvimium-keys";
-          for (const [keys, l10n] of kLazyvimiumKeys) {
+          sheet.className = "zen-welcome-zendia-keys";
+          for (const [keys, l10n] of kZendiaKeys) {
             const kbd = document.createElement("kbd");
             kbd.textContent = keys;
             const desc = document.createElement("span");
@@ -677,15 +675,15 @@
           content.append(
             sheet,
             createOption({
-              id: "zen-welcome-lazyvimium-keys-yes",
-              group: "zen-welcome-lazyvimium-keys",
-              l10n: "zen-welcome-lazyvimium-keys-yes",
+              id: "zen-welcome-zendia-keys-yes",
+              group: "zen-welcome-zendia-keys",
+              l10n: "zen-welcome-zendia-keys-yes",
               checked: enabled,
             }),
             createOption({
-              id: "zen-welcome-lazyvimium-keys-no",
-              group: "zen-welcome-lazyvimium-keys",
-              l10n: "zen-welcome-lazyvimium-keys-no",
+              id: "zen-welcome-zendia-keys-no",
+              group: "zen-welcome-zendia-keys",
+              l10n: "zen-welcome-zendia-keys-no",
               checked: !enabled,
             })
           );
@@ -693,25 +691,25 @@
         commit(content) {
           Services.prefs.setBoolPref(
             kVimModePref,
-            content.querySelector("#zen-welcome-lazyvimium-keys-yes").checked
+            content.querySelector("#zen-welcome-zendia-keys-yes").checked
           );
         },
       },
       {
-        id: "lazyvimium-agents",
-        title: "zen-welcome-lazyvimium-agents-title",
-        descriptions: ["zen-welcome-lazyvimium-agents-description"],
+        id: "zendia-agents",
+        title: "zen-welcome-zendia-agents-title",
+        descriptions: ["zen-welcome-zendia-agents-description"],
         buttons: [kNextButton],
         async render(content) {
           const lookup = document.createElement("p");
-          lookup.className = "zen-welcome-lazyvimium-agents-status";
+          lookup.className = "zen-welcome-zendia-agents-status";
           document.l10n.setAttributes(
             lookup,
-            "zen-welcome-lazyvimium-agents-looking"
+            "zen-welcome-zendia-agents-looking"
           );
           content.appendChild(lookup);
-          const agents = await lazy.LazyvimiumAgents.agents();
-          const preferred = await lazy.LazyvimiumAgents.defaultAgent();
+          const agents = await lazy.ZendiaAgents.agents();
+          const preferred = await lazy.ZendiaAgents.defaultAgent();
           if (!content.isConnected) {
             return;
           }
@@ -723,16 +721,16 @@
           } else {
             document.l10n.setAttributes(
               lookup,
-              "zen-welcome-lazyvimium-agents-none"
+              "zen-welcome-zendia-agents-none"
             );
           }
           for (const agent of installed) {
             const version = document.createElement("span");
-            version.className = "zen-welcome-lazyvimium-agent-version";
+            version.className = "zen-welcome-zendia-agent-version";
             version.textContent = agent.version ?? "";
             const option = createOption({
               id: `zen-welcome-agent-${agent.id}`,
-              group: "zen-welcome-lazyvimium-agents",
+              group: "zen-welcome-zendia-agents",
               text: agent.name,
               checked: agent.id == preferred?.id,
               extra: version,
@@ -742,11 +740,11 @@
           }
           if (missing.length) {
             const list = document.createElement("div");
-            list.className = "zen-welcome-lazyvimium-agents-missing";
+            list.className = "zen-welcome-zendia-agents-missing";
             const heading = document.createElement("span");
             document.l10n.setAttributes(
               heading,
-              "zen-welcome-lazyvimium-agents-missing"
+              "zen-welcome-zendia-agents-missing"
             );
             list.appendChild(heading);
             for (const agent of missing) {
@@ -763,16 +761,16 @@
         },
         commit(content) {
           const id = content.querySelector(
-            "input[name='zen-welcome-lazyvimium-agents']:checked"
+            "input[name='zen-welcome-zendia-agents']:checked"
           )?.value;
           const agent = content.agents?.find(candidate => candidate.id == id);
           if (!agent) {
             return;
           }
-          lazy.LazyvimiumAgents.setDefaultAgent(agent.id);
-          // Agents that need lazyvimium added to their own config get it
+          lazy.ZendiaAgents.setDefaultAgent(agent.id);
+          // Agents that need zendia added to their own config get it
           // now, so the first question just works.
-          lazy.LazyvimiumAgents.ensureConnected(agent).catch(console.error);
+          lazy.ZendiaAgents.ensureConnected(agent).catch(console.error);
         },
       },
       {
@@ -854,7 +852,7 @@
         buttons: [kNextButton],
         // uBlock Origin is installed at startup; this page keeps or drops it.
         render(content) {
-          const { enabled } = lazy.LazyvimiumUblock;
+          const { enabled } = lazy.ZendiaUblock;
           content.appendChild(
             createOption({
               id: "zen-welcome-block-ads-yes",
@@ -873,7 +871,7 @@
           );
         },
         commit(content) {
-          lazy.LazyvimiumUblock.setEnabled(
+          lazy.ZendiaUblock.setEnabled(
             content.querySelector("#zen-welcome-block-ads-yes").checked
           ).catch(console.error);
         },
@@ -1125,7 +1123,7 @@
   }
 
   function startZenWelcome() {
-    lazy.LazyvimiumUblock.sync();
+    lazy.ZendiaUblock.sync();
     clearBrowserElements();
     centerWindowOnScreen();
     initializeZenWelcome();

@@ -1,0 +1,64 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+[DEFAULT]
+
+["browser_zendia_agent.js"]
+support-files = [
+  "file_agent_start.html",
+  "file_agent_next.html",
+  "file_agent_frame_host.html",
+  "file_agent_frame.html",
+]
+
+["browser_zendia_agent_bench.js"]
+support-files = ["file_agent_heavy.html"]
+
+["browser_zendia_agent_card.js"]
+
+["browser_zendia_agent_composer.js"]
+
+["browser_zendia_agent_motion.js"]
+
+["browser_zendia_agent_network.js"]
+support-files = [
+  "file_agent_network.html",
+  "file_agent_network_data.json",
+]
+
+["browser_zendia_agent_ui.js"]
+
+["browser_zendia_captcha.js"]
+support-files = [
+  "file_captcha_board.html",
+  "file_captcha_host.html",
+  "file_captcha_frame.html",
+  "file_captcha_slider.html",
+  "file_captcha_slider_host.html",
+]
+
+["browser_zendia_chat_button.js"]
+
+["browser_zendia_explorer.js"]
+
+["browser_zendia_internal_pages.js"]
+
+["browser_zendia_jump.js"]
+support-files = [
+  "file_jump_frame_host.html",
+  "file_jump_frame.html",
+  "file_jump_inner.html",
+  "file_trap_frame.html",
+  "file_trap_host.html",
+]
+
+["browser_zendia_key_delivery.js"]
+
+["browser_zendia_keys.js"]
+
+["browser_zendia_library.js"]
+
+["browser_zendia_ublock.js"]
+
+["browser_zendia_vim_mode.js"]
