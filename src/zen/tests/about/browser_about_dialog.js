@@ -3,9 +3,10 @@
 
 "use strict";
 
-const { AppUpdater } = ChromeUtils.importESModule(
-  "resource://gre/modules/AppUpdater.sys.mjs"
-);
+// Lazy, since builds without an updater (MOZ_UPDATER off) don't ship it.
+ChromeUtils.defineESModuleGetters(this, {
+  AppUpdater: "resource://gre/modules/AppUpdater.sys.mjs",
+});
 
 const kAboutURL =
   "chrome://browser/content/zen-components/windows/zen-about.xhtml";
@@ -87,7 +88,7 @@ add_task(async function test_about_links() {
   );
   is(
     doc.getElementById("zen-about-issues").href,
-    "https://github.com/zen-browser/desktop/issues",
+    "https://github.com/Planckify-Labs/zendia/issues",
     "Issues link points at the tracker"
   );
   const releaseNotes = doc.getElementById("zen-about-release-notes");

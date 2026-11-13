@@ -1,8 +1,8 @@
 {
-  "name": "Zen Browser",
-  "vendor": "Zen OSS Team",
-  "appId": "zen",
-  "binaryName": "zen",
+  "name": "Zendia",
+  "vendor": "Planckify Labs",
+  "appId": "zendia",
+  "binaryName": "zendia",
   "version": {
     "product": "firefox",
     "version": "160.0",
@@ -16,13 +16,13 @@
   "brands": {
     "release": {
       "backgroundColor": "#282A33",
-      "brandShorterName": "Zen",
-      "brandShortName": "Zen",
-      "brandFullName": "Zen Browser",
+      "brandShorterName": "Zendia",
+      "brandShortName": "Zendia",
+      "brandFullName": "Zendia",
       "release": {
         "displayVersion": "1.24.2b",
         "github": {
-          "repo": "zen-browser/desktop"
+          "repo": "Planckify-Labs/zendia"
         },
         "archives": {
           "windows": "windows.mar",
@@ -36,13 +36,13 @@
     },
     "twilight": {
       "backgroundColor": "#282A33",
-      "brandShorterName": "Zen",
+      "brandShorterName": "Zendia",
       "brandShortName": "Twilight",
-      "brandFullName": "Zen Twilight",
+      "brandFullName": "Zendia Twilight",
       "release": {
         "displayVersion": "1.25t",
         "github": {
-          "repo": "zen-browser/desktop"
+          "repo": "Planckify-Labs/zendia"
         }
       }
     }
@@ -52,6 +52,5 @@
       ".*\\.json"
     ],
     "licenseType": "MPL-2.0"
-  },
-  "updateHostname": "updates.zen-browser.app"
+  }
 }

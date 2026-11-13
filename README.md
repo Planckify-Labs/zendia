@@ -3,50 +3,34 @@
    - License, v. 2.0. If a copy of the MPL was not distributed with this
    - file, You can obtain one at http://mozilla.org/MPL/2.0/.
    -->
-<!-- TODO: Get a job -->
-<img src="./docs/assets/zen-dark.svg" width="100px" align="left">
 
-### `Zen Browser`
+### `Zendia`
 
-[![Downloads](https://img.shields.io/github/downloads/zen-browser/desktop/total.svg)](https://github.com/zen-browser/desktop/releases)
-[![Crowdin](https://badges.crowdin.net/zen-browser/localized.svg)](https://crowdin.com/project/zen-browser)
-[![Zen Release builds](https://github.com/zen-browser/desktop/actions/workflows/build.yml/badge.svg?branch=stable)](https://github.com/zen-browser/desktop/actions/workflows/build.yml)
+Zendia is a Firefox-based browser for people who live in Neovim and work with coding agents.
 
-Zen is a firefox-based browser with the aim of pushing your productivity to a new level!
+- **Vim mode.** Drive tabs, pages, splits and the sidebar with Neovim's keys. It is on by default, and you can turn it off in the onboarding or from the app menu.
+- **Your own agent.** Ask Claude Code, Codex, Cursor, Antigravity, OpenCode or Kiro about the current tab, and let them work in the browser through a built-in MCP server. Zendia finds the agents you already have installed.
+- **uBlock Origin built in.** Ad blocking works from the first launch.
 
-<div flex="true">
-  <a href="https://zen-browser.app/download">
-    Download
-  </a>
-  •
-  <a href="https://zen-browser.app">
-    Website
-  </a>
-  •
-  <a href="https://docs.zen-browser.app">
-    Documentation
-  </a>
-  •
-  <a href="https://zen-browser.app/release-notes/latest">
-    Release Notes
-  </a>
-</div>
+### Built on Zen
 
-### Firefox Versions
+Zendia is built on the stable branch of [Zen Browser](https://github.com/zen-browser/desktop) and keeps up with its releases. Zen's spaces, split view, compact mode, Library and Zen Mods all work in Zendia. Thanks to the Zen team and to its [sponsors](https://zen-browser.app/#sponsors).
 
-- [`Release`](https://zen-browser.app/download) - Is currently built using Firefox version `158.0`!
-- [`Twilight`](https://zen-browser.app/download?twilight) - Is currently built using Firefox version `RC 158.0`!
+### Building
+
+```sh
+npm ci
+npm run init     # download Firefox's source, apply the patches, bootstrap
+npm run build
+npm run dev      # run with the .dev-profile profile
+```
+
+Tests run from `engine/`, for example `./mach test zen/tests/zendia/xpcshell.toml`.
 
 ### Contributing
 
-If you'd like to report a bug, please do so on our [GitHub Issues page](https://github.com/zen-browser/desktop/issues/) and for feature requests, you can use [GitHub Discussions](https://github.com/zen-browser/desktop/discussions).
+Report bugs and ask for features on [GitHub Issues](https://github.com/Planckify-Labs/zendia/issues). Report a bug in Zen itself to [Zen](https://github.com/zen-browser/desktop/issues).
 
-Zen is an open-source project, and we welcome contributions from the community! Please take a look at the [contribution guidelines](./docs/contribute.md) before getting started!
+### License
 
-#### Partners
-
-Thanks to all the [sponsors](https://zen-browser.app/#sponsors) of Zen for their support and contributions, including:
-
-<a href="https://blacksmith.sh">
-  <img src="./docs/assets/blacksmith-yellow.png" width="350px"/>
-</a>
+Zendia, like Zen and Firefox, is licensed under the [Mozilla Public License 2.0](./LICENSE).
