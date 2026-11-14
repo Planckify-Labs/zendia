@@ -60,6 +60,7 @@
 
   &#urlbar-container {
     border-radius: 999px;
+    /* stylelint-disable-next-line property-no-unknown */
     corner-shape: round;
   }
 }
@@ -74,6 +75,7 @@
   & .urlbar-background,
   & :is(.urlbar-page-action, #tracking-protection-icon-container, #identity-icon-box, #notification-popup-box) {
     border-radius: 999px !important;
+    /* stylelint-disable-next-line property-no-unknown */
     corner-shape: round;
   }
 }
@@ -82,6 +84,7 @@
 /* stylelint-disable-next-line stylelint-plugin-mozilla/no-has-selector */
 #urlbar-container:has(#urlbar[open][zen-floating-urlbar="true"]) {
   border-radius: 999px !important;
+  /* stylelint-disable-next-line property-no-unknown */
   corner-shape: round;
 }
 
@@ -126,6 +129,7 @@
   padding: 0 !important;
   border: none;
   border-radius: 999px;
+  /* stylelint-disable-next-line property-no-unknown */
   corner-shape: round;
   background-color: color-mix(in srgb, currentColor 10%, transparent);
   color: inherit;
@@ -181,6 +185,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
+    /* stylelint-disable-next-line property-no-unknown */
     corner-shape: round;
     background-color: var(--zendia-agent-color);
   }
@@ -375,7 +380,6 @@
   }
 }
 
-/* stylelint-disable-next-line media-query-no-invalid */
 @media -moz-pref("zen.theme.acrylic-urlbar") and (not (prefers-reduced-transparency: reduce)) {
   :root:not([zen-no-acrylic="true"]) :is(.zendia-picker, #zendia-which-key) {
     backdrop-filter: var(--zendia-float-filter);
@@ -1556,6 +1560,7 @@
   padding: 0;
   border: none;
   border-radius: 50%;
+  /* stylelint-disable-next-line property-no-unknown */
   corner-shape: round;
   background-color: color-mix(in srgb, var(--zendia-agent-text) 10%, transparent);
   background-position: center;
@@ -1663,6 +1668,7 @@
   min-width: 0;
   padding: 3px 4px 3px 10px;
   border-radius: 999px;
+  /* stylelint-disable-next-line property-no-unknown */
   corner-shape: round;
   background-color: color-mix(in srgb, var(--zendia-agent-text) 10%, transparent);
   font-size: 12px;
@@ -1690,6 +1696,7 @@
   padding: 0;
   border: none;
   border-radius: 50%;
+  /* stylelint-disable-next-line property-no-unknown */
   corner-shape: round;
   background-color: transparent;
   background-image: url("chrome://browser/skin/zen-icons/close.svg");
@@ -1895,6 +1902,7 @@
   padding: 0;
   border: none;
   border-radius: 999px;
+  /* stylelint-disable-next-line property-no-unknown */
   corner-shape: round;
   background-color: color-mix(in srgb, var(--zendia-agent-text) 22%, transparent);
   transition: background-color 160ms;
@@ -1907,6 +1915,7 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
+    /* stylelint-disable-next-line property-no-unknown */
     corner-shape: round;
     background-color: light-dark(#ffffff, var(--zendia-agent-text));
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
@@ -2061,6 +2070,7 @@
   flex: none;
   padding: 9px 16px;
   border-radius: 999px;
+  /* stylelint-disable-next-line property-no-unknown */
   corner-shape: round;
   font: inherit;
   font-weight: 600;
