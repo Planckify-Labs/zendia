@@ -9,6 +9,8 @@
   "scripts": {
     "build": "surfer build",
     "build:ui": "surfer build --ui",
+    "build:welcome": "npm --prefix tools/zendia-welcome install && npm --prefix tools/zendia-welcome run build",
+    "dev:welcome": "npm --prefix tools/zendia-welcome install && npm --prefix tools/zendia-welcome run dev",
     "start": "cd engine && python3 ./mach run --noprofile",
     "start:bloat": "XPCOM_MEM_BLOAT_LOG=1 npm start",
     "dev": "sh scripts/zendia-dev-prefs.sh .dev-profile && cd engine && MOZ_PURGE_CACHES=1 ../.venv/bin/python3 ./mach run --profile \"$PWD/../.dev-profile\"",

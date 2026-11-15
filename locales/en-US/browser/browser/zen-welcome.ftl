@@ -2,52 +2,85 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-zen-welcome-title-line1 = Welcome to
-zen-welcome-title-line2 = a calmer internet
+## The onboarding. It opens on a start page, then goes through six chapters,
+## each a page with a preview of what it is about and the choices to make.
 
-zen-welcome-back = Back
-zen-welcome-skip = Skip for now
+# The browser's name as the onboarding says it. It is not the build's brand
+# name: a local build is branded "Nightly" and the Twilight channel
+# "Twilight", and the onboarding introduces Zendia in all of them.
+-zendia-name = Zendia
+zendia-welcome-brand = { -zendia-name }
 
-zen-welcome-import-title = Bring your stuff along.
-zen-welcome-import-description = Pick a browser to import your bookmarks, history and passwords from and pick up right where you left off.
-zen-welcome-import-no = <strong>NO</strong>, start fresh.
+zendia-welcome-start-title = Hands on the keys.
+zendia-welcome-start-description = { -zendia-name } is a browser you drive from the keyboard, with your own agent along for the ride and the ads left outside.
+zendia-welcome-start = Set up { -zendia-name }
 
-zen-welcome-zendia-keys-title = Try vim mode.
-zen-welcome-zendia-keys-description = Vim mode drives the browser with Neovim’s keys. It is made for Neovim fans who already think in modes. Not your thing? Turn it off here, or any time with the vim mode switch.
-zen-welcome-zendia-keys-yes = <strong>YES</strong>, turn on vim mode.
-zen-welcome-zendia-keys-no = <strong>NO</strong>, keep the usual shortcuts.
-zen-welcome-zendia-key-scroll = Scroll the page
-zen-welcome-zendia-key-tabs = Previous and next tab
-zen-welcome-zendia-key-leader = Every other command
-zen-welcome-zendia-key-explorer = Move around the sidebar
-zen-welcome-zendia-key-agent = Ask your agent about the tab
-zen-welcome-zendia-key-escape = Leave a text field
+zendia-welcome-next = Next
+zendia-welcome-back = Back
+zendia-welcome-skip = Skip
+zendia-welcome-finish = Start browsing
 
-zen-welcome-zendia-agents-title = Bring your own agent.
-zen-welcome-zendia-agents-description = Press Space A A on any tab and ask the coding agent you already use, signed in as you. It reads the page, clicks, types and navigates for you, and asks before it closes anything.
-zen-welcome-zendia-agents-looking = Looking for agents on this computer…
-zen-welcome-zendia-agents-none = No agent found yet. Install one, then press Space A S to pick it.
-zen-welcome-zendia-agents-missing = Not installed
+# The names of the keys that move through the onboarding, shown on its
+# buttons.
+zendia-welcome-key-enter = Enter
+zendia-welcome-key-backspace = Backspace
 
-zen-welcome-default-browser-title = Make { -brand-short-name } your default?
-zen-welcome-default-browser-description = Links from other apps will open in { -brand-short-name }. You can always change this later.
-zen-welcome-set-default-browser = <strong>YES</strong>, make { -brand-short-name } default.
-zen-welcome-dont-set-default-browser = <strong>NO</strong>, still exploring my options.
+## The chapters' short names, in the row along the top.
 
-zen-welcome-default-search-title = Pick your search engine.
-zen-welcome-default-search-description = Choose your default search engine. You can always change it later!
+zendia-welcome-chapter-keys = Keys
+zendia-welcome-chapter-agent = Agent
+zendia-welcome-chapter-shield = Shield
+zendia-welcome-chapter-move-in = Move in
+zendia-welcome-chapter-apps = Apps
+zendia-welcome-chapter-go = Go
 
-zen-welcome-essentials-title = Choose the apps you use most.
-zen-welcome-essentials-description = Select your favorite apps to keep them handy in your sidebar.
+## Keys: vim mode.
 
-zen-welcome-block-ads-title = Block ads and trackers?
-zen-welcome-block-ads-description = { -brand-short-name } comes with uBlock Origin, so pages load cleaner and faster. You can remove it any time.
-zen-welcome-block-ads-yes = <strong>YES</strong>, keep blocking ads.
-zen-welcome-block-ads-no = <strong>NO</strong>, show me everything.
+zendia-welcome-keys-title = Drive it like Neovim.
+zendia-welcome-keys-description = Vim mode gives every key a job, for people who already think in modes. Not your thing? Turn it off here, or any time with the vim mode switch in the menu.
+zendia-welcome-keys-yes = <strong>YES</strong>, turn on vim mode.
+zendia-welcome-keys-no = <strong>NO</strong>, keep the usual shortcuts.
+zendia-welcome-key-scroll = Scroll the page
+zendia-welcome-key-next-tab = Next and previous tab
+zendia-welcome-key-leader = Every other command
+zendia-welcome-key-explorer = Move around the sidebar
+zendia-welcome-key-agent = Ask your agent about the tab
+zendia-welcome-key-escape = Leave a text field
 
-zen-welcome-workspace-colors-title = Your space, your colors.
-zen-welcome-workspace-colors-description = Personalize your browser by giving each space its own unique color identity.
+## Agent: the coding agent that works on the tab.
 
-zen-welcome-start-browsing-title = All set? Let’s get rolling!
-zen-welcome-start-browsing-description-1 = You’re all set up and ready to go. Click the button below to start browsing with { -brand-short-name }.
-zen-welcome-start-browsing = Dive in!
+zendia-welcome-agent-title = Bring your own agent.
+zendia-welcome-agent-description = Press Space A A on any tab and ask the coding agent you already use, signed in as you. It reads the page, clicks, types and navigates for you, and asks before it closes anything.
+zendia-welcome-agent-looking = Looking for agents on this computer…
+zendia-welcome-agent-none = No agent found yet. Install one, then press Space A S to pick it.
+zendia-welcome-agent-missing = Not installed
+
+## Shield: ad blocking.
+
+zendia-welcome-shield-title = Leave the ads outside.
+zendia-welcome-shield-description = { -zendia-name } comes with uBlock Origin, so pages load cleaner and faster. You can remove it any time.
+zendia-welcome-shield-yes = <strong>YES</strong>, keep blocking ads.
+zendia-welcome-shield-no = <strong>NO</strong>, show me everything.
+
+## Move in: what to bring from another browser, where searches go, and
+## whether links from other apps open here.
+
+zendia-welcome-move-in-title = Move in.
+zendia-welcome-move-in-description = Bring your bookmarks, history and passwords, pick where your searches go, and say whether links from other apps open here.
+zendia-welcome-import-heading = Bring from
+zendia-welcome-import-none = Nothing, start fresh
+zendia-welcome-search-heading = Search with
+zendia-welcome-default-heading = Links from other apps
+zendia-welcome-default-yes = Open in { -zendia-name }
+zendia-welcome-default-no = Leave as they are
+
+## Apps: sites to pin at the top of the sidebar.
+
+zendia-welcome-apps-title = Pin what you open every day.
+zendia-welcome-apps-description = The ones you pick stay at the top of the sidebar, a key away. You can add or drop them later.
+
+## Go: the last page.
+
+zendia-welcome-go-title = You are set.
+zendia-welcome-go-description = Everything you chose here can be changed later. Go and browse.
+zendia-welcome-go-vim-hint = Press Space, then ?, to see every key.

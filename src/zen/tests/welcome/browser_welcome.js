@@ -23,246 +23,146 @@ function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function currentPageContent() {
-  return document.querySelector(
-    "#zen-welcome-page-content > .zen-welcome-page:not([exiting])"
-  );
+// The page's preview, once WebGL has drawn it. A machine without WebGL
+// shows the onboarding without previews, so this only reports.
+function previewCanvas() {
+  return welcomeDocument().querySelector("#zen-welcome-stage canvas");
+}
+
+// The chapters along the top, by their state.
+function chapters() {
+  return [...welcomeDocument().querySelectorAll(".zen-welcome-chapter")];
 }
 
 add_task(async function test_Welcome_Steps() {
   const selectedTab = gBrowser.selectedTab;
-  await wait(2000); // Give tons of time for the welcome start button to be clicked
+  await wait(2000); // Give the onboarding time to load.
   await waitForFocus();
 
-  // A tiling Wayland compositor keeps the window at its tile's size: the
-  // onboarding then sits in the middle of it at its own size.
+  // The onboarding takes the window as it is: it fills it and follows it
+  // when it is resized, and never sets a size of its own.
   const root = document.documentElement;
-  const width = Math.min(1200, screen.availWidth);
-  const height = Math.min(720, screen.availHeight);
-  ok(!root.hasAttribute("zen-welcome-inset"), "The window took its size");
-  Assert.equal(root.style.maxWidth, `${width}px`, "and is locked to it");
-  // A compositor sizes the window whatever its limits; here the lock is
-  // lifted for one frame so that resizeTo can stand in for it.
-  root.style.removeProperty("max-width");
-  root.style.removeProperty("max-height");
-  await new Promise(resolve =>
-    requestAnimationFrame(() => requestAnimationFrame(resolve))
-  );
-  window.resizeTo(width + 200, height + 120);
+  const fills = () => {
+    const stage = document
+      .getElementById("zen-welcome")
+      .getBoundingClientRect();
+    return (
+      Math.abs(stage.width - window.innerWidth) <= 1 &&
+      Math.abs(stage.height - window.innerHeight) <= 1
+    );
+  };
+  ok(fills(), "The onboarding fills the window");
+  for (const property of ["minWidth", "maxWidth", "minHeight", "maxHeight"]) {
+    Assert.equal(root.style[property], "", `The window has no ${property}`);
+  }
+  const outerWidth = window.outerWidth;
+  const outerHeight = window.outerHeight;
+  window.resizeTo(outerWidth - 160, outerHeight - 90);
   await TestUtils.waitForCondition(
-    () => root.hasAttribute("zen-welcome-inset"),
-    "the onboarding is inset in a window of another size"
+    () => window.outerWidth != outerWidth && fills(),
+    "the onboarding follows the window to another size"
   );
-  await TestUtils.waitForCondition(() => {
-    const card = document.getElementById("zen-welcome").getBoundingClientRect();
-    return Math.round(card.width) == width;
-  }, "the card has the onboarding's size");
-  const card = document.getElementById("zen-welcome").getBoundingClientRect();
-  Assert.equal(Math.round(card.height), height, "and its height");
-  Assert.less(
-    Math.abs(card.x + card.width / 2 - window.innerWidth / 2),
-    2,
-    "centered across"
-  );
-  Assert.less(
-    Math.abs(card.y + card.height / 2 - window.innerHeight / 2),
-    2,
-    "and down"
-  );
-  window.resizeTo(width, height);
+  window.resizeTo(outerWidth, outerHeight);
   await TestUtils.waitForCondition(
-    () => !root.hasAttribute("zen-welcome-inset"),
-    "back at its size, the window is locked again"
+    () => window.outerWidth == outerWidth && fills(),
+    "and back"
   );
-  Assert.equal(root.style.maxWidth, `${width}px`);
 
-  await EventUtils.synthesizeMouseAtCenter(
-    document.getElementById("zen-welcome-start-button"),
-    {}
+  // The start page.
+  await TestUtils.waitForCondition(
+    () =>
+      welcomeDocument().querySelector(
+        "#zen-welcome-start-button [data-l10n-id]"
+      )?.textContent,
+    "the start page to be shown and translated"
   );
-  await wait(1500); // Wait for the transition to complete
-  ok(true, "Welcome start button clicked successfully");
-  // Vim mode is offered later in the onboarding, not assumed before it.
+  ok(
+    welcomeDocument()
+      .getElementById("zen-welcome-start-button")
+      .textContent.includes("Zendia"),
+    "The start page names Zendia, whatever the build's brand is"
+  );
+  const webgl = !!welcomeDocument()
+    .createElement("canvas")
+    .getContext("webgl2");
+  info(`WebGL is ${webgl ? "available" : "not available"} here`);
+  if (webgl) {
+    await TestUtils.waitForCondition(
+      () => previewCanvas()?.width > 0,
+      "the start page's preview to be drawn"
+    );
+  }
+  await clickInWelcome(
+    welcomeDocument().getElementById("zen-welcome-start-button")
+  );
+  await waitForChapter("keys");
+  await wait(800);
+
+  // Vim mode is offered in the onboarding, not assumed before it.
   Assert.equal(
     document.getElementById("zendia-statusline")?.style.display,
     "none",
     "No vim mode indicator during the onboarding"
   );
   ok(!root.hasAttribute("zendia-mode"), "Nor a vim mode color on the window");
-  Assert.notEqual(
-    window.windowState,
-    window.STATE_MAXIMIZED,
-    "Window should not be maximized by the welcome screen"
-  );
-
-  const backButton = document.getElementById("zen-welcome-back");
-  ok(
-    backButton.hasAttribute("disabled"),
-    "Back button should be hidden on the first page"
-  );
-  const importOptions = currentPageContent().querySelectorAll(
-    ".zen-welcome-option"
-  );
-  Assert.greaterOrEqual(
-    importOptions.length,
+  Assert.equal(chapters().length, 6, "The onboarding has six chapters");
+  Assert.equal(
+    chapters().filter(chapter => !chapter.disabled).length,
     1,
-    "Import page should offer at least the start fresh option"
+    "Only the first can be gone to yet"
+  );
+
+  // Keys.
+  const backButton = welcomeDocument().getElementById("zen-welcome-back");
+  ok(backButton.disabled, "There is no going back from the first chapter");
+  Assert.equal(
+    welcomeDocument().querySelectorAll(".zen-welcome-zendia-keys kbd").length,
+    6,
+    "The keys chapter shows the keys its preview plays"
   );
   ok(
-    importOptions[0].querySelector("#zen-welcome-import-no").checked,
-    "Starting fresh should be selected by default"
+    currentPageContent().querySelector("#zen-welcome-zendia-keys-yes").checked,
+    "Vim mode is on by default"
   );
-  for (const option of [...importOptions].slice(1)) {
-    ok(
-      option.querySelector("input").dataset.sourceIndex,
-      "Each browser option should know its source"
+  if (webgl) {
+    // The preview names the key it is playing: within a loop one of the
+    // keys is opened to say what it does.
+    await TestUtils.waitForCondition(
+      () =>
+        welcomeDocument().querySelector(".zen-welcome-zendia-key[data-active]"),
+      "the vim mode preview to play a key",
+      100,
+      100
     );
-    ok(
-      option.querySelector(".engine-icon").getAttribute("src"),
-      "Each browser option should show its brand image"
+    await clickInWelcome(
+      currentPageContent().querySelector(
+        "label[for='zen-welcome-zendia-keys-no']"
+      )
+    );
+    await TestUtils.waitForCondition(
+      () =>
+        !welcomeDocument().querySelector(
+          ".zen-welcome-zendia-key[data-active]"
+        ),
+      "turning vim mode down stops the keys"
+    );
+    await clickInWelcome(
+      currentPageContent().querySelector(
+        "label[for='zen-welcome-zendia-keys-yes']"
+      )
     );
   }
-  const multiProfile = currentPageContent().querySelector(
-    ".zen-welcome-import-source:has(.zen-welcome-import-profiles)"
-  );
-  if (multiProfile) {
-    ok(
-      !multiProfile.hasAttribute("expanded"),
-      "Profiles stay hidden until the browser is selected"
-    );
-    const expanded = BrowserTestUtils.waitForEvent(
-      multiProfile.querySelector(".zen-welcome-import-profiles"),
-      "transitionend"
-    );
-    await EventUtils.synthesizeMouseAtCenter(
-      multiProfile.querySelector(".zen-welcome-option"),
-      {}
-    );
-    ok(
-      multiProfile.hasAttribute("expanded"),
-      "Selecting the browser reveals its profiles"
-    );
-    await expanded;
-    const profileRadios = multiProfile.querySelectorAll(
-      ".zen-welcome-import-profile input"
-    );
-    Assert.greater(profileRadios.length, 1, "Several profiles are listed");
-    ok(profileRadios[0].checked, "The first profile is selected by default");
-    const secondProfile = profileRadios[1].closest(
-      ".zen-welcome-import-profile"
-    );
-    secondProfile.scrollIntoView({ block: "center" });
-    await EventUtils.synthesizeMouseAtCenter(secondProfile, {});
-    ok(profileRadios[1].checked, "Another profile can be picked");
-    importOptions[0].scrollIntoView({ block: "center" });
-    await EventUtils.synthesizeMouseAtCenter(importOptions[0], {});
-    ok(
-      !multiProfile.hasAttribute("expanded"),
-      "Choosing another option hides the profiles again"
-    );
-  }
-
-  let wizardOpened = false;
-  const windowObserver = () => {
-    wizardOpened = true;
-  };
-  Services.obs.addObserver(windowObserver, "domwindowopened");
-  await goNextWelcomePage("zen-generic-next");
-  Services.obs.removeObserver(windowObserver, "domwindowopened");
-  ok(!wizardOpened, "Starting fresh should not open the migration wizard");
-  ok(true, "Welcome Import Step Test Finished");
-
-  ok(
-    !backButton.hasAttribute("disabled"),
-    "Back button should be visible after the first page"
-  );
-  await EventUtils.synthesizeMouseAtCenter(backButton, {});
-  await wait(800);
-  ok(
-    backButton.hasAttribute("disabled"),
-    "Going back should return to the first page"
-  );
-
-  const importPage = currentPageContent();
-  await TestUtils.waitForCondition(
-    () =>
-      importPage.importSources?.some(
-        source => source.key === InternalTestingProfileMigrator.key
-      ),
-    "the testing migrator to be listed",
-    100,
-    300
-  );
-  const sourceIndex = importPage.importSources.findIndex(
-    source => source.key === InternalTestingProfileMigrator.key
-  );
-  const sourceOption = importPage.querySelector(
-    `label[for="zen-welcome-import-${sourceIndex}"]`
-  );
-  sourceOption.scrollIntoView({ block: "center" });
-  await EventUtils.synthesizeMouseAtCenter(sourceOption, {});
-  ok(
-    sourceOption.querySelector("input").checked,
-    "The browser to import from should be selected"
-  );
-  const wizardPromise = BrowserTestUtils.domWindowOpened();
-  const nextButton = document.querySelector(
-    "#zen-welcome-page-sidebar-buttons button[data-l10n-id='zen-generic-next']"
-  );
-  executeSoon(() => EventUtils.synthesizeMouseAtCenter(nextButton, {}));
-  const wizardWin = await wizardPromise;
-  await BrowserTestUtils.waitForEvent(wizardWin, "MigrationWizard:Ready");
-  const wizardShadow =
-    wizardWin.document.getElementById("wizard").openOrClosedShadowRoot;
-  Assert.equal(
-    wizardShadow.querySelector("#wizard-deck").getAttribute("selected-view"),
-    "page-" + MigrationWizardConstants.PAGES.SELECTION,
-    "The wizard should wait on its selection page"
-  );
-  const selectedSource = wizardShadow.querySelector(
-    "#browser-profile-selector"
-  ).selectedPanelItem;
-  Assert.equal(
-    selectedSource.getAttribute("key"),
-    InternalTestingProfileMigrator.key,
-    "The wizard should open on the browser picked in the onboarding"
-  );
-  Assert.equal(
-    selectedSource.profile?.id,
-    InternalTestingProfileMigrator.testProfile.id,
-    "The wizard should open on that browser's profile"
-  );
-  await BrowserTestUtils.closeWindow(wizardWin);
-  await TestUtils.waitForCondition(
-    () => currentPageContent()?.getAttribute("page") === "zendia-keys",
-    "the onboarding to move on once the wizard closes"
-  );
-  await wait(800); // Let the page transition settle.
-
-  const keys = currentPageContent();
-  Assert.greater(
-    keys.querySelectorAll(".zen-welcome-zendia-keys kbd").length,
-    0,
-    "The keyboard page shows the keys"
-  );
-  ok(
-    keys.querySelector("#zen-welcome-zendia-keys-yes").checked,
-    "Vim keys are on by default"
-  );
-  await goNextWelcomePage("zen-generic-next");
+  await goNextWelcomePage("agent");
   ok(
     Services.prefs.getBoolPref("zendia.enabled"),
-    "Keeping vim keys leaves them on"
+    "Keeping vim mode leaves it on"
   );
 
-  await TestUtils.waitForCondition(
-    () => currentPageContent()?.getAttribute("page") === "zendia-agents",
-    "the agents page follows"
-  );
+  // Agent.
   await TestUtils.waitForCondition(
     () =>
       !currentPageContent().querySelector(
-        "[data-l10n-id='zen-welcome-zendia-agents-looking']"
+        "[data-l10n-id='zendia-welcome-agent-looking']"
       ),
     "the agents on this computer are looked up",
     100,
@@ -270,122 +170,227 @@ add_task(async function test_Welcome_Steps() {
   );
   ok(
     currentPageContent().querySelector(
-      ".zen-welcome-option, [data-l10n-id='zen-welcome-zendia-agents-none']"
+      ".zen-welcome-option, [data-l10n-id='zendia-welcome-agent-none']"
     ),
     "It offers the agents found, or says none were"
   );
-  await goNextWelcomePage("zen-generic-next");
-
-  await TestUtils.waitForCondition(
-    () => currentPageContent()?.getAttribute("page") === "colors",
-    "the colors page follows"
-  );
-  await wait(800);
-
-  await goNextWelcomePage("zen-generic-next");
-  ok(true, "Welcome Theme Step Test Finished");
-
-  let options = currentPageContent().querySelectorAll(".zen-welcome-option");
-  Assert.greater(
-    options.length,
-    0,
-    "Search page should list the available engines"
-  );
-  for (const option of options) {
+  for (const option of currentPageContent().querySelectorAll(
+    ".zen-welcome-option"
+  )) {
     ok(
-      option.querySelector("img").getAttribute("src").includes("blob:"),
-      "Each engine option should have an image with a blob URL"
+      option.querySelector(".zen-welcome-plate img")?.getAttribute("src"),
+      "Each agent is shown with its logo"
     );
   }
 
-  await EventUtils.synthesizeMouseAtCenter(options[1], {});
-  await wait(100);
-  let engineName = await lazy.SearchService.getDefault();
-  ok(
-    options[1].querySelector("input").checked,
-    "The selected option should be checked"
-  );
-  Assert.equal(
-    engineName.name,
-    options[1].querySelector(".zen-welcome-option-label").textContent.trim(),
-    "The default search engine should match the selected option"
-  );
+  // The chapters along the top lead back to the ones already seen.
+  ok(!backButton.disabled, "Back works after the first chapter");
+  await clickInWelcome(chapters()[0]);
+  await waitForChapter("keys");
+  await wait(600);
+  await goNextWelcomePage("agent");
 
-  await goNextWelcomePage("zen-generic-next");
-  ok(true, "Welcome Search Step Test Finished");
+  // Enter moves on and Backspace goes back, as the buttons say.
+  EventUtils.synthesizeKey("KEY_Enter", {}, welcomeWindow());
+  await waitForChapter("shield");
+  await wait(600);
+  EventUtils.synthesizeKey("KEY_Backspace", {}, welcomeWindow());
+  await waitForChapter("agent");
+  await wait(600);
+  await goNextWelcomePage("shield");
 
-  await TestUtils.waitForCondition(
-    () => currentPageContent()?.getAttribute("page") === "block-ads",
-    "the ad blocking page follows"
-  );
-  // The test profile keeps uBlock Origin from being downloaded, so the page
-  // starts on NO.
+  // Shield. The test profile keeps uBlock Origin from being downloaded, so
+  // the page starts on NO.
   ok(
     currentPageContent().querySelector("#zen-welcome-block-ads-no").checked,
-    "The ad blocking page should show the current choice"
+    "The shield chapter shows the current choice"
   );
-  await goNextWelcomePage("zen-generic-next");
+  await goNextWelcomePage("move-in");
   ok(
     !Services.prefs.getBoolPref("zendia.ublock.enabled"),
-    "Turning ad blocking down should keep uBlock Origin away"
+    "Turning ad blocking down keeps uBlock Origin away"
   );
 
+  // Move in: what to import, the search engine and the default browser.
+  ok(
+    currentPageContent().querySelector("#zen-welcome-import-no").checked,
+    "Starting fresh is selected by default"
+  );
+  const sourceSelector = `input[data-source-key="${InternalTestingProfileMigrator.key}"]`;
   await TestUtils.waitForCondition(
-    () => currentPageContent()?.getAttribute("page") === "essentials",
-    "the essentials page follows"
+    () => currentPageContent().querySelector(sourceSelector),
+    "the testing migrator to be listed",
+    100,
+    300
   );
-  ok(true, "Welcome Block Ads Step Test Finished");
+  for (const source of currentPageContent().querySelectorAll(
+    ".zen-welcome-import-source"
+  )) {
+    ok(
+      source.querySelector("input").dataset.sourceIndex,
+      "Each browser knows its source"
+    );
+    ok(
+      source.querySelector(".engine-icon").getAttribute("src"),
+      "and shows its brand image"
+    );
+  }
+  ok(
+    !currentPageContent().querySelector(".zen-welcome-import-profiles"),
+    "Profiles stay hidden until their browser is selected"
+  );
+  // A browser with several profiles lists them once it is selected.
+  for (const source of currentPageContent().querySelectorAll(
+    ".zen-welcome-import-source"
+  )) {
+    const option = source.querySelector(".zen-welcome-option");
+    option.scrollIntoView({ block: "center" });
+    await clickInWelcome(option);
+    ok(source.hasAttribute("expanded"), "The selected browser is marked");
+    const profileRadios = source.querySelectorAll(
+      ".zen-welcome-import-profile input"
+    );
+    if (!profileRadios.length) {
+      continue;
+    }
+    Assert.greater(profileRadios.length, 1, "Several profiles are listed");
+    ok(profileRadios[0].checked, "The first profile is selected by default");
+    const secondProfile = profileRadios[1].closest(
+      ".zen-welcome-import-profile"
+    );
+    secondProfile.scrollIntoView({ block: "center" });
+    await clickInWelcome(secondProfile);
+    ok(profileRadios[1].checked, "Another profile can be picked");
+    break;
+  }
+  const startFresh = currentPageContent().querySelector(
+    "label[for='zen-welcome-import-no']"
+  );
+  startFresh.scrollIntoView({ block: "center" });
+  await clickInWelcome(startFresh);
+  ok(
+    !currentPageContent().querySelector(".zen-welcome-import-profiles"),
+    "Choosing another option hides the profiles again"
+  );
 
+  const engines = [
+    ...currentPageContent().querySelectorAll(
+      "input[name='zen-welcome-search-engine']"
+    ),
+  ].map(input => input.closest(".zen-welcome-option"));
+  Assert.greater(engines.length, 1, "The search engines are listed");
+  for (const engine of engines) {
+    ok(
+      engine.querySelector("img").getAttribute("src"),
+      "Each engine is shown with its icon"
+    );
+  }
+  engines[1].scrollIntoView({ block: "center" });
+  await clickInWelcome(engines[1]);
+  await wait(100);
+  ok(engines[1].querySelector("input").checked, "An engine can be picked");
+  Assert.equal(
+    (await lazy.SearchService.getDefault()).name,
+    engines[1].querySelector(".zen-welcome-option-label").textContent.trim(),
+    "and becomes the default search engine"
+  );
+
+  const makeDefault = currentPageContent().querySelector(
+    "label[for='zen-welcome-set-default-browser']"
+  );
+  makeDefault.scrollIntoView({ block: "center" });
+  await clickInWelcome(makeDefault);
+  ok(
+    makeDefault.querySelector("input").checked,
+    "Links from other apps can be sent here"
+  );
+  // Don't actually change the default browser in the test.
+  await clickInWelcome(
+    currentPageContent().querySelector(
+      "label[for='zen-welcome-dont-set-default-browser']"
+    )
+  );
+
+  let wizardOpened = false;
+  const windowObserver = () => {
+    wizardOpened = true;
+  };
+  Services.obs.addObserver(windowObserver, "domwindowopened");
+  await goNextWelcomePage("apps");
+  Services.obs.removeObserver(windowObserver, "domwindowopened");
+  ok(!wizardOpened, "Starting fresh does not open the migration wizard");
+
+  // Back, to bring something along this time.
+  await clickInWelcome(backButton);
+  await waitForChapter("move-in");
+  await wait(600);
+  const sourceOption = currentPageContent()
+    .querySelector(sourceSelector)
+    .closest(".zen-welcome-option");
+  sourceOption.scrollIntoView({ block: "center" });
+  await clickInWelcome(sourceOption);
+  ok(
+    sourceOption.querySelector("input").checked,
+    "The browser to import from is selected"
+  );
+  const wizardPromise = BrowserTestUtils.domWindowOpened();
+  const nextButton = welcomeDocument().getElementById("zen-welcome-next");
+  executeSoon(() => clickInWelcome(nextButton));
+  const wizardWin = await wizardPromise;
+  await BrowserTestUtils.waitForEvent(wizardWin, "MigrationWizard:Ready");
+  const wizardShadow =
+    wizardWin.document.getElementById("wizard").openOrClosedShadowRoot;
+  Assert.equal(
+    wizardShadow.querySelector("#wizard-deck").getAttribute("selected-view"),
+    "page-" + MigrationWizardConstants.PAGES.SELECTION,
+    "The wizard waits on its selection page"
+  );
+  const selectedSource = wizardShadow.querySelector(
+    "#browser-profile-selector"
+  ).selectedPanelItem;
+  Assert.equal(
+    selectedSource.getAttribute("key"),
+    InternalTestingProfileMigrator.key,
+    "The wizard opens on the browser picked in the onboarding"
+  );
+  Assert.equal(
+    selectedSource.profile?.id,
+    InternalTestingProfileMigrator.testProfile.id,
+    "and on that browser's profile"
+  );
+  await BrowserTestUtils.closeWindow(wizardWin);
+  await waitForChapter("apps");
+  await wait(800);
+
+  // Apps.
   const essentials = currentPageContent().querySelectorAll(
     "#zen-welcome-essentials .zen-welcome-essential"
   );
-  Assert.greater(
-    essentials.length,
-    3,
-    "Welcome page content should have more than 3 essentials"
-  );
-  await EventUtils.synthesizeMouseAtCenter(essentials[0], {});
-  await EventUtils.synthesizeMouseAtCenter(essentials[2], {});
-  ok(
-    essentials[0].hasAttribute("selected"),
-    "The first essential should be selected"
-  );
-  ok(
-    !essentials[1].hasAttribute("selected"),
-    "The second essential should not be selected"
-  );
-  ok(
-    essentials[2].hasAttribute("selected"),
-    "The third essential should be selected"
-  );
+  Assert.greater(essentials.length, 3, "More than three apps are offered");
+  await clickInWelcome(essentials[0]);
+  await clickInWelcome(essentials[2]);
+  ok(essentials[0].hasAttribute("selected"), "The first app is selected");
+  ok(!essentials[1].hasAttribute("selected"), "The second is not");
+  ok(essentials[2].hasAttribute("selected"), "The third is");
   const urlsToCheck = [essentials[0].dataset.url, essentials[2].dataset.url];
   for (const url of urlsToCheck) {
-    ok(
-      url.startsWith("https://"),
-      `The URL "${url}" should start with "https://"`
-    );
+    ok(url.startsWith("https://"), `"${url}" is a web address`);
   }
+  await goNextWelcomePage("go");
 
-  await goNextWelcomePage("zen-generic-next");
-  ok(true, "Welcome Essentials Step Test Finished");
-
-  options = currentPageContent().querySelectorAll(".zen-welcome-option");
-  Assert.equal(options.length, 2, "Default browser page should have 2 options");
-  await EventUtils.synthesizeMouseAtCenter(options[0], {});
-  ok(
-    options[0].querySelector("input").checked,
-    "Clicking the option should check its radio"
+  // Go.
+  Assert.equal(
+    chapters().filter(chapter => !chapter.disabled).length,
+    6,
+    "Every chapter has been reached"
   );
-  // Don't actually change the default browser in the test.
-  await EventUtils.synthesizeMouseAtCenter(options[1], {});
+  await goNextWelcomePage();
 
-  await goNextWelcomePage("zen-generic-next");
-  ok(true, "Welcome Default Browser Step Test Finished");
-
-  await goNextWelcomePage("zen-welcome-start-browsing");
-  ok(true, "Welcome Finish Step Test Finished");
-
-  await wait(3000); // Wait for the finish animation to complete
+  await wait(3000); // Wait for the browser to come back.
+  ok(
+    !document.getElementById("zen-welcome"),
+    "The onboarding is gone from the window"
+  );
   Assert.equal(
     document.getElementById("zendia-statusline")?.style.display,
     "flex",
@@ -426,8 +431,8 @@ add_task(async function test_Welcome_Steps() {
   );
   Assert.equal(
     group.label,
-    "zen basics",
-    'The first tab group should be labeled "zen basics" after the welcome process'
+    "zendia basics",
+    'The first tab group should be labeled "zendia basics"'
   );
   for (const tab of gBrowser.tabs) {
     if (tab.hasAttribute("zen-empty-tab")) {

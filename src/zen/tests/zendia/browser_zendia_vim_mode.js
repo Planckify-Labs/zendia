@@ -225,3 +225,78 @@ add_task(async function test_layout_reset_returns_to_the_defaults() {
     "compact mode settles"
   );
 });
+
+add_task(
+  async function test_the_mode_indicator_shows_the_mascot_and_the_mode() {
+    const indicator = statusline();
+    await TestUtils.waitForCondition(
+      () => indicator.style.display == "flex",
+      "the mode indicator is shown"
+    );
+    Assert.equal(indicator.getAttribute("mode"), "n", "It is in NORMAL mode");
+    Assert.equal(
+      indicator.querySelector(".zendia-statusline-mode").textContent,
+      "NORMAL",
+      "and says so on its tag"
+    );
+    const mascot = indicator.querySelector("svg.zendia-mascot");
+    Assert.greater(
+      mascot.querySelectorAll("polygon").length,
+      8,
+      "The mascot is drawn"
+    );
+    const tag = indicator
+      .querySelector(".zendia-statusline-mode")
+      .getBoundingClientRect();
+    Assert.greater(tag.width, 40, "The tag with the mode's name can be read");
+    Assert.greater(
+      mascot.getBoundingClientRect().width,
+      60,
+      "The mascot is larger than the chip it replaced"
+    );
+  }
+);
+
+add_task(async function test_the_mode_indicator_steps_aside_from_the_pointer() {
+  const indicator = statusline();
+  const home = indicator.getBoundingClientRect();
+  ok(!indicator.hasAttribute("aside"), "It starts in its corner");
+  EventUtils.synthesizeMouseAtPoint(
+    home.x + home.width / 2,
+    home.y + home.height / 2,
+    { type: "mousemove" },
+    window
+  );
+  await TestUtils.waitForCondition(
+    () => indicator.hasAttribute("aside"),
+    "with the pointer on it, it steps aside"
+  );
+  await TestUtils.waitForCondition(() => {
+    const now = indicator.getBoundingClientRect();
+    return Math.abs(now.x - home.x) > home.width;
+  }, "far enough to uncover where it stood");
+
+  // The pointer still where it stood: it stays away.
+  EventUtils.synthesizeMouseAtPoint(
+    home.x + home.width / 2 + 2,
+    home.y + home.height / 2,
+    { type: "mousemove" },
+    window
+  );
+  ok(indicator.hasAttribute("aside"), "It waits while the pointer is there");
+
+  EventUtils.synthesizeMouseAtPoint(
+    window.innerWidth / 2,
+    window.innerHeight / 3,
+    { type: "mousemove" },
+    window
+  );
+  await TestUtils.waitForCondition(
+    () => !indicator.hasAttribute("aside"),
+    "and comes back once the pointer has left"
+  );
+  await TestUtils.waitForCondition(() => {
+    const now = indicator.getBoundingClientRect();
+    return Math.abs(now.x - home.x) < 2;
+  }, "to the corner it came from");
+});

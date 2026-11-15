@@ -3,3 +3,4 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
         content/browser/zen-vendor/motion.min.mjs                               (../../zen/vendor/motion.min.mjs)
+        content/browser/zen-vendor/zendia-welcome.min.mjs                       (../../zen/vendor/zendia-welcome.min.mjs)

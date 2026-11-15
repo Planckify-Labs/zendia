@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!-- The onboarding's pages. ZenWelcome.mjs shows this in a frame over the
+     browser window and removes the frame when the onboarding ends, which
+     frees React, three.js and the WebGL context with it. The interface is
+     built from tools/zendia-welcome. -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; object-src 'none'; img-src chrome: resource: moz-icon: moz-extension: data: blob:"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <title data-l10n-id="zendia-welcome-start"></title>
+    <link rel="localization" href="branding/brand.ftl" />
+    <link rel="localization" href="browser/zen-general.ftl" />
+    <link rel="localization" href="browser/zen-welcome.ftl" />
+    <link
+      rel="stylesheet"
+      href="chrome://browser/content/zen-styles/zendia-welcome.css"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script
+      type="module"
+      src="chrome://browser/content/zen-vendor/zendia-welcome.min.mjs"
+    ></script>
+  </body>
+</html>

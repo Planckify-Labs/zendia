@@ -4,4 +4,5 @@
 
         content/browser/zen-components/ZenWelcome.mjs                           (../../zen/welcome/ZenWelcome.mjs)
         content/browser/zen-styles/zen-welcome.css                              (../../zen/welcome/zen-welcome.css)
-        content/browser/zen-videos/welcome-background.mp4                       (../../zen/welcome/welcome-background.mp4)
+        content/browser/zen-styles/zendia-welcome.css                           (../../zen/welcome/zendia-welcome.css)
+        content/browser/zen-welcome/zendia-welcome.html                         (../../zen/welcome/zendia-welcome.html)

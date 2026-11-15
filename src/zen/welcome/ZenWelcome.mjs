@@ -2,14 +2,27 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+// The onboarding, from the browser window's side. Its pages are a document
+// of their own (zendia-welcome.html, built from tools/zendia-welcome with
+// React and React Three Fiber) shown in a frame that fills the window. This
+// file answers what the pages ask of the browser through
+// the `host` object below, and puts the browser back when they are done.
+// Removing the frame then frees the pages' libraries and their WebGL
+// context; nothing of them stays in the window.
+
 {
   let lazy = {};
 
   ChromeUtils.defineESModuleGetters(lazy, {
     ZendiaAgents: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
+    agentIcon: "resource:///modules/zendia/agent/ZendiaAgentIcons.sys.mjs",
+    ZendiaTheme: "resource:///modules/zendia/ui/ZendiaTheme.sys.mjs",
     ZendiaUblock: "resource:///modules/zendia/ublock/ZendiaUblock.sys.mjs",
     SearchService: "moz-src:///toolkit/components/search/SearchService.sys.mjs",
   });
+
+  const kWelcomePage =
+    "chrome://browser/content/zen-welcome/zendia-welcome.html";
 
   const kZenElementsToIgnore = [
     "zen-browser-background",
@@ -17,31 +30,65 @@
   ];
 
   const kEssentialApps = [
-    { url: "https://obsidian.md", icon: "obsidian", color: "#7c3aed" },
-    { url: "https://discord.com", icon: "discord", color: "#5865f2" },
-    { url: "https://trello.com", icon: "trello", color: "#0052cc" },
-    { url: "https://slack.com", icon: "slack", color: "#e01e5a" },
-    { url: "https://github.com", icon: "github", color: "#57606a" },
-    { url: "https://app.tuta.com/", icon: "tuta", color: "#c00002" },
-    { url: "https://notion.com", icon: "notion", color: "#37352f" },
-    { url: "https://calendar.google.com", icon: "calendar", color: "#4285f4" },
-    { url: "https://figma.com", icon: "figma", color: "#f24e1e" },
+    {
+      name: "Obsidian",
+      url: "https://obsidian.md",
+      icon: "obsidian",
+      color: "#7c3aed",
+    },
+    {
+      name: "Discord",
+      url: "https://discord.com",
+      icon: "discord",
+      color: "#5865f2",
+    },
+    {
+      name: "Trello",
+      url: "https://trello.com",
+      icon: "trello",
+      color: "#0052cc",
+    },
+    {
+      name: "Slack",
+      url: "https://slack.com",
+      icon: "slack",
+      color: "#e01e5a",
+    },
+    {
+      name: "GitHub",
+      url: "https://github.com",
+      icon: "github",
+      color: "#57606a",
+    },
+    {
+      name: "Tuta",
+      url: "https://app.tuta.com/",
+      icon: "tuta",
+      color: "#c00002",
+    },
+    {
+      name: "Notion",
+      url: "https://notion.com",
+      icon: "notion",
+      color: "#37352f",
+    },
+    {
+      name: "Google Calendar",
+      url: "https://calendar.google.com",
+      icon: "calendar",
+      color: "#4285f4",
+    },
+    {
+      name: "Figma",
+      url: "https://figma.com",
+      icon: "figma",
+      color: "#f24e1e",
+    },
   ];
 
   const kVimModePref = "zendia.enabled";
 
-  // The keys shown on the keyboard page, LazyVim's own.
-  const kZendiaKeys = [
-    ["j  k", "zen-welcome-zendia-key-scroll"],
-    ["⇧H  ⇧L", "zen-welcome-zendia-key-tabs"],
-    ["Space", "zen-welcome-zendia-key-leader"],
-    ["Space e", "zen-welcome-zendia-key-explorer"],
-    ["Space a a", "zen-welcome-zendia-key-agent"],
-    ["Esc", "zen-welcome-zendia-key-escape"],
-  ];
-
   const gChoices = {
-    setDefaultBrowser: false,
     essentials: new Set(),
   };
 
@@ -54,47 +101,12 @@
     }
   }
 
-  function getMotion() {
-    return gZenUIManager.motion;
-  }
-
   function animate(...args) {
-    return getMotion().animate(...args);
+    return gZenUIManager.motion.animate(...args);
   }
 
-  function parseXUL(xul) {
-    return window.MozXULElement.parseXULToFragment(xul);
-  }
-
-  function initializeZenWelcome() {
-    document.documentElement.setAttribute("zen-welcome-stage", "true");
-    const XUL = `
-      <html:video id="zen-welcome-video" autoplay="" loop="" muted=""
-                    disablepictureinpicture="" tabindex="-1"
-                    src="chrome://browser/content/zen-videos/welcome-background.mp4"></html:video>
-      <html:div id="zen-welcome">
-        <html:div id="zen-welcome-start">
-          <html:h1 id="zen-welcome-title"></html:h1>
-          <button class="footer-button primary" id="zen-welcome-start-button">
-          </button>
-        </html:div>
-        <html:div id="zen-welcome-pages">
-          <html:div id="zen-welcome-page-sidebar">
-            <html:button id="zen-welcome-back" data-l10n-id="zen-welcome-back"></html:button>
-            <html:div id="zen-welcome-page-sidebar-content"></html:div>
-            <html:div id="zen-welcome-page-sidebar-buttons"></html:div>
-          </html:div>
-          <html:div id="zen-welcome-page-content"></html:div>
-        </html:div>
-      </html:div>
-    `;
-    document.getElementById("browser").appendChild(parseXUL(XUL));
-    const video = document.getElementById("zen-welcome-video");
-    video.play().catch(() => {});
-    window.MozXULElement.insertFTLIfNeeded("browser/zen-welcome.ftl");
-    window.MozXULElement.insertFTLIfNeeded("browser/migrationWizard.ftl");
-    window.MozXULElement.insertFTLIfNeeded("browser/zen-migration.ftl");
-  }
+  const essentialIcon = app =>
+    `chrome://browser/content/zen-images/favicons/${app.icon}.svg`;
 
   var _iconToData = {};
 
@@ -119,363 +131,6 @@
     });
     return data;
   }
-
-  function createIconWrapper(url) {
-    const iconWrapper = document.createElement("div");
-    iconWrapper.className = "engine-icon-wrapper";
-    const iconBackdrop = document.createElement("img");
-    iconBackdrop.className = "engine-icon-backdrop";
-    const icon = document.createElement("img");
-    icon.className = "engine-icon";
-    icon.width = icon.height = 40;
-    if (url) {
-      icon.src = url;
-      iconBackdrop.src = url;
-    }
-    iconWrapper.append(iconBackdrop, icon);
-    return iconWrapper;
-  }
-
-  function createOption({ id, group, checked, l10n, text, extra }) {
-    const label = document.createElement("label");
-    label.className = "zen-welcome-option";
-    label.setAttribute("for", id);
-    const input = document.createElement("input");
-    input.type = "radio";
-    input.id = id;
-    input.name = group;
-    input.checked = !!checked;
-    label.appendChild(input);
-    const radio = document.createElement("span");
-    radio.className = "zen-welcome-option-radio no-squircles";
-    label.appendChild(radio);
-    if (extra) {
-      label.appendChild(extra);
-    }
-    const labelText = document.createElement("span");
-    labelText.className = "zen-welcome-option-label";
-    if (l10n) {
-      document.l10n.setAttributes(labelText, l10n);
-    } else {
-      labelText.textContent = text;
-    }
-    label.appendChild(labelText);
-    return label;
-  }
-
-  function removeVideoBackground() {
-    const video = document.getElementById("zen-welcome-video");
-    if (!video) {
-      return;
-    }
-    animate(video, { opacity: 0 }, { duration: 0.6, ease: "easeOut" }).then(
-      () => {
-        video.pause();
-        video.remove();
-      }
-    );
-  }
-
-  const kSpring = { type: "spring", bounce: 0.35, visualDuration: 0.35 };
-  const kExit = { duration: 0.12, ease: "easeIn" };
-  const kFade = { duration: 0.25, ease: "easeOut" };
-
-  class nsZenWelcomePages {
-    #index = -1;
-    #pages;
-    #content = null;
-    #renderToken = 0;
-    #buttonsToken = 0;
-
-    constructor(pages) {
-      this.#pages = pages;
-      this.init();
-      this.next();
-    }
-
-    get textContainer() {
-      return document.getElementById("zen-welcome-page-sidebar-content");
-    }
-
-    get contentContainer() {
-      return document.getElementById("zen-welcome-page-content");
-    }
-
-    get buttonsContainer() {
-      return document.getElementById("zen-welcome-page-sidebar-buttons");
-    }
-
-    get backButton() {
-      return document.getElementById("zen-welcome-back");
-    }
-
-    get currentPage() {
-      return this.#pages[this.#index];
-    }
-
-    get content() {
-      return this.#content;
-    }
-
-    init() {
-      document.getElementById("zen-welcome-start").remove();
-      const pages = document.getElementById("zen-welcome-pages");
-      pages.style.display = "flex";
-      animate(pages, { opacity: [0, 1] }, { ...kFade, duration: 0.45 });
-      this.backButton.addEventListener("click", () => this.back());
-    }
-
-    next() {
-      this.currentPage?.commit?.(this.#content);
-      this.#show(this.#index + 1, 1);
-    }
-
-    back() {
-      if (this.#index <= 0) {
-        return;
-      }
-      this.#show(this.#index - 1, -1);
-    }
-
-    #show(index, direction) {
-      const previous = this.currentPage;
-      while (this.#pages[index]?.skip?.()) {
-        index += direction;
-      }
-      if (index < 0) {
-        return;
-      }
-      this.#index = index;
-      const page = this.currentPage;
-      if (!page) {
-        this.finish();
-        return;
-      }
-      previous?.leave?.();
-      this.#exit(this.textContainer, { x: [0, -80 * direction] });
-      this.#exit(this.contentContainer, {});
-      this.backButton.toggleAttribute("disabled", index === 0);
-      this.updateButtons();
-      this.#renderText(page, direction);
-      this.#renderContent(page);
-    }
-
-    #exit(container, keyframes) {
-      for (const element of container.children) {
-        if (element.hasAttribute("exiting")) {
-          continue;
-        }
-        element.setAttribute("exiting", "");
-        animate(element, { opacity: [1, 0], ...keyframes }, kExit).then(() =>
-          element.remove()
-        );
-      }
-    }
-
-    async #renderText(page, direction) {
-      const token = ++this.#renderToken;
-      const text = document.createElement("div");
-      text.className = "zen-welcome-text";
-      const title = document.createElement("h1");
-      document.l10n.setAttributes(title, page.title);
-      text.appendChild(title);
-      for (const id of page.descriptions ?? []) {
-        const p = document.createElement("p");
-        document.l10n.setAttributes(p, id);
-        text.appendChild(p);
-      }
-      await document.l10n.translateFragment(text);
-      if (token !== this.#renderToken) {
-        return;
-      }
-      this.textContainer.appendChild(text);
-      animate(
-        [...text.children],
-        { opacity: [0, 1], x: [120 * direction, 0] },
-        {
-          ...kSpring,
-          bounce: 0.4,
-          visualDuration: 0.3,
-          delay: getMotion().stagger(0.03),
-        }
-      );
-    }
-
-    #renderContent(page) {
-      const content = document.createElement("div");
-      content.className = "zen-welcome-page";
-      if (page.id) {
-        content.setAttribute("page", page.id);
-      }
-      page.render(content, this);
-      this.contentContainer.appendChild(content);
-      this.#content = content;
-      animate(content, { opacity: [0, 1] }, kFade);
-    }
-
-    async updateButtons() {
-      const token = ++this.#buttonsToken;
-      const fragment = document.createDocumentFragment();
-      for (const button of this.currentPage.buttons) {
-        const element = document.createElement("button");
-        element.className = button.primary
-          ? "zen-big-accent-button primary"
-          : "zen-big-accent-button";
-        document.l10n.setAttributes(element, button.l10n);
-        element.addEventListener("click", () => {
-          if (button.onclick?.(this) !== false) {
-            this.next();
-          }
-        });
-        fragment.appendChild(element);
-      }
-      await document.l10n.translateFragment(fragment);
-      if (token === this.#buttonsToken) {
-        this.buttonsContainer.replaceChildren(fragment);
-      }
-    }
-
-    async finish() {
-      ++this.#buttonsToken;
-      this.buttonsContainer.replaceChildren();
-      this.backButton.toggleAttribute("disabled", true);
-      gZenWorkspaces.reorganizeTabsAfterWelcome();
-      const promises = [this.#applyChoices()];
-      await animate("#zen-welcome", { opacity: [1, 0] });
-      this.contentContainer.remove();
-      await Promise.all(promises);
-      _iconToData = undefined; // Unload icon data
-      document.getElementById("zen-welcome").remove();
-      document.documentElement.removeAttribute("zen-welcome-stage");
-      unlockWindowSize();
-      for (const element of document.getElementById("browser").children) {
-        if (kZenElementsToIgnore.includes(element.id)) {
-          continue;
-        }
-        element.style.opacity = 0;
-        element.style.removeProperty("display");
-      }
-      window.requestAnimationFrame(() => {
-        window.dispatchEvent(new window.Event("resize")); // To recalculate the layout
-      });
-      gZenFolders.relayoutCollapsedFolders();
-      let elementsToIgnore = kZenElementsToIgnore
-        .map(id => `#${id}`)
-        .join(", ");
-      await animate(`#browser > *:not(${elementsToIgnore})`, {
-        opacity: [0, 1],
-      });
-    }
-
-    async #applyChoices() {
-      await this.#pinEssentials();
-      let tabsToGroup = [];
-      if (!gBrowser.selectedTab.hasAttribute("zen-empty-tab")) {
-        tabsToGroup.push(gBrowser.selectedTab);
-      }
-      gZenFolders.createFolder(tabsToGroup, {
-        renameFolder: false,
-        label: "zen basics",
-      });
-    }
-
-    async #pinEssentials() {
-      const apps = kEssentialApps.filter(app =>
-        gChoices.essentials.has(app.url)
-      );
-      if (!apps.length) {
-        return;
-      }
-      await PlacesUtils.history.insertMany(
-        apps.map(app => ({
-          url: app.url,
-          visits: [{ transition: PlacesUtils.history.TRANSITIONS.TYPED }],
-        }))
-      );
-      const { TabStateCache } = ChromeUtils.importESModule(
-        "moz-src:///browser/components/sessionstore/TabStateCache.sys.mjs"
-      );
-      for (const app of apps) {
-        const tab = window.gBrowser.addTrustedTab(app.url, {
-          inBackground: true,
-          createLazyBrowser: true,
-        });
-        const icon = await getIconData(
-          `chrome://browser/content/zen-images/favicons/${app.icon}.svg`
-        );
-        // Update the persistent tab state cache with |tabData| information.
-        TabStateCache.update(tab.linkedBrowser.permanentKey, {
-          history: { entries: [{ url: app.url }], index: 0 },
-          image: icon,
-        });
-        gBrowser.setIcon(tab, icon);
-        tab.removeAttribute("pending"); // Make it appear loaded
-        gZenPinnedTabManager.addToEssentials(tab);
-      }
-    }
-  }
-
-  class ZenSearchEngineStore {
-    constructor() {
-      this._engines = [];
-    }
-
-    async init() {
-      const visibleEngines = await lazy.SearchService.getVisibleEngines();
-      this.initSpecificEngine(visibleEngines);
-    }
-
-    getEngines() {
-      return this._engines.filter(
-        engine =>
-          !(
-            engine.name.toLowerCase().includes("wikipedia") ||
-            engine.name.toLowerCase().includes("ebay")
-          )
-      );
-    }
-
-    initSpecificEngine(engines) {
-      for (const engine of engines) {
-        try {
-          this._engines.push(this._cloneEngine(engine));
-        } catch (e) {
-          // Ignore engines that throw an exception when cloning.
-          console.error(e);
-        }
-      }
-    }
-
-    getEngineByName(aName) {
-      return this._engines.find(engine => engine.name == aName);
-    }
-
-    _cloneEngine(aEngine) {
-      const clonedObj = {};
-
-      for (const i of ["name", "alias", "_iconURI", "hidden"]) {
-        clonedObj[i] = aEngine[i];
-      }
-
-      clonedObj.originalEngine = aEngine;
-
-      return clonedObj;
-    }
-
-    async getDefaultEngine() {
-      let engineName = await lazy.SearchService.getDefault();
-      return this.getEngineByName(engineName._name);
-    }
-
-    async setDefaultEngine(engine) {
-      await lazy.SearchService.setDefault(
-        engine.originalEngine,
-        lazy.SearchService.CHANGE_REASON.USER
-      );
-    }
-  }
-
-  const kNextButton = { l10n: "zen-generic-next", primary: true };
 
   const kDefaultBrandImage = "chrome://global/skin/icons/defaultFavicon.svg";
 
@@ -535,62 +190,6 @@
     return sources.sort((a, b) => b.lastUsed - a.lastUsed);
   }
 
-  /**
-   * A browser's card on the import page, followed by its profiles to pick
-   * from when it has more than one.
-   *
-   * @param {object} source One of getImportableBrowsers' entries
-   * @param {number} index Its position in the list
-   */
-  function createImportSource(source, index) {
-    const container = document.createElement("div");
-    container.className = "zen-welcome-import-source";
-    const option = createOption({
-      id: "zen-welcome-import-" + index,
-      group: "zen-welcome-import",
-      text: source.name,
-      extra: createIconWrapper(source.image),
-    });
-    option.querySelector("input").dataset.sourceIndex = index;
-    container.appendChild(option);
-    if (source.profiles.length > 1) {
-      const profiles = document.createElement("div");
-      profiles.className = "zen-welcome-import-profiles";
-      const list = document.createElement("div");
-      list.className = "zen-welcome-import-profiles-list";
-      source.profiles.forEach((profile, profileIndex) => {
-        const row = document.createElement("label");
-        row.className = "zen-welcome-import-profile";
-        const input = document.createElement("input");
-        input.type = "radio";
-        input.name = `zen-welcome-import-profile-${index}`;
-        input.value = profileIndex;
-        input.checked = profileIndex === 0;
-        const check = document.createElement("span");
-        check.className = "zen-welcome-import-profile-check no-squircles";
-        const text = document.createElement("span");
-        text.className = "zen-welcome-import-profile-name";
-        text.textContent = profile?.name || profile?.id || source.name;
-        row.append(input, check, text);
-        list.appendChild(row);
-      });
-      profiles.appendChild(list);
-      container.appendChild(profiles);
-    }
-    return container;
-  }
-
-  function updateExpandedImportSource(content) {
-    for (const source of content.querySelectorAll(
-      ".zen-welcome-import-source"
-    )) {
-      source.toggleAttribute(
-        "expanded",
-        source.querySelector("input[name='zen-welcome-import']").checked
-      );
-    }
-  }
-
   async function setDefaultBrowser() {
     const shellSvc =
       AppConstants.HAVE_SHELL_SERVICE && window.getShellService();
@@ -604,530 +203,234 @@
     }
   }
 
-  function getWelcomePages() {
-    return [
-      {
-        id: "import",
-        title: "zen-welcome-import-title",
-        descriptions: ["zen-welcome-import-description"],
-        buttons: [kNextButton],
-        async render(content) {
-          content.appendChild(
-            createOption({
-              id: "zen-welcome-import-no",
-              group: "zen-welcome-import",
-              l10n: "zen-welcome-import-no",
-              checked: true,
-            })
-          );
-          const sources = await getImportableBrowsers();
-          if (!content.isConnected) {
-            return;
-          }
-          content.importSources = sources;
-          sources.forEach((source, index) => {
-            content.appendChild(createImportSource(source, index));
-          });
-          content.addEventListener("change", event => {
-            if (event.target.name === "zen-welcome-import") {
-              updateExpandedImportSource(content);
-            }
-          });
-          updateExpandedImportSource(content);
-        },
-        commit(content) {
-          const checked = content.querySelector(
-            "input[name='zen-welcome-import']:checked"
-          );
-          const source = content.importSources?.[checked?.dataset.sourceIndex];
-          if (!source) {
-            return;
-          }
-          const profileIndex =
-            checked
-              .closest(".zen-welcome-import-source")
-              .querySelector("input[type='radio'][value]:checked")?.value ?? 0;
-          const profile = source.profiles[profileIndex];
-          MigrationUtils.showMigrationWizard(window, {
-            entrypoint: MigrationUtils.MIGRATION_ENTRYPOINTS.FIRSTRUN,
-            isStartupMigration: true,
-            migratorKey: source.key,
-            profileId: profile?.id,
-          });
-        },
-      },
-      {
-        id: "zendia-keys",
-        title: "zen-welcome-zendia-keys-title",
-        descriptions: ["zen-welcome-zendia-keys-description"],
-        buttons: [kNextButton],
-        render(content) {
-          const sheet = document.createElement("div");
-          sheet.className = "zen-welcome-zendia-keys";
-          for (const [keys, l10n] of kZendiaKeys) {
-            const kbd = document.createElement("kbd");
-            kbd.textContent = keys;
-            const desc = document.createElement("span");
-            document.l10n.setAttributes(desc, l10n);
-            sheet.append(kbd, desc);
-          }
-          const enabled = Services.prefs.getBoolPref(kVimModePref, true);
-          content.append(
-            sheet,
-            createOption({
-              id: "zen-welcome-zendia-keys-yes",
-              group: "zen-welcome-zendia-keys",
-              l10n: "zen-welcome-zendia-keys-yes",
-              checked: enabled,
-            }),
-            createOption({
-              id: "zen-welcome-zendia-keys-no",
-              group: "zen-welcome-zendia-keys",
-              l10n: "zen-welcome-zendia-keys-no",
-              checked: !enabled,
-            })
-          );
-        },
-        commit(content) {
-          Services.prefs.setBoolPref(
-            kVimModePref,
-            content.querySelector("#zen-welcome-zendia-keys-yes").checked
-          );
-        },
-      },
-      {
-        id: "zendia-agents",
-        title: "zen-welcome-zendia-agents-title",
-        descriptions: ["zen-welcome-zendia-agents-description"],
-        buttons: [kNextButton],
-        async render(content) {
-          const lookup = document.createElement("p");
-          lookup.className = "zen-welcome-zendia-agents-status";
-          document.l10n.setAttributes(
-            lookup,
-            "zen-welcome-zendia-agents-looking"
-          );
-          content.appendChild(lookup);
-          const agents = await lazy.ZendiaAgents.agents();
-          const preferred = await lazy.ZendiaAgents.defaultAgent();
-          if (!content.isConnected) {
-            return;
-          }
-          const installed = agents.filter(agent => agent.path);
-          const missing = agents.filter(agent => !agent.path);
-          content.agents = installed;
-          if (installed.length) {
-            lookup.remove();
-          } else {
-            document.l10n.setAttributes(
-              lookup,
-              "zen-welcome-zendia-agents-none"
-            );
-          }
-          for (const agent of installed) {
-            const version = document.createElement("span");
-            version.className = "zen-welcome-zendia-agent-version";
-            version.textContent = agent.version ?? "";
-            const option = createOption({
-              id: `zen-welcome-agent-${agent.id}`,
-              group: "zen-welcome-zendia-agents",
-              text: agent.name,
-              checked: agent.id == preferred?.id,
-              extra: version,
-            });
-            option.querySelector("input").value = agent.id;
-            content.appendChild(option);
-          }
-          if (missing.length) {
-            const list = document.createElement("div");
-            list.className = "zen-welcome-zendia-agents-missing";
-            const heading = document.createElement("span");
-            document.l10n.setAttributes(
-              heading,
-              "zen-welcome-zendia-agents-missing"
-            );
-            list.appendChild(heading);
-            for (const agent of missing) {
-              const row = document.createElement("div");
-              const agentName = document.createElement("strong");
-              agentName.textContent = agent.name;
-              const hint = document.createElement("code");
-              hint.textContent = agent.install;
-              row.append(agentName, hint);
-              list.appendChild(row);
-            }
-            content.appendChild(list);
-          }
-        },
-        commit(content) {
-          const id = content.querySelector(
-            "input[name='zen-welcome-zendia-agents']:checked"
-          )?.value;
-          const agent = content.agents?.find(candidate => candidate.id == id);
-          if (!agent) {
-            return;
-          }
-          lazy.ZendiaAgents.setDefaultAgent(agent.id);
-          // Agents that need zendia added to their own config get it
-          // now, so the first question just works.
-          lazy.ZendiaAgents.ensureConnected(agent).catch(console.error);
-        },
-      },
-      {
-        id: "colors",
-        title: "zen-welcome-workspace-colors-title",
-        descriptions: ["zen-welcome-workspace-colors-description"],
-        buttons: [kNextButton],
-        render(content) {
-          removeVideoBackground();
-          const anchor = document.createElement("div");
-          anchor.id = "zen-welcome-workspace-colors-anchor";
-          content.appendChild(anchor);
-          const panel = gZenThemePicker.panel;
-          panel.setAttribute("noautohide", "true");
-          panel.setAttribute("consumeoutsideclicks", "false");
-          panel.setAttribute("nonnative", "");
-          panel.addEventListener(
-            "popupshowing",
-            () => {
-              const panelRect = panel.getBoundingClientRect();
-              // 20 is the shadow width * 2
-              anchor.style.height =
-                panelRect.height -
-                (AppConstants.platform == "macosx" ? -90 : 20) +
-                "px";
-              anchor.style.width = panelRect.width - 20 + "px";
-            },
-            { once: true }
-          );
-          PanelMultiView.openPopup(panel, anchor, { position: "overlap" });
-        },
-        leave() {
-          const panel = gZenThemePicker.panel;
-          panel.removeAttribute("noautohide");
-          panel.removeAttribute("consumeoutsideclicks");
-          panel.removeAttribute("nonnative");
-          animate(panel, { opacity: [1, 0] }, kExit).then(() => {
-            panel.hidePopup();
-            panel.removeAttribute("style");
-          });
-        },
-      },
-      {
-        id: "search",
-        title: "zen-welcome-default-search-title",
-        descriptions: ["zen-welcome-default-search-description"],
-        buttons: [kNextButton],
-        async render(content) {
-          const engineStore = new ZenSearchEngineStore();
-          await engineStore.init();
-          const defaultEngine = await lazy.SearchService.getDefault();
-          for (const engine of engineStore.getEngines()) {
-            const iconWrapper = createIconWrapper();
-            engine.originalEngine.getIconURL(96).then(url => {
-              for (const img of iconWrapper.children) {
-                img.src = url;
-              }
-            });
-            const option = createOption({
-              id: "zen-welcome-engine-" + engine.name.replace(/\s+/g, "-"),
-              group: "zen-welcome-search-engine",
-              text: engine.name,
-              checked: engine.name === defaultEngine.name,
-              extra: iconWrapper,
-            });
-            option
-              .querySelector("input")
-              .addEventListener("change", () =>
-                engineStore.setDefaultEngine(engine)
-              );
-            content.appendChild(option);
-          }
-        },
-      },
-      {
-        id: "block-ads",
-        title: "zen-welcome-block-ads-title",
-        descriptions: ["zen-welcome-block-ads-description"],
-        buttons: [kNextButton],
-        // uBlock Origin is installed at startup; this page keeps or drops it.
-        render(content) {
-          const { enabled } = lazy.ZendiaUblock;
-          content.appendChild(
-            createOption({
-              id: "zen-welcome-block-ads-yes",
-              group: "zen-welcome-block-ads",
-              l10n: "zen-welcome-block-ads-yes",
-              checked: enabled,
-            })
-          );
-          content.appendChild(
-            createOption({
-              id: "zen-welcome-block-ads-no",
-              group: "zen-welcome-block-ads",
-              l10n: "zen-welcome-block-ads-no",
-              checked: !enabled,
-            })
-          );
-        },
-        commit(content) {
-          lazy.ZendiaUblock.setEnabled(
-            content.querySelector("#zen-welcome-block-ads-yes").checked
-          ).catch(console.error);
-        },
-      },
-      {
-        id: "essentials",
-        title: "zen-welcome-essentials-title",
-        descriptions: ["zen-welcome-essentials-description"],
-        buttons: [
-          kNextButton,
-          {
-            l10n: "zen-welcome-skip",
-            onclick(pages) {
-              for (const button of pages.content.querySelectorAll(
-                ".zen-welcome-essential[selected]"
-              )) {
-                button.removeAttribute("selected");
-              }
-            },
-          },
-        ],
-        render(content) {
-          content.appendChild(
-            parseXUL(`
-              <html:div class="zen-welcome-mock-browser">
-                <html:div class="zen-welcome-mock-browser-sidebar">
-                  <html:div class="zen-welcome-mock-browser-dots">
-                    <html:div class="no-squircles"></html:div>
-                    <html:div class="no-squircles"></html:div>
-                    <html:div class="no-squircles"></html:div>
-                  </html:div>
-                  <html:div id="zen-welcome-essentials"></html:div>
-                  <html:div class="zen-welcome-mock-tab"></html:div>
-                  <html:div class="zen-welcome-mock-tab"></html:div>
-                </html:div>
-              </html:div>
-            `)
-          );
-          const grid = content.querySelector("#zen-welcome-essentials");
-          for (const app of kEssentialApps) {
-            const button = document.createElement("button");
-            button.className = "zen-welcome-essential";
-            button.dataset.url = app.url;
-            button.style.setProperty(
-              "--zen-welcome-app-icon",
-              `url("chrome://browser/content/zen-images/favicons/${app.icon}.svg")`
-            );
-            button.style.setProperty("--zen-welcome-app-color", app.color);
-            button.toggleAttribute(
-              "selected",
-              gChoices.essentials.has(app.url)
-            );
-            button.addEventListener("click", () => {
-              button.toggleAttribute("selected");
-            });
-            grid.appendChild(button);
-          }
-        },
-        commit(content) {
-          gChoices.essentials = new Set(
-            [
-              ...content.querySelectorAll(".zen-welcome-essential[selected]"),
-            ].map(button => button.dataset.url)
-          );
-        },
-      },
-      {
-        id: "default-browser",
-        title: "zen-welcome-default-browser-title",
-        descriptions: ["zen-welcome-default-browser-description"],
-        buttons: [kNextButton],
-        render(content) {
-          content.appendChild(
-            createOption({
-              id: "zen-welcome-set-default-browser",
-              group: "zen-welcome-default-browser",
-              l10n: "zen-welcome-set-default-browser",
-              checked: gChoices.setDefaultBrowser,
-            })
-          );
-          content.appendChild(
-            createOption({
-              id: "zen-welcome-dont-set-default-browser",
-              group: "zen-welcome-default-browser",
-              l10n: "zen-welcome-dont-set-default-browser",
-              checked: !gChoices.setDefaultBrowser,
-            })
-          );
-        },
-        commit(content) {
-          gChoices.setDefaultBrowser = content.querySelector(
-            "#zen-welcome-set-default-browser"
-          ).checked;
-          if (gChoices.setDefaultBrowser) {
-            setDefaultBrowser();
-          }
-        },
-      },
-      {
-        id: "finish",
-        title: "zen-welcome-start-browsing-title",
-        descriptions: ["zen-welcome-start-browsing-description-1"],
-        buttons: [{ l10n: "zen-welcome-start-browsing", primary: true }],
-        render() {},
-      },
-    ];
+  /* Leaving the onboarding: what was chosen is applied and the browser comes
+     back in its place. */
+
+  async function pinEssentials() {
+    const apps = kEssentialApps.filter(app => gChoices.essentials.has(app.url));
+    if (!apps.length) {
+      return;
+    }
+    await PlacesUtils.history.insertMany(
+      apps.map(app => ({
+        url: app.url,
+        visits: [{ transition: PlacesUtils.history.TRANSITIONS.TYPED }],
+      }))
+    );
+    const { TabStateCache } = ChromeUtils.importESModule(
+      "moz-src:///browser/components/sessionstore/TabStateCache.sys.mjs"
+    );
+    for (const app of apps) {
+      const tab = window.gBrowser.addTrustedTab(app.url, {
+        inBackground: true,
+        createLazyBrowser: true,
+      });
+      const icon = await getIconData(essentialIcon(app));
+      // Update the persistent tab state cache with |tabData| information.
+      TabStateCache.update(tab.linkedBrowser.permanentKey, {
+        history: { entries: [{ url: app.url }], index: 0 },
+        image: icon,
+      });
+      gBrowser.setIcon(tab, icon);
+      tab.removeAttribute("pending"); // Make it appear loaded
+      gZenPinnedTabManager.addToEssentials(tab);
+    }
   }
 
-  async function animateInitialStage() {
-    const [title1, title2] = await document.l10n.formatValues([
-      { id: "zen-welcome-title-line1" },
-      { id: "zen-welcome-title-line2" },
-    ]);
-    const titleElement = document.getElementById("zen-welcome-title");
-    for (const line of [title1, title2]) {
-      const lineElement = document.createElement("span");
-      for (const char of line) {
-        if (char === " ") {
-          lineElement.append(" ");
-          continue;
+  async function applyChoices() {
+    await pinEssentials();
+    let tabsToGroup = [];
+    if (!gBrowser.selectedTab.hasAttribute("zen-empty-tab")) {
+      tabsToGroup.push(gBrowser.selectedTab);
+    }
+    gZenFolders.createFolder(tabsToGroup, {
+      renameFolder: false,
+      label: "zendia basics",
+    });
+  }
+
+  let _finishing = false;
+
+  async function finish() {
+    if (_finishing) {
+      return;
+    }
+    _finishing = true;
+    gZenWorkspaces.reorganizeTabsAfterWelcome();
+    const applied = applyChoices();
+    await animate("#zen-welcome", { opacity: [1, 0] });
+    await applied;
+    _iconToData = undefined; // Unload icon data
+    document.getElementById("zen-welcome").remove();
+    delete window.zendiaWelcomeHost;
+    document.documentElement.removeAttribute("zen-welcome-stage");
+    for (const element of document.getElementById("browser").children) {
+      if (kZenElementsToIgnore.includes(element.id)) {
+        continue;
+      }
+      element.style.opacity = 0;
+      element.style.removeProperty("display");
+    }
+    window.requestAnimationFrame(() => {
+      window.dispatchEvent(new window.Event("resize")); // To recalculate the layout
+    });
+    gZenFolders.relayoutCollapsedFolders();
+    let elementsToIgnore = kZenElementsToIgnore.map(id => `#${id}`).join(", ");
+    await animate(`#browser > *:not(${elementsToIgnore})`, {
+      opacity: [0, 1],
+    });
+  }
+
+  /**
+   * What the onboarding's pages can ask of the browser. They find it as
+   * `window.parent.zendiaWelcomeHost`; tools/zendia-welcome/dev/host.js is
+   * its stand-in outside the browser, so keep the two alike.
+   */
+  function createHost() {
+    let importSources = [];
+    let engines = [];
+    let agents = [];
+    return {
+      dark: window.matchMedia("(prefers-color-scheme: dark)").matches,
+      reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)")
+        .matches,
+      vimEnabled: Services.prefs.getBoolPref(kVimModePref, true),
+      adBlocking: lazy.ZendiaUblock.enabled,
+      essentialApps: kEssentialApps.map(app => ({
+        name: app.name,
+        url: app.url,
+        color: app.color,
+        icon: essentialIcon(app),
+      })),
+
+      async getImportSources() {
+        importSources = await getImportableBrowsers();
+        return importSources;
+      },
+
+      startImport(sourceIndex, profileIndex) {
+        const source = importSources[sourceIndex];
+        if (!source) {
+          return;
         }
-        const charElement = document.createElement("span");
-        charElement.className = "zen-welcome-char";
-        charElement.textContent = char;
-        lineElement.appendChild(charElement);
-      }
-      titleElement.appendChild(lineElement);
-    }
-    const chars = titleElement.querySelectorAll(".zen-welcome-char");
-    await animate(
-      chars,
-      { opacity: [0, 1], y: [50, 0] },
-      {
-        delay: getMotion().stagger(0.035, { startDelay: 0.8 }),
-        type: "spring",
-        bounce: 0.3,
-        visualDuration: 0.45,
-      }
-    );
-    const button = document.getElementById("zen-welcome-start-button");
-    button.addEventListener(
-      "click",
-      async () => {
-        await animate(
-          "#zen-welcome-title .zen-welcome-char, #zen-welcome-start-button",
-          { opacity: [1, 0], y: [0, -14] },
-          {
-            duration: 0.3,
-            ease: "easeIn",
-            delay: getMotion().stagger(0.012),
-          }
-        );
-        new nsZenWelcomePages(getWelcomePages());
+        MigrationUtils.showMigrationWizard(window, {
+          entrypoint: MigrationUtils.MIGRATION_ENTRYPOINTS.FIRSTRUN,
+          isStartupMigration: true,
+          migratorKey: source.key,
+          profileId: source.profiles[profileIndex]?.id,
+        });
       },
-      { once: true }
-    );
-    await animate(
-      button,
-      { opacity: [0, 1], y: [20, 0], filter: ["blur(2px)", "blur(0px)"] },
-      {
-        delay: 0.1,
-        type: "spring",
-        stiffness: 300,
-        damping: 20,
-        mass: 1.8,
-      }
-    );
-  }
 
-  const kSizeLockProperties = [
-    "min-width",
-    "max-width",
-    "min-height",
-    "max-height",
-  ];
+      setVimMode(enabled) {
+        Services.prefs.setBoolPref(kVimModePref, enabled);
+      },
 
-  let _syncSizeLock = null;
+      async getAgents() {
+        const all = await lazy.ZendiaAgents.agents();
+        const preferred = await lazy.ZendiaAgents.defaultAgent();
+        agents = all.filter(agent => agent.path);
+        return {
+          installed: agents.map(agent => ({
+            id: agent.id,
+            name: agent.name,
+            version: agent.version ?? "",
+            color: lazy.ZendiaTheme.agentColor(agent.id),
+            icon: lazy.agentIcon(agent.id),
+          })),
+          missing: all
+            .filter(agent => !agent.path)
+            .map(agent => ({
+              id: agent.id,
+              name: agent.name,
+              install: agent.install,
+              icon: lazy.agentIcon(agent.id),
+            })),
+          preferredId: preferred?.id ?? null,
+        };
+      },
 
-  function clearSizeLock() {
-    const root = document.documentElement;
-    for (const property of kSizeLockProperties) {
-      root.style.removeProperty(property);
-    }
-    root.removeAttribute("zen-welcome-inset");
-    root.style.removeProperty("--zen-welcome-width");
-    root.style.removeProperty("--zen-welcome-height");
-  }
+      chooseAgent(id) {
+        const agent = agents.find(candidate => candidate.id == id);
+        if (!agent) {
+          return;
+        }
+        lazy.ZendiaAgents.setDefaultAgent(agent.id);
+        // Agents that need zendia added to their own config get it now, so
+        // the first question just works.
+        lazy.ZendiaAgents.ensureConnected(agent).catch(console.error);
+      },
 
-  // Where the window takes the onboarding's size (Windows, macOS, floating
-  // Linux desktops) the page is locked to it, centered on the screen.
-  // Tiling window managers (Hyprland, sway, i3) size windows themselves and
-  // ignore resizeTo; a page locked to a size the window does not have filled
-  // only its top left corner and left the rest see-through. There the
-  // window keeps its tile and the onboarding sits in the middle of it at
-  // that size instead, looking the same.
-  function lockWindowSize(width, height) {
-    window.removeEventListener("resize", _syncSizeLock);
-    _syncSizeLock = () => {
-      // resizeTo sizes the outside of the window, while the early lock in
-      // ZenStartup sizes its inside; on Linux the two differ by the frame.
-      const near = (inner, outer, size) =>
-        Math.min(Math.abs(inner - size), Math.abs(outer - size)) <= 2;
-      const fits =
-        near(window.innerWidth, window.outerWidth, width) &&
-        near(window.innerHeight, window.outerHeight, height);
-      clearSizeLock();
-      const root = document.documentElement;
-      if (!fits) {
-        root.style.setProperty("--zen-welcome-width", `${width}px`);
-        root.style.setProperty("--zen-welcome-height", `${height}px`);
-        root.setAttribute("zen-welcome-inset", "true");
-        return;
-      }
-      root.style.setProperty("min-width", `${width}px`, "important");
-      root.style.setProperty("max-width", `${width}px`, "important");
-      root.style.setProperty("min-height", `${height}px`, "important");
-      root.style.setProperty("max-height", `${height}px`, "important");
+      async getSearchEngines() {
+        const visible = await lazy.SearchService.getVisibleEngines();
+        engines = visible.filter(engine => {
+          const lower = engine.name.toLowerCase();
+          return !lower.includes("wikipedia") && !lower.includes("ebay");
+        });
+        const defaultEngine = await lazy.SearchService.getDefault();
+        return {
+          engines: await Promise.all(
+            engines.map(async engine => ({
+              name: engine.name,
+              iconURL: (await engine.getIconURL(96)) ?? kDefaultBrandImage,
+            }))
+          ),
+          defaultName: defaultEngine.name,
+        };
+      },
+
+      setSearchEngine(engineName) {
+        const engine = engines.find(candidate => candidate.name == engineName);
+        if (engine) {
+          lazy.SearchService.setDefault(
+            engine,
+            lazy.SearchService.CHANGE_REASON.USER
+          ).catch(console.error);
+        }
+      },
+
+      // uBlock Origin is installed at startup; this keeps or drops it.
+      setAdBlocking(enabled) {
+        lazy.ZendiaUblock.setEnabled(enabled).catch(console.error);
+      },
+
+      setEssentials(urls) {
+        gChoices.essentials = new Set(urls);
+      },
+
+      setDefaultBrowser(enabled) {
+        if (enabled) {
+          setDefaultBrowser();
+        }
+      },
+
+      finish,
     };
-    window.addEventListener("resize", _syncSizeLock);
-    _syncSizeLock();
   }
 
-  function unlockWindowSize() {
-    window.removeEventListener("resize", _syncSizeLock);
-    _syncSizeLock = null;
-    clearSizeLock();
+  function initializeZenWelcome() {
+    document.documentElement.setAttribute("zen-welcome-stage", "true");
+    window.zendiaWelcomeHost = createHost();
+    const stage = document.createElement("div");
+    stage.id = "zen-welcome";
+    const frame = document.createElement("iframe");
+    frame.id = "zen-welcome-frame";
+    frame.src = kWelcomePage;
+    stage.appendChild(frame);
+    document.getElementById("browser").appendChild(stage);
+    // The pages have no title bar of their own: their background drags the
+    // window, as the browser's toolbars do.
+    frame.contentWindow.docShell.windowDraggingAllowed = true;
+    frame.addEventListener("load", () => frame.contentWindow.focus(), {
+      once: true,
+    });
   }
 
-  function centerWindowOnScreen() {
-    window.addEventListener(
-      "MozAfterPaint",
-      function () {
-        const width = Math.min(1200, screen.availWidth);
-        const height = Math.min(720, screen.availHeight);
-        window.resizeTo(width, height);
-        window.focus();
-        const appWin = window.docShell.treeOwner
-          .QueryInterface(Ci.nsIInterfaceRequestor)
-          .getInterface(Ci.nsIAppWindow);
-        appWin.rollupAllPopups();
-        window.moveTo(
-          screen.availLeft + (screen.availWidth - width) / 2,
-          screen.availTop + (screen.availHeight - height) / 2
-        );
-        lockWindowSize(width, height);
-      },
-      { once: true }
-    );
-  }
-
+  // The onboarding takes the browser window as it is, whatever its size:
+  // the pages lay themselves out to fit.
   function startZenWelcome() {
     lazy.ZendiaUblock.sync();
     clearBrowserElements();
-    centerWindowOnScreen();
     initializeZenWelcome();
-    animateInitialStage();
   }
 
   startZenWelcome();
