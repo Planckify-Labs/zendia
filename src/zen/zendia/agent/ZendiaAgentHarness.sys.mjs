@@ -700,11 +700,18 @@ export const ZENDIA_DRIVERS = {
      * Add zendia to agy's MCP servers once. The entry holds no secret:
      * outside a zendia run the proxy finds no address and exits.
      *
+     * Builds from before the rename added the same proxy as "lazyvimium",
+     * reading LAZYVIMIUM_MCP_* variables that nothing sets now, so agy
+     * would start a dead server on every run. It is removed here.
+     *
      * @param {(args: string[]) => Promise<{stdout: string, exitCode: number|null}>} agy
      * @returns {Promise<boolean>} Whether it is connected.
      */
     async ensureConnected(agy) {
       const { stdout } = await agy(["mcp", "list"]);
+      if (/^lazyvimium\s.*LAZYVIMIUM_MCP_/m.test(stdout)) {
+        await agy(["mcp", "remove", "lazyvimium"]);
+      }
       if (new RegExp(`^${MCP_SERVER_NAME}\\s`, "m").test(stdout)) {
         return true;
       }

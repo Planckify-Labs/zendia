@@ -854,6 +854,45 @@ add_task(async function test_antigravity_connects_once() {
   Assert.equal(calls.length, 1, "nothing is added twice");
 });
 
+add_task(async function test_antigravity_drops_the_lazyvimium_server() {
+  const calls = [];
+  const agy = async args => {
+    calls.push(args);
+    return args[1] == "list"
+      ? {
+          stdout:
+            "NAME        TYPE   STATUS   COMMAND/URL\n" +
+            'lazyvimium  stdio  enabled  /bin/sh -c [ -n "$LAZYVIMIUM_MCP_URL" ] || exit 0\n' +
+            "planck  stdio  enabled  /usr/bin/planck-mcp\n",
+          exitCode: 0,
+        }
+      : { stdout: "", exitCode: 0 };
+  };
+  ok(await ZENDIA_DRIVERS.antigravity.ensureConnected(agy));
+  Assert.deepEqual(
+    calls.map(args => args.slice(0, 3)),
+    [
+      ["mcp", "list"],
+      ["mcp", "remove", "lazyvimium"],
+      ["mcp", "add", "zendia"],
+    ],
+    "the old entry goes and zendia is added"
+  );
+
+  calls.length = 0;
+  const own = async args => {
+    calls.push(args);
+    return {
+      stdout:
+        "NAME TYPE\nlazyvimium  stdio  enabled  /usr/bin/something-else\n" +
+        "zendia  stdio  enabled\n",
+      exitCode: 0,
+    };
+  };
+  ok(await ZENDIA_DRIVERS.antigravity.ensureConnected(own));
+  Assert.equal(calls.length, 1, "a lazyvimium server of the user's stays");
+});
+
 add_task(function test_opencode_and_cursor_drivers() {
   const { args, env, files } = ZENDIA_DRIVERS.opencode.launch(TURN);
   Assert.equal(env.OPENCODE_CONFIG, files[0].path);
