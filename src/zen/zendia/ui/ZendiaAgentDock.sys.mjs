@@ -387,6 +387,18 @@ export class ZendiaAgentDock {
     this.#instructionsButton.addEventListener("click", () =>
       this.#instructions.open()
     );
+    // Speech to text: only the look for now. A click flips the recording
+    // state; nothing listens or transcribes yet.
+    const mic = roundButton("mic", bar, "Dictate");
+    mic.setAttribute("aria-pressed", "false");
+    mic.addEventListener("click", () => {
+      const recording = !mic.hasAttribute("recording");
+      mic.toggleAttribute("recording", recording);
+      mic.setAttribute("aria-pressed", String(recording));
+      const title = recording ? "Stop dictation" : "Dictate";
+      mic.title = title;
+      mic.setAttribute("aria-label", title);
+    });
     this.#sendButton = roundButton("send", bar, "Send (Enter)");
     this.#sendButton.addEventListener("click", () => {
       if (this.#conversation?.running) {
