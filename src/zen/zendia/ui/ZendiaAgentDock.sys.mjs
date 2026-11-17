@@ -56,10 +56,37 @@ ChromeUtils.defineESModuleGetters(lazy, {
   showFloat: "resource:///modules/zendia/ui/ZendiaPicker.sys.mjs",
   ZendiaPicker: "resource:///modules/zendia/ui/ZendiaPicker.sys.mjs",
   ZendiaTheme: "resource:///modules/zendia/ui/ZendiaTheme.sys.mjs",
+  ZendiaWebChatDictation:
+    "resource:///modules/zendia/webchat/ZendiaWebChatDictation.sys.mjs",
+  ZendiaKeys: "resource:///modules/zendia/core/ZendiaKeys.sys.mjs",
   renderMarkdown: "resource:///modules/zendia/ui/ZendiaMarkdown.sys.mjs",
 });
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
+// The key held to dictate, from anywhere in the window: the panel opens,
+// it listens while the key is down and finishes when it is let go.
+const PREF_HOLD_KEY = "zendia.dictation.hold-key";
+const DEFAULT_HOLD_KEY = "<A-Space>";
+const MODIFIER_NAMES = { C: "Ctrl", A: "Alt", S: "Shift", D: "Super" };
+const MODIFIER_KEYS = {
+  C: ["Control"],
+  A: ["Alt"],
+  S: ["Shift"],
+  D: ["Meta", "OS", "Super"],
+};
+
+// <A-Space> as the user reads it: Alt+Space.
+function holdKeyLabel(token) {
+  const match = /^<((?:[CASD]-)*)(.+)>$/.exec(token);
+  if (!match) {
+    return token;
+  }
+  const modifiers = match[1]
+    .split("-")
+    .filter(Boolean)
+    .map(letter => MODIFIER_NAMES[letter]);
+  return [...modifiers, match[2]].join("+");
+}
 // The kinds of picture the clipboard may hold, in the order tried.
 const IMAGE_FLAVORS = ["image/png", "image/jpeg", "image/gif"];
 const STEP_ICONS = { running: "◌", done: "✓", failed: "✕" };
@@ -100,6 +127,25 @@ export class ZendiaAgentDock {
   #chipAgent = "";
   #sendButton;
   #instructionsButton;
+  #mic;
+  // Speech to text, by a chat site's own (ZendiaWebChatDictation).
+  #dictation;
+  // What the dictation says about itself, shown instead of the hint:
+  // {state, message, warning}.
+  #dictationStatus = null;
+  // The text around where the dictation writes, and what it wrote.
+  #dictated = null;
+  // Send was pressed while dictating: the request goes once the site has
+  // written down what it heard.
+  #sendAfterDictation = false;
+  // The dictation wrote something.
+  #dictationHeard = false;
+  // The dictation key is held down: {code, modifiers, started}, where
+  // started is whether holding it started the dictation.
+  #hold = null;
+  // The key was let go while the microphone prompt was up: once allowed,
+  // the dictation ends rather than listen with nobody holding the key.
+  #endWhenListening = false;
   #instructions;
   // What the user attached to the request they are writing: {name, size,
   // path} for a file on disk, {name, size, bytes} for a pasted one.
@@ -195,9 +241,12 @@ export class ZendiaAgentDock {
       id: "zendia-agent",
       label: "Ask your agent",
       branch: "zendia.agent.",
-      // The conversation waits on the user, or a picker is up: the slid-in
-      // panel stays.
-      keepOpen: () => this.#picking || !!this.#conversation?.pendingConfirm,
+      // The conversation waits on the user, a picker is up, or the user
+      // dictates: the slid-in panel stays.
+      keepOpen: () =>
+        this.#picking ||
+        !!this.#conversation?.pendingConfirm ||
+        !!this.#dictation?.active,
       onLayout: () => this.#syncPill(),
       // The model chip.
       onPrefs: () => this.#queueRender(),
@@ -276,7 +325,14 @@ export class ZendiaAgentDock {
     this.#input = create("textarea", "zendia-agent-input", composer);
     this.#input.rows = 1;
     this.#input.setAttribute("aria-label", "Ask your agent");
-    this.#input.addEventListener("keydown", event => this.#onKey(event));
+    this.#input.addEventListener("keydown", event => {
+      // What the last dictation said goes with the next key, as a notice.
+      if (this.#dictationStatus && !this.#dictation.active) {
+        this.#dictationStatus = null;
+        this.#queueRender();
+      }
+      this.#onKey(event);
+    });
     this.#input.addEventListener("input", () => {
       this.#fitInput();
       this.#syncComposer();
@@ -328,18 +384,30 @@ export class ZendiaAgentDock {
     this.#instructionsButton.addEventListener("click", () =>
       this.#instructions.open()
     );
-    // Speech to text: only the look for now. A click flips the recording
-    // state; nothing listens or transcribes yet.
-    const mic = roundButton("mic", bar, "Dictate");
-    mic.setAttribute("aria-pressed", "false");
-    mic.addEventListener("click", () => {
-      const recording = !mic.hasAttribute("recording");
-      mic.toggleAttribute("recording", recording);
-      mic.setAttribute("aria-pressed", String(recording));
-      const title = recording ? "Stop dictation" : "Dictate";
-      mic.title = title;
-      mic.setAttribute("aria-label", title);
+    // Speech to text, done by Gemini's dictation, or ChatGPT's.
+    this.#mic = roundButton("mic", bar, "Dictate");
+    this.#mic.setAttribute("aria-pressed", "false");
+    this.#dictation = new lazy.ZendiaWebChatDictation(window, {
+      onState: status => this.#onDictationState(status),
+      onText: text => this.#onDictationText(text),
+      onFocusLost: () => {
+        if (this.#open) {
+          this.#input.focus();
+        }
+      },
     });
+    this.#mic.addEventListener("click", () => this.#toggleDictation());
+    this.#syncMicTitle();
+    // Before the window's other key handlers, the vim keys among them: the
+    // dictation key is never typed into the page or the panel.
+    window.addEventListener("keydown", event => this.#onHoldKeyDown(event), {
+      capture: true,
+    });
+    window.addEventListener("keyup", event => this.#onHoldKeyUp(event), {
+      capture: true,
+    });
+    // A key let go in another window never comes back as a keyup.
+    window.addEventListener("blur", () => this.#releaseHold());
     this.#sendButton = roundButton("send", bar, "Send (Enter)");
     this.#sendButton.addEventListener("click", () => {
       if (this.#conversation?.running) {
@@ -454,6 +522,9 @@ export class ZendiaAgentDock {
    */
   async open(browser, { focus = true } = {}) {
     this.#frame.show();
+    // The dictation's page loads while the panel is up, so the mic is ready
+    // when pressed.
+    this.#dictation.warmUp();
     this.#syncPill();
     this.#onChange();
     const conversation = await lazy.ZendiaAgents.open(browser);
@@ -479,6 +550,8 @@ export class ZendiaAgentDock {
     // while the dock is open.
     this.#frame.hide();
     this.#instructions.close();
+    // The mic's prompt has nowhere to open: what was said so far stays.
+    this.#dictation.stop();
     this.#syncPill();
     this.#onChange();
     // Only hand the keys back when the dock had them, not when another
@@ -1305,12 +1378,25 @@ export class ZendiaAgentDock {
   #syncComposer() {
     const conversation = this.#conversation;
     const running = !!conversation?.running;
+    // While dictating there is something to send, even before the site
+    // wrote it down.
+    const dictating = ["listening", "finishing"].includes(
+      this.#dictation?.state
+    );
     const ready =
       !!conversation &&
-      (!!this.#input.value.trim() || !!this.#attachments.length);
+      (dictating || !!this.#input.value.trim() || !!this.#attachments.length);
     this.#sendButton.toggleAttribute("running", running);
     this.#sendButton.disabled = !running && !ready;
-    this.#sendButton.title = running ? "Stop (Ctrl+C)" : "Send (Enter)";
+    let title = "Send (Enter)";
+    if (running) {
+      title = "Stop (Ctrl+C)";
+    } else if (dictating) {
+      title = this.#sendAfterDictation
+        ? "Sends once the dictation is written down"
+        : "Finish dictation and send (Enter)";
+    }
+    this.#sendButton.title = title;
     this.#sendButton.setAttribute("aria-label", this.#sendButton.title);
   }
 
@@ -1327,6 +1413,21 @@ export class ZendiaAgentDock {
   }
 
   #send() {
+    const dictation = this.#dictation;
+    if (dictation.state == "connecting") {
+      // Nothing said yet: what is in the box goes as it is.
+      dictation.cancel();
+    } else if (dictation.active) {
+      // Send while dictating finishes it, and sends once what was said is
+      // in the box.
+      this.#sendAfterDictation = true;
+      if (dictation.state == "listening") {
+        dictation.stop();
+      }
+      this.#syncComposer();
+      this.#queueRender();
+      return;
+    }
     const conversation = this.#conversation;
     const text = this.#input.value.trim();
     const files = this.#attachments;
@@ -1392,6 +1493,209 @@ export class ZendiaAgentDock {
       console.error("Zendia: the agent turn failed", e);
     });
     return true;
+  }
+
+  // Dictation.
+
+  get #holdKey() {
+    return Services.prefs.getStringPref(PREF_HOLD_KEY, DEFAULT_HOLD_KEY);
+  }
+
+  #syncMicTitle(title = "Dictate") {
+    const label =
+      title == "Dictate"
+        ? `Dictate (hold ${holdKeyLabel(this.#holdKey)})`
+        : title;
+    this.#mic.title = label;
+    this.#mic.setAttribute("aria-label", label);
+  }
+
+  #isHoldKey(event) {
+    return (
+      event.isTrusted &&
+      !!this.#holdKey &&
+      lazy.ZendiaKeys.fromEvent(event) == this.#holdKey
+    );
+  }
+
+  #onHoldKeyDown(event) {
+    if (this.#hold && event.code == this.#hold.code) {
+      // The key repeats while it is held.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (!this.#isHoldKey(event) || event.repeat) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const token = this.#holdKey;
+    this.#hold = {
+      code: event.code,
+      modifiers: (/^<((?:[CASD]-)*)/.exec(token)?.[1] ?? "")
+        .split("-")
+        .filter(Boolean)
+        .flatMap(letter => MODIFIER_KEYS[letter]),
+      started: false,
+    };
+    this.#startHold(this.#hold);
+  }
+
+  async #startHold(hold) {
+    if (this.#dictation.active) {
+      // Already dictating, from the mic: letting go does not end it.
+      return;
+    }
+    if (!this.#open) {
+      await this.open(this.#window.gBrowser.selectedBrowser);
+    } else {
+      this.#input.focus();
+    }
+    // Let go while the panel was opening.
+    if (this.#hold != hold || this.#dictation.active) {
+      return;
+    }
+    if (!this.#conversation) {
+      this.#notice = "No agent to dictate to.";
+      this.#queueRender();
+      return;
+    }
+    hold.started = true;
+    this.#endWhenListening = false;
+    this.#toggleDictation();
+  }
+
+  #onHoldKeyUp(event) {
+    const hold = this.#hold;
+    if (
+      !hold ||
+      (event.code != hold.code && !hold.modifiers.includes(event.key))
+    ) {
+      return;
+    }
+    if (event.code == hold.code) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+    this.#releaseHold();
+  }
+
+  #releaseHold() {
+    const hold = this.#hold;
+    if (!hold) {
+      return;
+    }
+    this.#hold = null;
+    const dictation = this.#dictation;
+    if (!hold.started || !dictation.active) {
+      return;
+    }
+    const key = holdKeyLabel(this.#holdKey);
+    if (dictation.state == "listening") {
+      dictation.stop();
+    } else if (dictation.prompting) {
+      // The prompt stays for the user to answer; the next hold dictates.
+      this.#endWhenListening = true;
+    } else if (dictation.state == "connecting") {
+      dictation.cancel();
+      this.#notice = `Hold ${key} until it says “Speak now”.`;
+      this.#queueRender();
+    } else {
+      this.#queueRender();
+    }
+  }
+
+  #toggleDictation() {
+    if (!this.#dictation.active) {
+      if (!this.#conversation) {
+        return;
+      }
+      // Where it writes: at the cursor, or over what is selected.
+      const input = this.#input;
+      this.#dictated = {
+        before: input.value.slice(0, input.selectionStart),
+        after: input.value.slice(input.selectionEnd),
+      };
+      this.#notice = "";
+      this.#sendAfterDictation = false;
+      this.#dictationHeard = false;
+    }
+    this.#dictation.toggle();
+    this.#input.focus();
+  }
+
+  #onDictationState({ state, message, warning }) {
+    const mic = this.#mic;
+    const active = state != "idle";
+    mic.toggleAttribute("connecting", state == "connecting");
+    mic.toggleAttribute("recording", state == "listening");
+    mic.toggleAttribute("finishing", state == "finishing");
+    mic.setAttribute("aria-pressed", String(active));
+    this.#syncMicTitle(
+      {
+        connecting: "Cancel dictation",
+        listening: "Finish dictation",
+        finishing: "Writing it down…",
+      }[state] ?? "Dictate"
+    );
+    if (state == "listening" && this.#endWhenListening) {
+      // Allowed after the key was let go: nothing was said yet.
+      this.#endWhenListening = false;
+      this.#dictation.cancel();
+      this.#notice = `The microphone is allowed. Hold ${holdKeyLabel(this.#holdKey)} and speak.`;
+      this.#queueRender();
+      return;
+    }
+    if (state == "listening" && this.#hold?.started) {
+      message = message.replace(
+        "mic finishes · Enter sends",
+        `let go of ${holdKeyLabel(this.#holdKey)} to finish`
+      );
+    }
+    // The box is the dictation's while it writes into it.
+    this.#input.readOnly = active;
+    const shown =
+      active && this.#sendAfterDictation
+        ? `${message} · sends when done`
+        : message;
+    this.#dictationStatus = shown ? { state, message: shown, warning } : null;
+    if (!active) {
+      this.#dictated = null;
+      this.#fitInput();
+      const send = this.#sendAfterDictation && this.#dictationHeard;
+      this.#sendAfterDictation = false;
+      if (send) {
+        this.#dictationStatus = null;
+        this.#send();
+      }
+    }
+    this.#syncComposer();
+    this.#queueRender();
+  }
+
+  // What was said so far goes where the dictation started, all of it each
+  // time: the site corrects what it heard as it goes.
+  #onDictationText(text) {
+    const range = this.#dictated;
+    if (!range) {
+      return;
+    }
+    const input = this.#input;
+    const said = text.trim();
+    this.#dictationHeard ||= !!said;
+    const space = (left, right) =>
+      left && right && !/\s$/.test(left) && !/^\s/.test(right) ? " " : "";
+    const head = range.before + space(range.before, said);
+    const tail = said ? space(said, range.after) + range.after : range.after;
+    input.value = head + said + tail;
+    const end = head.length + said.length;
+    input.setSelectionRange(end, end);
+    this.#fitInput();
+    this.#syncComposer();
+    if (this.#dictation.state == "listening") {
+      this.#queueRender();
+    }
   }
 
   #fitInput() {
@@ -1666,9 +1970,20 @@ export class ZendiaAgentDock {
     } else if (agent) {
       placeholder = `Ask ${agent.name} to do something on this tab`;
     }
+    const dictation = this.#dictationStatus;
+    if (this.#dictation.state == "listening" && !this.#input.value) {
+      placeholder = "Listening… start speaking";
+    }
     this.#input.placeholder = placeholder;
-    this.#hint.textContent = this.#notice || hint;
-    this.#hint.toggleAttribute("warning", !!this.#notice);
+    this.#hint.textContent = this.#notice || dictation?.message || hint;
+    this.#hint.toggleAttribute(
+      "warning",
+      !!this.#notice || !!dictation?.warning
+    );
+    this.#hint.toggleAttribute(
+      "dictation",
+      !this.#notice && !!dictation?.message && !dictation.warning
+    );
     this.#root.toggleAttribute("running", !!conversation?.running);
     this.#jump.textContent = conversation?.running
       ? "New reply"

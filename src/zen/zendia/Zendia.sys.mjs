@@ -976,6 +976,22 @@ class ZendiaService {
         // The parent checks every request again (ZendiaAgentUiView).
         safeForUntrustedWebProcess: true,
       },
+      // The hidden pages of chat sites the agent's panel dictates with,
+      // whose browsers are in their own message manager group
+      // (ZendiaWebChatDictation).
+      ZendiaDictation: {
+        parent: {
+          esModuleURI:
+            "resource:///modules/zendia/actors/ZendiaDictationParent.sys.mjs",
+        },
+        child: {
+          esModuleURI:
+            "resource:///modules/zendia/actors/ZendiaDictationChild.sys.mjs",
+        },
+        messageManagerGroups: ["zendia-dictation"],
+        // The parent takes only text from the page, and checks it again.
+        safeForUntrustedWebProcess: true,
+      },
     });
   }
 

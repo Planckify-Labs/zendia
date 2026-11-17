@@ -1788,6 +1788,20 @@
         background-color: color-mix(in srgb, var(--zendia-accent) 85%, var(--zendia-agent-text));
       }
     }
+
+    /* Reaching the site's dictation, or waiting on the microphone prompt:
+       tinted, and breathing slowly. */
+    &[connecting] {
+      background-color: color-mix(in srgb, var(--zendia-accent) 24%, transparent);
+      color: var(--zendia-accent);
+      animation: zendia-mic-wait 1.2s ease-in-out infinite alternate;
+    }
+
+    /* The site writes down what it heard. */
+    &[finishing] {
+      background-color: color-mix(in srgb, var(--zendia-accent) 36%, transparent);
+      color: var(--zendia-accent);
+    }
   }
 
   /* Opens the instructions: tinted in the brand's accent, solid while any is
@@ -1851,9 +1865,94 @@
   }
 }
 
+@keyframes zendia-mic-wait {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.55;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .zendia-agent-round-button.mic[recording] {
+  .zendia-agent-round-button.mic:is([recording], [connecting]) {
     animation: none;
+  }
+}
+
+/* The dictation site's page: laid out and painted so it runs as in a tab,
+   but under the window's own UI and all but transparent, so never seen, and
+   never in the way. Fully transparent, it would not be painted at all. */
+.zendia-dictation-host {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  opacity: 0.004;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.zendia-dictation-view {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.zendia-dictation-label {
+  display: none;
+}
+
+/* About the web chat panel's size, so the sites lay out as they do there;
+   the same while debugging, so what shows is what runs. */
+.zendia-dictation-browser {
+  width: 440px;
+  height: 620px;
+  pointer-events: none;
+}
+
+/* Debugging (zendia.dictation.debug, npm run dev:dictation): the pages show
+   in the window's bottom left corner, side by side, and can be used. */
+.zendia-dictation-host[debug] {
+  top: auto;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  gap: 8px;
+  width: auto;
+  height: auto;
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 10000;
+
+  & .zendia-dictation-view {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 2px solid var(--zendia-accent);
+    border-radius: 10px;
+    background-color: light-dark(#ffffff, #1c1b22);
+    box-shadow: 0 6px 24px rgb(0 0 0 / 0.3);
+  }
+
+  & .zendia-dictation-label {
+    display: block;
+    max-width: 440px;
+    padding: 4px 8px;
+    overflow: hidden;
+    background-color: var(--zendia-accent);
+    color: light-dark(#ffffff, var(--zendia-ink));
+    font: 600 11px/16px system-ui, sans-serif;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  & .zendia-dictation-browser {
+    pointer-events: auto;
   }
 }
 
@@ -3194,6 +3293,11 @@
 
   &[warning] {
     color: var(--zendia-warning);
+  }
+
+  /* What the dictation says: connecting, listening, writing it down. */
+  &[dictation] {
+    color: var(--zendia-accent);
   }
 }
 

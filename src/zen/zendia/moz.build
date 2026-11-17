@@ -20,6 +20,8 @@ EXTRA_JS_MODULES.zendia.agent += [
 ]
 
 EXTRA_JS_MODULES.zendia.actors += [
+    "actors/ZendiaDictationChild.sys.mjs",
+    "actors/ZendiaDictationParent.sys.mjs",
     "actors/ZendiaKeysChild.sys.mjs",
     "actors/ZendiaKeysParent.sys.mjs",
     "actors/ZendiaPopupChild.sys.mjs",
@@ -88,6 +90,7 @@ EXTRA_JS_MODULES.zendia.plugins += [
 EXTRA_JS_MODULES.zendia.webchat += [
     "webchat/ZendiaWebChatAccounts.sys.mjs",
     "webchat/ZendiaWebChatCookies.sys.mjs",
+    "webchat/ZendiaWebChatDictation.sys.mjs",
     "webchat/ZendiaWebChatIcons.sys.mjs",
     "webchat/ZendiaWebChats.sys.mjs",
 ]
