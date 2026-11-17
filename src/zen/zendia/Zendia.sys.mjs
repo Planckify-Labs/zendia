@@ -32,6 +32,7 @@ import { ZendiaExtensionsSpec } from "resource:///modules/zendia/plugins/ZendiaE
 import { ZendiaUblockSpec } from "resource:///modules/zendia/plugins/ZendiaUblockSpec.sys.mjs";
 import { ZendiaUiSpec } from "resource:///modules/zendia/plugins/ZendiaUi.sys.mjs";
 import { ZendiaVisualSpec } from "resource:///modules/zendia/plugins/ZendiaVisual.sys.mjs";
+import { ZendiaWebChatSpec } from "resource:///modules/zendia/plugins/ZendiaWebChat.sys.mjs";
 import { ZendiaWhichKeySpec } from "resource:///modules/zendia/plugins/ZendiaWhichKeySpec.sys.mjs";
 import { ZendiaWindowsSpec } from "resource:///modules/zendia/plugins/ZendiaWindows.sys.mjs";
 import { ZendiaYankSpec } from "resource:///modules/zendia/plugins/ZendiaYank.sys.mjs";
@@ -49,6 +50,10 @@ ChromeUtils.defineESModuleGetters(lazy, {
   ZendiaTheme: "resource:///modules/zendia/ui/ZendiaTheme.sys.mjs",
   ZendiaChatButton: "resource:///modules/zendia/ui/ZendiaChatButton.sys.mjs",
   ZendiaChatBar: "resource:///modules/zendia/ui/ZendiaChatButton.sys.mjs",
+  ZendiaWebChatDock: "resource:///modules/zendia/ui/ZendiaWebChatDock.sys.mjs",
+  ZendiaWebChatButton:
+    "resource:///modules/zendia/ui/ZendiaWebChatButton.sys.mjs",
+  ZendiaWebChatBar: "resource:///modules/zendia/ui/ZendiaWebChatButton.sys.mjs",
   ZendiaVimModeSwitch:
     "resource:///modules/zendia/ui/ZendiaVimModeSwitch.sys.mjs",
   ZendiaToolbar: "resource:///modules/zendia/ui/ZendiaToolbar.sys.mjs",
@@ -77,6 +82,7 @@ export const ZENDIA_SPECS = [
   ZendiaToolbarSpec,
   ZendiaLibrarySpec,
   ZendiaAgentSpec,
+  ZendiaWebChatSpec,
   ZendiaExtensionsSpec,
   ZendiaUblockSpec,
   ZendiaUiSpec,
@@ -472,6 +478,14 @@ class ZendiaService {
     return this.#windows.get(window.document)?.agent ?? null;
   }
 
+  /**
+   * @param {Window} window
+   * @returns {object|null} The window's ZendiaWebChatDock.
+   */
+  webChatDockFor(window) {
+    return this.#windows.get(window.document)?.webchat ?? null;
+  }
+
   // The browser UI buffer the keys go to, if one is open.
   #activeBuffer(ui) {
     return (
@@ -639,7 +653,9 @@ class ZendiaService {
       toolbar: null,
       library: null,
       agent: null,
+      webchat: null,
       chatBar: null,
+      webChatBar: null,
       engine: null,
     };
     const refresh = () => this.#showState(ui, this.#stateOf(window, ui));
@@ -652,9 +668,18 @@ class ZendiaService {
             other.close();
           }
         }
-        // An agent panel beside the tab stays, as a split view pane would.
-        if (buffer != ui.agent) {
-          ui.agent.release();
+        // The agent's and the web chat's panels share the side of the tab:
+        // one open closes the other. Beside the tab either stays for the
+        // browser UI's other buffers, as a split view pane would.
+        const docks = [ui.agent, ui.webchat];
+        for (const dock of docks) {
+          if (dock && dock != buffer) {
+            if (docks.includes(buffer)) {
+              dock.close();
+            } else {
+              dock.release();
+            }
+          }
         }
       }
       ui.engine?.reset();
@@ -672,6 +697,17 @@ class ZendiaService {
     ui.agent = new lazy.ZendiaAgentDock(window, {
       onChange: () => onChange(ui.agent),
       onStatus: () => ui.chatBar?.sync(),
+      onSwitch: () =>
+        this.run("webchat.toggle", {}, { window }).catch(console.error),
+    });
+    ui.webchat = new lazy.ZendiaWebChatDock(window, {
+      onChange: () => {
+        ui.webChatBar?.sync();
+        onChange(ui.webchat);
+      },
+      onStatus: () => ui.webChatBar?.sync(),
+      onSwitch: () =>
+        this.run("agent.toggle", {}, { window }).catch(console.error),
     });
     this.#windows.set(window.document, ui);
     ui.statusline.setVisible(this.#statuslineVisibleIn(window.document));
@@ -686,6 +722,10 @@ class ZendiaService {
         dock: ui.agent,
         onToggle: () => toggleChat(window),
       });
+      const toggleWebChat = target =>
+        this.run("webchat.toggle", {}, { window: target }).catch(console.error);
+      lazy.ZendiaWebChatButton.register({ onToggle: toggleWebChat });
+      ui.webChatBar = new lazy.ZendiaWebChatBar(window, { dock: ui.webchat });
     } catch (e) {
       console.error("Zendia: the toolbar widgets failed", e);
     }
@@ -709,8 +749,11 @@ class ZendiaService {
         if (ui.whichKey.pinned) {
           ui.whichKey.hide();
         }
-        // What is typed into the agent dock is the dock's.
-        if (ui.agent.contains(event.target)) {
+        // What is typed into the agent dock, or the web chat, is theirs.
+        if (
+          ui.agent.contains(event.target) ||
+          ui.webchat.contains(event.target)
+        ) {
           return;
         }
         // An open menu or panel takes the keys, with vim's j and k.

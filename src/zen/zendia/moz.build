@@ -77,11 +77,19 @@ EXTRA_JS_MODULES.zendia.plugins += [
     "plugins/ZendiaUi.sys.mjs",
     "plugins/ZendiaVisual.sys.mjs",
     "plugins/ZendiaVisualContent.sys.mjs",
+    "plugins/ZendiaWebChat.sys.mjs",
     "plugins/ZendiaWhichKeySpec.sys.mjs",
     "plugins/ZendiaWindows.sys.mjs",
     "plugins/ZendiaYank.sys.mjs",
     "plugins/ZendiaYankContent.sys.mjs",
     "plugins/ZendiaZenCommands.sys.mjs",
+]
+
+EXTRA_JS_MODULES.zendia.webchat += [
+    "webchat/ZendiaWebChatAccounts.sys.mjs",
+    "webchat/ZendiaWebChatCookies.sys.mjs",
+    "webchat/ZendiaWebChatIcons.sys.mjs",
+    "webchat/ZendiaWebChats.sys.mjs",
 ]
 
 EXTRA_JS_MODULES.zendia.ublock += [
@@ -96,6 +104,7 @@ EXTRA_JS_MODULES.zendia.ui += [
     "ui/ZendiaAgentMotion.sys.mjs",
     "ui/ZendiaAgentUiView.sys.mjs",
     "ui/ZendiaChatButton.sys.mjs",
+    "ui/ZendiaDockFrame.sys.mjs",
     "ui/ZendiaExplorer.sys.mjs",
     "ui/ZendiaHints.sys.mjs",
     "ui/ZendiaLibraryView.sys.mjs",
@@ -107,6 +116,8 @@ EXTRA_JS_MODULES.zendia.ui += [
     "ui/ZendiaTheme.sys.mjs",
     "ui/ZendiaToolbar.sys.mjs",
     "ui/ZendiaVimModeSwitch.sys.mjs",
+    "ui/ZendiaWebChatButton.sys.mjs",
+    "ui/ZendiaWebChatDock.sys.mjs",
     "ui/ZendiaWhichKey.sys.mjs",
 ]
 

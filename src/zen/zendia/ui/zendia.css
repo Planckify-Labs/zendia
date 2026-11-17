@@ -113,7 +113,7 @@
   list-style-image: url("chrome://browser/skin/zen-icons/selectable/chat.svg");
 }
 
-:is(#zendia-chat-button[cui-areatype="toolbar"], #zendia-chat-topbar) {
+:is(#zendia-chat-button[cui-areatype="toolbar"], #zendia-chat-topbar, #zendia-webchat-button[cui-areatype="toolbar"]) {
   position: relative;
   display: flex;
   flex: none;
@@ -195,6 +195,13 @@
   }
 }
 
+/* The web chat button beside it: only its icon. */
+#zendia-webchat-button {
+  --zendia-chat-label: none;
+
+  list-style-image: url("chrome://browser/skin/zen-icons/selectable/globe.svg");
+}
+
 /* At the end of the compact top bar, by the window buttons. */
 #zendia-chat-topbar-box {
   align-items: center;
@@ -246,11 +253,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :is(#zendia-chat-button, #zendia-chat-topbar) {
+  :is(#zendia-chat-button, #zendia-chat-topbar, #zendia-webchat-button) {
     transition: none;
   }
 
-  :is(#zendia-chat-button, #zendia-chat-topbar)::after {
+  :is(#zendia-chat-button, #zendia-chat-topbar, #zendia-webchat-button)::after {
     animation: none !important;
   }
 }
@@ -895,7 +902,8 @@
    the space theme's, keep its text readable over any page, in any layout
    and vim mode color. */
 #zendia-agent-dock,
-#zendia-agent-pill {
+#zendia-agent-pill,
+#zendia-webchat-dock {
   --zendia-agent-glass: color-mix(in srgb, var(--zendia-agent-surface) var(--zendia-glass-opacity, 78%), transparent);
 
   position: absolute;
@@ -929,7 +937,7 @@
 }
 
 /* float: a card over the page, inset from its side. */
-#zendia-agent-dock {
+:is(#zendia-agent-dock, #zendia-webchat-dock) {
   outline: none;
   top: 10px;
   bottom: 10px;
@@ -996,11 +1004,11 @@
   width: 8px;
   cursor: ew-resize;
 
-  #zendia-agent-dock[side="right"] > & {
+  :is(#zendia-agent-dock, #zendia-webchat-dock)[side="right"] > & {
     left: 0;
   }
 
-  #zendia-agent-dock[side="left"] > & {
+  :is(#zendia-agent-dock, #zendia-webchat-dock)[side="left"] > & {
     right: 0;
   }
 
@@ -1021,7 +1029,7 @@
   }
 
   &:hover::before,
-  #zendia-agent-dock[resizing] > &::before {
+  :is(#zendia-agent-dock, #zendia-webchat-dock)[resizing] > &::before {
     height: 72px;
     opacity: 1;
   }
@@ -1101,7 +1109,7 @@
     background-image: url("chrome://browser/skin/zen-icons/split.svg");
 
     /* Picked, but floating while the tab has no room for it. */
-    #zendia-agent-dock[fallback] &[aria-pressed="true"] {
+    :is(#zendia-agent-dock, #zendia-webchat-dock)[fallback] &[aria-pressed="true"] {
       background-color: color-mix(in srgb, var(--zendia-warning) 22%, transparent);
       fill: var(--zendia-warning);
     }
@@ -1129,6 +1137,31 @@
 
   &.trash {
     background-image: url("chrome://browser/skin/zen-icons/trash.svg");
+  }
+
+  &.reload {
+    background-image: url("chrome://browser/skin/zen-icons/reload.svg");
+  }
+
+  &.open-tab {
+    background-image: url("chrome://browser/skin/zen-icons/new-tab-image.svg");
+  }
+
+  &.accounts {
+    background-image: url("chrome://browser/skin/zen-icons/selectable/people.svg");
+  }
+
+  &.web-chat {
+    background-image: url("chrome://browser/skin/zen-icons/selectable/globe.svg");
+  }
+
+  &.to-agent {
+    background-image: url("chrome://browser/skin/zen-icons/sparkles.svg");
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    pointer-events: none;
   }
 }
 
@@ -3394,7 +3427,8 @@
 
 /* The slid-out panel's edge, a strip along the page's side with a bar in
    the agent's color; resting the mouse on it slides the panel back in. */
-#zendia-agent-handle {
+#zendia-agent-handle,
+#zendia-webchat-handle {
   position: absolute;
   z-index: 2147483646;
   top: 0;
@@ -3467,6 +3501,15 @@
   .zendia-agent-logo,
   #zendia-agent-pill::before,
   #zendia-agent-handle::before,
+  #zendia-webchat-handle::before,
+  .zendia-webchat-bar::before,
+  .zendia-webchat-wait > .zendia-webchat-logo,
+  .zendia-webchat-tab,
+  .zendia-webchat-tab > .zendia-webchat-logo,
+  .zendia-webchat-label,
+  .zendia-webchat-label > span,
+  .zendia-webchat-menu,
+  .zendia-webchat-chevron,
   .zendia-agent-grip::before,
   .zendia-ui-table tr[fresh],
   .zendia-ui-placeholder,
@@ -3497,5 +3540,499 @@
   #urlbar[breakout-extend] :is(.urlbar-background, .urlbar-input-container, .urlbarView, .urlbarView-row) {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* The web chat panel: the agent panel's glass and header (the rules above
+   for #zendia-webchat-dock), a strip of the chat sites under the header,
+   and the page of the picked one filling the rest. */
+/* A site's logo: a picture, or one shape in the text's color. */
+.zendia-webchat-logo {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  background: var(--zendia-webchat-logo) center / contain no-repeat;
+
+  &[mono] {
+    background: currentColor;
+    mask: var(--zendia-webchat-logo) center / contain no-repeat;
+  }
+}
+
+/* The row of sites under the header: a soft track, the picked site raised on
+   it in its color with its name opened out, the others only their logos. */
+.zendia-webchat-strip {
+  position: relative;
+  display: flex;
+  flex: none;
+  padding: 8px 10px 9px;
+  border-bottom: 0.5px solid color-mix(in srgb, var(--zendia-agent-border) 70%, transparent);
+}
+
+/* Where the pages' permission prompts open, over the row. */
+#zendia-webchat-anchor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.zendia-webchat-track {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 3px;
+  border-radius: 14px;
+  /* stylelint-disable-next-line property-no-unknown */
+  corner-shape: round;
+  background-color: color-mix(in srgb, var(--zendia-raised) 55%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-border) 70%, transparent);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.zendia-webchat-item {
+  position: relative;
+  flex: none;
+}
+
+.zendia-webchat-tab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 30px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 11px;
+  /* stylelint-disable-next-line property-no-unknown */
+  corner-shape: round;
+  background-color: transparent;
+  color: var(--zendia-agent-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  transition:
+    background-color 160ms,
+    box-shadow 200ms,
+    padding 260ms var(--zendia-spring);
+
+  & > .zendia-webchat-logo {
+    width: 20px;
+    height: 20px;
+    opacity: 0.72;
+    transition:
+      opacity 150ms,
+      transform 240ms var(--zendia-spring);
+  }
+
+  &:hover:not([aria-selected="true"]) {
+    background-color: color-mix(in srgb, currentColor 8%, transparent);
+  }
+
+  &:hover > .zendia-webchat-logo {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+
+  &[aria-selected="true"] {
+    padding-inline: 8px 12px;
+    background-color: color-mix(in srgb, var(--zendia-webchat-color) 20%, var(--zendia-agent-surface));
+    box-shadow:
+      inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-webchat-color) 45%, transparent),
+      0 1px 4px color-mix(in srgb, black 14%, transparent);
+
+    & > .zendia-webchat-logo {
+      opacity: 1;
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: -2px;
+  }
+}
+
+/* Zero wide until picked, then the name grows out of the logo. */
+.zendia-webchat-label {
+  display: grid;
+  grid-template-columns: 0fr;
+  min-width: 0;
+  transition:
+    grid-template-columns 260ms var(--zendia-spring),
+    margin 260ms var(--zendia-spring);
+
+  & > span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    opacity: 0;
+    white-space: nowrap;
+    transition: opacity 160ms;
+  }
+
+  .zendia-webchat-tab[aria-selected="true"] > & {
+    grid-template-columns: 1fr;
+    margin-inline-start: 7px;
+
+    & > span {
+      opacity: 1;
+      transition-delay: 70ms;
+    }
+  }
+}
+
+/* The account in use, when the site has a choice of them, and the chevron
+   that says the name opens a menu. */
+.zendia-webchat-account {
+  font-weight: 500;
+  opacity: 0.6;
+
+  &:empty {
+    display: none;
+  }
+}
+
+.zendia-webchat-chevron {
+  display: none;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  background-color: currentColor;
+  mask: url("chrome://browser/skin/zen-icons/arrow-down.svg") center / contain no-repeat;
+  opacity: 0.6;
+  transition: rotate 200ms var(--zendia-spring);
+
+  .zendia-webchat-tab[data-multiple] > .zendia-webchat-label & {
+    display: block;
+  }
+
+  .zendia-webchat-tab[aria-expanded="true"] & {
+    rotate: 180deg;
+  }
+}
+
+.zendia-webchat-tab[data-multiple]:hover > .zendia-webchat-label .zendia-webchat-chevron {
+  opacity: 1;
+}
+
+.zendia-webchat-add-button {
+  width: 30px;
+  justify-content: center;
+  padding: 0;
+  background-image: url("chrome://browser/skin/zen-icons/plus.svg");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 14px;
+  -moz-context-properties: fill;
+  fill: var(--zendia-agent-muted);
+
+  &:hover {
+    fill: var(--zendia-agent-text);
+  }
+}
+
+/* Takes a site the user added off the strip, shown on its corner. */
+.zendia-webchat-remove {
+  position: absolute;
+  top: -3px;
+  inset-inline-end: -3px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--zendia-agent-text) 22%, var(--zendia-agent-surface)) url("chrome://browser/skin/zen-icons/close.svg") center / 8px no-repeat;
+  -moz-context-properties: fill;
+  fill: var(--zendia-agent-text);
+  opacity: 0;
+  transition: opacity 120ms;
+
+  .zendia-webchat-item:is(:hover, :focus-within) > & {
+    opacity: 1;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--zendia-accent);
+  }
+}
+
+.zendia-webchat-add {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px 10px;
+  border-bottom: 0.5px solid color-mix(in srgb, var(--zendia-agent-border) 70%, transparent);
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.zendia-webchat-add-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0.5px solid color-mix(in srgb, var(--zendia-agent-border) 80%, transparent);
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--zendia-raised) 70%, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+
+  &:focus {
+    outline: 2px solid var(--zendia-accent);
+    outline-offset: -1px;
+  }
+
+  &[invalid] {
+    border-color: var(--zendia-warning);
+    outline-color: var(--zendia-warning);
+  }
+}
+
+.zendia-webchat-add-hint {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.zendia-webchat-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.zendia-webchat-browser {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* The page is loading: a bar over its top edge, in the site's color. */
+.zendia-webchat-bar {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 40%;
+    border-radius: 1px;
+    background-color: var(--zendia-webchat-color);
+    animation: zendia-webchat-slide 1.1s ease-in-out infinite;
+  }
+
+  .zendia-webchat-stage[loading] > & {
+    opacity: 1;
+  }
+}
+
+@keyframes zendia-webchat-slide {
+  from {
+    translate: -100%;
+  }
+
+  to {
+    translate: 250%;
+  }
+}
+
+/* Until the page first shows, the site's logo rests on the panel's surface,
+   which the page's blank white would otherwise replace. */
+.zendia-webchat-wait {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background-color: var(--zendia-agent-surface);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms;
+
+  .zendia-webchat-stage[waiting] > & {
+    opacity: 1;
+  }
+
+  & > .zendia-webchat-logo {
+    width: 40px;
+    height: 40px;
+    animation: zendia-agent-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+.zendia-webchat-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--zendia-agent-muted);
+  text-align: center;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+/* The slid-out web chat's edge: the lower part of the page's side, so the
+   agent's handle above it stays reachable. */
+#zendia-webchat-handle {
+  top: auto;
+  height: 40%;
+}
+
+/* The menu of a site's accounts, hanging under its name. */
+.zendia-webchat-menu {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 220px;
+  max-width: calc(100% - 16px);
+  padding: 5px;
+  border-radius: 12px;
+  /* stylelint-disable-next-line property-no-unknown */
+  corner-shape: round;
+  background-color: color-mix(in srgb, var(--zendia-agent-surface) 92%, transparent);
+  backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: var(--zendia-float-shadow);
+  outline: 0.5px solid color-mix(in srgb, var(--zendia-agent-border) 80%, transparent);
+  color: var(--zendia-agent-text);
+  font-size: 12px;
+  transform-origin: top left;
+  animation: zendia-webchat-pop 200ms var(--zendia-spring);
+
+  &[hidden] {
+    display: none;
+  }
+
+  :root[zen-no-acrylic="true"] & {
+    background-color: var(--zendia-agent-surface);
+    backdrop-filter: none;
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    background-color: var(--zendia-agent-surface);
+    backdrop-filter: none;
+  }
+}
+
+@keyframes zendia-webchat-pop {
+  from {
+    opacity: 0;
+    scale: 0.94;
+    translate: 0 -4px;
+  }
+}
+
+.zendia-webchat-menu-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.zendia-webchat-menu-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 8px;
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  transition: background-color 100ms;
+
+  &:hover,
+  &:focus-visible {
+    background-color: color-mix(in srgb, var(--zendia-accent) 16%, transparent);
+    outline: none;
+  }
+
+  &[aria-checked="true"] {
+    font-weight: 600;
+  }
+}
+
+.zendia-webchat-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A slot for the mark of what is in use, or the icon of what the row does. */
+.zendia-webchat-menu-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  -moz-context-properties: fill;
+  fill: currentColor;
+
+  &.check {
+    background-image: url("chrome://browser/skin/zen-icons/check.svg");
+    visibility: hidden;
+  }
+
+  &.plus {
+    background-image: url("chrome://browser/skin/zen-icons/plus.svg");
+  }
+
+  &.refresh {
+    background-image: url("chrome://browser/skin/zen-icons/reload.svg");
+  }
+}
+
+[aria-checked="true"] > .zendia-webchat-menu-icon.check {
+  visibility: visible;
+}
+
+.zendia-webchat-menu-separator {
+  height: 0.5px;
+  margin: 4px 6px;
+  background-color: color-mix(in srgb, var(--zendia-agent-border) 80%, transparent);
+}
+
+.zendia-webchat-menu-remove {
+  position: absolute;
+  inset-inline-end: 6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent url("chrome://browser/skin/zen-icons/close.svg") center / 10px no-repeat;
+  -moz-context-properties: fill;
+  fill: var(--zendia-agent-muted);
+  opacity: 0;
+  transition: opacity 100ms;
+
+  .zendia-webchat-menu-row:is(:hover, :focus-within) > & {
+    opacity: 1;
+  }
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--zendia-warning) 22%, transparent);
+    fill: var(--zendia-warning);
   }
 }

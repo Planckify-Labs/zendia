@@ -62,3 +62,6 @@ support-files = [
 ["browser_zendia_ublock.js"]
 
 ["browser_zendia_vim_mode.js"]
+
+["browser_zendia_webchat.js"]
+support-files = ["file_webchat_page.html"]

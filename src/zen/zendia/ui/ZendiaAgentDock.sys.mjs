@@ -27,6 +27,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   ATTACH_MAX_BYTES: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   ATTACH_MAX_FILES: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   ZendiaAgents: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
+  ZendiaDockFrame: "resource:///modules/zendia/ui/ZendiaDockFrame.sys.mjs",
   agentColor: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   inputKindOf: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   agentIcon: "resource:///modules/zendia/agent/ZendiaAgentIcons.sys.mjs",
@@ -66,34 +67,6 @@ const STEP_ICONS = { running: "◌", done: "✓", failed: "✕" };
 // when the row leaves, so the end of a turn moves nothing (zendia.css).
 const FOOT_LANE = 32;
 
-const PREF_BRANCH = "zendia.agent.";
-const PREF_LAYOUT = "zendia.agent.layout";
-const PREF_SIDE = "zendia.agent.side";
-const PREF_WIDTH = "zendia.agent.width";
-const PREF_FALLBACK = "zendia.agent.split-fallback";
-
-const LAYOUTS = {
-  float: "Floating over the page",
-  slide: "Slide in from the side, hide when the mouse leaves",
-  split: "Side by side with the tab",
-};
-
-// A page narrower than this beside the docked panel is too cramped to use.
-const MIN_PANE_WIDTH = 420;
-// The panel's width when it first opens, and the narrowest it gets.
-const MIN_WIDTH = 420;
-// A floating panel's inset on each side (zendia.css).
-const FLOAT_INSET = 10;
-// How long the slid-in panel stays once the mouse leaves it, and how long the
-// mouse rests on the handle before it slides in, after Zen's compact sidebar
-// (zen.view.compact.sidebar-keep-hover.duration, hover-hack-delay).
-const KEEP_HOVER_MS = 400;
-const HANDLE_HOVER_MS = 100;
-// Zen's compact sidebar spring (compact-mode/sidebar.inc.css), sampled
-// coarser.
-const SPRING =
-  "linear(0, 0.0388 4%, 0.1313 8%, 0.2498 12%, 0.3757 16%, 0.497 20%, 0.6068 24%, 0.7018 28%, 0.781 32%, 0.8448 36%, 0.8948 40%, 0.9327 44%, 0.9603 48%, 0.9804 52%, 0.994 56%, 1.0025 60%, 1.0075 64%, 1.0101 68%, 1.0109 72%, 1.0104 76%, 1.0084 84%, 1.0045 95%, 1)";
-
 function formatElapsed(ms) {
   const seconds = Math.floor(ms / 1000);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -107,26 +80,9 @@ function formatDuration(ms) {
     : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-function readPrefs() {
-  const layout = Services.prefs.getStringPref(PREF_LAYOUT, "float");
-  const fallback = Services.prefs.getStringPref(PREF_FALLBACK, "float");
-  return {
-    layout: layout in LAYOUTS ? layout : "float",
-    side:
-      Services.prefs.getStringPref(PREF_SIDE, "right") == "left"
-        ? "left"
-        : "right",
-    width: Math.max(
-      MIN_WIDTH,
-      Services.prefs.getIntPref(PREF_WIDTH, MIN_WIDTH)
-    ),
-    fallback: fallback == "slide" ? "slide" : "float",
-  };
-}
-
 export class ZendiaAgentDock {
   #window;
-  #host;
+  #frame;
   #root;
   #log;
   #input;
@@ -176,29 +132,15 @@ export class ZendiaAgentDock {
   #groups = new WeakMap();
   #pill;
   #handle;
-  #grip;
   #uiView;
-  #layoutButtons = new Map();
-  #sideButton;
   #conversation = null;
   #unsubscribe = null;
   #timer = null;
   #onChange;
   #onStatus;
-  #open = false;
-  #closing = false;
-  #animation = null;
-  #prefs = readPrefs();
-  // The layout in use: the one picked, or its fallback while a split has no
-  // room.
-  #layout = this.#prefs.layout;
-  #hovered = false;
-  #hideTimer = null;
-  #handleTimer = null;
+  #onSwitch;
   #picking = false;
   #renderQueued = false;
-  #layoutQueued = false;
-  #resizing = false;
   // Each message's row, and what it showed when it was built.
   #rows = new WeakMap();
 
@@ -209,11 +151,14 @@ export class ZendiaAgentDock {
    *   closes.
    * @param {() => void} [options.onStatus] Called when `status` may have
    *   changed.
+   * @param {() => void} [options.onSwitch] Called by the header's web chat
+   *   button, which swaps this panel for the web chat's.
    */
-  constructor(window, { onChange, onStatus }) {
+  constructor(window, { onChange, onStatus, onSwitch }) {
     this.#window = window;
     this.#onChange = onChange;
     this.#onStatus = onStatus;
+    this.#onSwitch = onSwitch;
     const document = window.document;
     const create = (tag, className, parent) => {
       const element = document.createElementNS(HTML_NS, tag);
@@ -246,15 +191,23 @@ export class ZendiaAgentDock {
       return button;
     };
 
-    this.#root = create("div");
-    this.#root.id = "zendia-agent-dock";
-    this.#root.hidden = true;
-    this.#root.setAttribute("role", "dialog");
-    this.#root.setAttribute("aria-label", "Ask your agent");
-    // A click on the conversation's text then keeps the focus in the panel.
-    // Left to itself it goes to the window, where Ctrl+C is a vim key the
-    // page takes, and the selected text is never copied.
-    this.#root.tabIndex = -1;
+    this.#frame = new lazy.ZendiaDockFrame(window, {
+      id: "zendia-agent",
+      label: "Ask your agent",
+      branch: "zendia.agent.",
+      // The conversation waits on the user, or a picker is up: the slid-in
+      // panel stays.
+      keepOpen: () => this.#picking || !!this.#conversation?.pendingConfirm,
+      onLayout: () => this.#syncPill(),
+      // The model chip.
+      onPrefs: () => this.#queueRender(),
+      onCloseRequest: () => this.close(),
+      onOpenRequest: options =>
+        this.open(this.#window.gBrowser.selectedBrowser, options),
+    });
+    this.#root = this.#frame.root;
+    this.#pill = this.#frame.pill;
+    this.#handle = this.#frame.handle;
 
     const header = create("div", "zendia-agent-header", this.#root);
     this.#agentChip = create("button", "zendia-agent-chip", header);
@@ -268,23 +221,11 @@ export class ZendiaAgentDock {
           this.#conversation?.browser ?? this.#window.gBrowser.selectedBrowser
         )
     );
-    const layouts = create("div", "zendia-agent-layouts", header);
-    layouts.setAttribute("role", "group");
-    layouts.setAttribute("aria-label", "Layout");
-    for (const [layout, title] of Object.entries(LAYOUTS)) {
-      const button = iconButton(`layout-${layout}`, layouts, title);
-      button.addEventListener("click", () =>
-        Services.prefs.setStringPref(PREF_LAYOUT, layout)
-      );
-      this.#layoutButtons.set(layout, button);
-    }
-    this.#sideButton = iconButton("side", header, "");
-    this.#sideButton.addEventListener("click", () =>
-      Services.prefs.setStringPref(
-        PREF_SIDE,
-        this.#prefs.side == "right" ? "left" : "right"
-      )
+    iconButton("web-chat", header, "Web chat (<leader>aw)").addEventListener(
+      "click",
+      () => this.#onSwitch?.()
     );
+    this.#frame.addLayoutControls(header);
     iconButton("close", header, "Close (Esc)").addEventListener("click", () =>
       this.close()
     );
@@ -445,72 +386,13 @@ export class ZendiaAgentDock {
     lazy.ZendiaAgentInstructions.load();
     window.addEventListener("unload", offInstructions, { once: true });
 
-    this.#grip = create("div", "zendia-agent-grip", this.#root);
-    this.#grip.setAttribute("role", "separator");
-    this.#grip.setAttribute("aria-orientation", "vertical");
-    this.#grip.addEventListener("pointerdown", event =>
-      this.#startResize(event)
-    );
-    this.#grip.addEventListener("dblclick", () =>
-      Services.prefs.clearUserPref(PREF_WIDTH)
-    );
-
-    this.#root.addEventListener("mouseenter", () => {
-      this.#hovered = true;
-      this.#cancelHide();
-    });
-    this.#root.addEventListener("mouseleave", () => {
-      this.#hovered = false;
-      this.#scheduleHide();
-    });
-
-    this.#pill = create("button");
-    this.#pill.id = "zendia-agent-pill";
-    this.#pill.hidden = true;
     this.#pill.addEventListener("click", () =>
       this.open(this.#window.gBrowser.selectedBrowser)
     );
 
-    // The slid-out panel's edge: resting the mouse on it slides it back in.
-    this.#handle = create("div");
-    this.#handle.id = "zendia-agent-handle";
-    this.#handle.hidden = true;
-    this.#handle.addEventListener("mouseenter", () => {
-      this.#handleTimer = this.#window.setTimeout(() => {
-        this.#handleTimer = null;
-        this.open(this.#window.gBrowser.selectedBrowser, { focus: false });
-      }, HANDLE_HOVER_MS);
-    });
-    this.#handle.addEventListener("mouseleave", () => {
-      this.#window.clearTimeout(this.#handleTimer);
-      this.#handleTimer = null;
-    });
-    this.#handle.addEventListener("click", () =>
-      this.open(this.#window.gBrowser.selectedBrowser)
+    this.#window.gBrowser.tabContainer.addEventListener("TabSelect", () =>
+      this.#onTabSelect()
     );
-
-    // Beside the tab box, where Zen's split view panes and sidebar sit.
-    this.#host =
-      document.getElementById("zen-tabbox-wrapper") ??
-      document.getElementById("browser") ??
-      document.documentElement;
-    this.#host.append(this.#root, this.#pill, this.#handle);
-
-    const relayout = () => this.#queueLayout();
-    window.gBrowser.tabContainer.addEventListener("TabSelect", () => {
-      this.#onTabSelect();
-      relayout();
-    });
-    window.addEventListener("resize", relayout);
-    window.addEventListener("ZenViewSplitter:SplitViewActivated", relayout);
-    window.addEventListener("ZenViewSplitter:SplitViewDeactivated", relayout);
-    const onPrefs = () => {
-      this.#prefs = readPrefs();
-      this.#applyLayout();
-      // The model chip.
-      this.#queueRender();
-    };
-    Services.prefs.addObserver(PREF_BRANCH, onPrefs);
     const offTheme = lazy.ZendiaTheme.onChange(() => {
       this.#queueRender();
       this.#syncPill();
@@ -518,13 +400,17 @@ export class ZendiaAgentDock {
     window.addEventListener(
       "unload",
       () => {
-        Services.prefs.removeObserver(PREF_BRANCH, onPrefs);
         offTheme();
         window.clearInterval(this.#timer);
       },
       { once: true }
     );
-    this.#applyLayout();
+    // Last: the layout draws the pill, which reads all of the above.
+    this.#frame.mount();
+  }
+
+  get #open() {
+    return this.#frame.isOpen;
   }
 
   get isOpen() {
@@ -556,7 +442,7 @@ export class ZendiaAgentDock {
    * @returns {"float"|"slide"|"split"}
    */
   get layout() {
-    return this.#layout;
+    return this.#frame.layout;
   }
 
   /**
@@ -567,9 +453,7 @@ export class ZendiaAgentDock {
    * @param {boolean} [options.focus] Give it the keys.
    */
   async open(browser, { focus = true } = {}) {
-    this.#open = true;
-    this.#cancelHide();
-    this.#show();
+    this.#frame.show();
     this.#syncPill();
     this.#onChange();
     const conversation = await lazy.ZendiaAgents.open(browser);
@@ -591,10 +475,10 @@ export class ZendiaAgentDock {
       return;
     }
     const focused = this.#root.contains(this.#window.document.activeElement);
-    this.#open = false;
+    // Closed first: the instructions' close hands the keys to the input only
+    // while the dock is open.
+    this.#frame.hide();
     this.#instructions.close();
-    this.#cancelHide();
-    this.#hide();
     this.#syncPill();
     this.#onChange();
     // Only hand the keys back when the dock had them, not when another
@@ -609,7 +493,7 @@ export class ZendiaAgentDock {
    * stays, as a split view pane would; one over the page goes.
    */
   release() {
-    if (this.#layout != "split") {
+    if (this.#frame.layout != "split") {
       this.close();
     }
   }
@@ -619,12 +503,7 @@ export class ZendiaAgentDock {
    * @returns {boolean} Whether the node is part of the dock.
    */
   contains(node) {
-    return (
-      !!node &&
-      (this.#root.contains(node) ||
-        this.#pill.contains(node) ||
-        this.#handle.contains(node))
-    );
+    return this.#frame.contains(node);
   }
 
   /**
@@ -943,247 +822,6 @@ export class ZendiaAgentDock {
 
   // Layout.
 
-  // The widest the panel can be beside the tab while the tab, and each of
-  // its split view panes, keeps at least MIN_PANE_WIDTH.
-  #splitMaxWidth() {
-    const window = this.#window;
-    const panels = window.gBrowser.tabpanels;
-    const total = panels?.getBoundingClientRect().width;
-    if (!total) {
-      return Infinity;
-    }
-    const gap =
-      parseFloat(
-        window
-          .getComputedStyle(window.document.documentElement)
-          .getPropertyValue("--zen-element-separation")
-      ) || 8;
-    const docked =
-      this.#layout == "split" && !this.#root.hidden
-        ? this.#root.getBoundingClientRect().width + gap
-        : 0;
-    let share = 1;
-    const splitter = window.gZenViewSplitter;
-    if (splitter?.splitViewActive) {
-      for (const tab of splitter._data[splitter.currentView]?.tabs ?? []) {
-        const pane = tab.linkedBrowser?.closest(".browserSidebarContainer");
-        const width = pane?.getBoundingClientRect().width;
-        if (width) {
-          share = Math.min(share, width / total);
-        }
-      }
-    }
-    // Each pane keeps its share of what the panel leaves of the tab box.
-    return Math.floor(total + docked - gap - MIN_PANE_WIDTH / share);
-  }
-
-  // The widest the panel can get in the layout in use.
-  #maxWidth() {
-    return this.#layout == "split"
-      ? this.#splitMaxWidth()
-      : this.#host.clientWidth - 2 * FLOAT_INSET;
-  }
-
-  #queueLayout() {
-    if (this.#layoutQueued || this.#prefs.layout != "split") {
-      return;
-    }
-    this.#layoutQueued = true;
-    this.#window.requestAnimationFrame(() => {
-      this.#layoutQueued = false;
-      this.#applyLayout();
-    });
-  }
-
-  #applyLayout() {
-    const { layout: picked, side, fallback } = this.#prefs;
-    const splitMax = picked == "split" ? this.#splitMaxWidth() : Infinity;
-    const layout = splitMax < MIN_WIDTH ? fallback : picked;
-    const changed = layout != this.#layout;
-    this.#layout = layout;
-    for (const element of [this.#root, this.#pill, this.#handle]) {
-      element.setAttribute("layout", layout);
-      element.setAttribute("side", side);
-    }
-    // Beside the tab the panel gives up its width, down to MIN_WIDTH, before
-    // the tab gets too narrow.
-    const width =
-      layout == "split"
-        ? Math.min(this.#prefs.width, splitMax)
-        : this.#prefs.width;
-    if (!this.#resizing) {
-      this.#root.style.setProperty("--zendia-agent-width", `${width}px`);
-    }
-    const fixed = layout == "split" && splitMax <= MIN_WIDTH;
-    this.#grip.toggleAttribute("disabled", fixed);
-    this.#grip.setAttribute("aria-disabled", String(fixed));
-    this.#grip.title = fixed
-      ? "No room to widen it beside this tab: float it to make it wider"
-      : "Drag to resize · double-click for the narrowest";
-    const fellBack = picked == "split" && layout != "split";
-    this.#root.toggleAttribute("fallback", fellBack);
-    for (const [name, button] of this.#layoutButtons) {
-      button.setAttribute("aria-pressed", String(name == picked));
-    }
-    const split = this.#layoutButtons.get("split");
-    split.title = fellBack
-      ? `${LAYOUTS.split}: no room beside this tab, so it floats for now`
-      : LAYOUTS.split;
-    const other = side == "right" ? "left" : "right";
-    this.#sideButton.setAttribute("side", side);
-    this.#sideButton.title = `Move to the ${other}`;
-    this.#sideButton.setAttribute("aria-label", this.#sideButton.title);
-    if (changed && this.#open && !this.#closing) {
-      this.#animate(true);
-    }
-    if (layout != "slide") {
-      this.#cancelHide();
-    }
-    this.#syncPill();
-  }
-
-  // Dragging the edge on the page's side widens or narrows the panel; the
-  // width is kept for every layout once the mouse lets go.
-  #startResize(event) {
-    if (event.button != 0 || this.#grip.hasAttribute("disabled")) {
-      return;
-    }
-    event.preventDefault();
-    const grip = this.#grip;
-    const startX = event.clientX;
-    const start = Math.round(this.#root.getBoundingClientRect().width);
-    const max = Math.max(MIN_WIDTH, this.#maxWidth());
-    const sign = this.#prefs.side == "right" ? -1 : 1;
-    let width = start;
-    const move = moved => {
-      width = Math.round(
-        Math.min(
-          max,
-          Math.max(MIN_WIDTH, start + sign * (moved.clientX - startX))
-        )
-      );
-      this.#root.style.setProperty("--zendia-agent-width", `${width}px`);
-    };
-    // Letting go releases the capture, as does anything that steals it.
-    const end = () => {
-      grip.removeEventListener("pointermove", move);
-      this.#resizing = false;
-      this.#root.removeAttribute("resizing");
-      if (width != start) {
-        Services.prefs.setIntPref(PREF_WIDTH, width);
-      }
-      if (!this.#hovered) {
-        this.#scheduleHide();
-      }
-    };
-    this.#resizing = true;
-    this.#root.setAttribute("resizing", "");
-    grip.setPointerCapture(event.pointerId);
-    grip.addEventListener("pointermove", move);
-    grip.addEventListener("lostpointercapture", end, { once: true });
-  }
-
-  #show() {
-    if (!this.#root.hidden && !this.#closing) {
-      return;
-    }
-    const wasHidden = this.#root.hidden;
-    this.#closing = false;
-    this.#root.hidden = false;
-    this.#applyLayout();
-    if (wasHidden || this.#animation) {
-      this.#animate(true);
-    }
-  }
-
-  #hide() {
-    this.#closing = true;
-    this.#animate(false).then(() => {
-      if (this.#closing) {
-        this.#closing = false;
-        this.#root.hidden = true;
-        this.#applyLayout();
-      }
-    });
-  }
-
-  // Slide in from the panel's side, or out to it. Beside the tab the panel
-  // starts past the tab box's edge, its outer margin taking back its width,
-  // so the page makes room as it comes in and its text never reflows.
-  #animate(showing) {
-    this.#animation?.cancel();
-    this.#animation = null;
-    const window = this.#window;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      return Promise.resolve();
-    }
-    const left = this.#prefs.side == "left";
-    const sign = left ? -1 : 1;
-    const outer = left ? "marginLeft" : "marginRight";
-    const gap =
-      parseFloat(
-        window.getComputedStyle(this.#root)[left ? "marginRight" : "marginLeft"]
-      ) || 0;
-    const keyframes =
-      this.#layout == "split"
-        ? [
-            {
-              [outer]: `${-this.#root.getBoundingClientRect().width - gap}px`,
-              opacity: 0,
-            },
-            { [outer]: "0px", opacity: 1 },
-          ]
-        : [
-            {
-              transform: `translateX(calc(${sign} * (100% + 24px)))`,
-              opacity: 0,
-            },
-            { transform: "translateX(0)", opacity: 1 },
-          ];
-    const animation = this.#root.animate(keyframes, {
-      duration: showing ? 360 : 180,
-      easing: showing ? SPRING : "cubic-bezier(0.4, 0, 1, 1)",
-      direction: showing ? "normal" : "reverse",
-    });
-    this.#animation = animation;
-    return animation.finished.then(
-      () => {
-        if (this.#animation == animation) {
-          this.#animation = null;
-        }
-      },
-      () => {}
-    );
-  }
-
-  // The slid-in panel hides a moment after the mouse leaves it, unless it
-  // waits on the user.
-  #scheduleHide() {
-    this.#cancelHide();
-    if (
-      this.#layout != "slide" ||
-      !this.#open ||
-      this.#picking ||
-      this.#resizing ||
-      this.#conversation?.pendingConfirm
-    ) {
-      return;
-    }
-    this.#hideTimer = this.#window.setTimeout(() => {
-      this.#hideTimer = null;
-      if (!this.#hovered && !this.#picking) {
-        this.close();
-      }
-    }, KEEP_HOVER_MS);
-  }
-
-  #cancelHide() {
-    if (this.#hideTimer) {
-      this.#window.clearTimeout(this.#hideTimer);
-      this.#hideTimer = null;
-    }
-  }
-
   // Conversation.
 
   #bind(conversation) {
@@ -1222,7 +860,7 @@ export class ZendiaAgentDock {
       // it does while the agent works: the tab may be one it brought to the
       // front to type in.
       const running = lazy.ZendiaAgents.conversationFor(browser)?.running;
-      this.open(browser, { focus: this.#layout != "split" && !running });
+      this.open(browser, { focus: this.#frame.layout != "split" && !running });
     } else {
       this.#bind(lazy.ZendiaAgents.conversationFor(browser));
       this.#syncPill();
@@ -1242,7 +880,7 @@ export class ZendiaAgentDock {
       this.#queueRender();
     }
     if (event.key == "Escape") {
-      if (this.#layout == "split") {
+      if (this.#frame.layout == "split") {
         // Back to the page, as leaving a vim window; the panel stays.
         this.#window.gBrowser.selectedBrowser.focus();
       } else {
@@ -2019,7 +1657,7 @@ export class ZendiaAgentDock {
       browser.contentTitle || browser.currentURI?.spec || "";
     this.#input.disabled = !conversation;
     let placeholder = "";
-    let hint = `Enter send · Shift+Enter new line · Tab switch agent · Esc ${this.#layout == "split" ? "back to the page" : "close"}`;
+    let hint = `Enter send · Shift+Enter new line · Tab switch agent · Esc ${this.#frame.layout == "split" ? "back to the page" : "close"}`;
     if (conversation?.pendingConfirm) {
       hint = "y allow · n deny · Esc hide";
     } else if (conversation?.running) {
@@ -2282,7 +1920,7 @@ export class ZendiaAgentDock {
     );
     const color = lazy.agentColor(conversation?.agent.id);
     const running = !!conversation?.running;
-    const slide = this.#layout == "slide";
+    const slide = this.#frame.layout == "slide";
     this.#handle.hidden =
       this.#open || !slide || !conversation?.messages.length;
     this.#handle.style.setProperty("--zendia-agent-color", color);

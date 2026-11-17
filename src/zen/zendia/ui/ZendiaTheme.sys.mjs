@@ -221,11 +221,12 @@ class Theme {
   }
 
   /**
-   * @param {string} [id] An agent id.
+   * @param {string} [id] An agent's or a web chat's id.
+   * @param {string} [fallback] The color of one the user did not pick for.
    * @returns {string} Its color, or the explorer's blue for one without.
    */
-  agentColor(id) {
-    return this.#theme.agents[id] ?? this.hex("blue");
+  agentColor(id, fallback) {
+    return this.#theme.agents[id] ?? fallback ?? this.hex("blue");
   }
 
   /**

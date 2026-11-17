@@ -35,6 +35,8 @@ firefox-appdir = "browser"
 
 ["test_theme.js"]
 
+["test_webchat.js"]
+
 ["test_which_key.js"]
 
 ["test_yank_ring.js"]

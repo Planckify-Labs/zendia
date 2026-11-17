@@ -177,6 +177,11 @@ export const ZendiaKeymapsSpec = {
     ["n", "<leader>an", "agent.new"],
     ["n", "<leader>al", "agent.log"],
 
+    // The chat sites, in their own panel beside the agent's: w opens it, c
+    // picks the site, as sidekick.nvim's s picks the agent.
+    ["n", "<leader>aw", "webchat.toggle"],
+    ["n", "<leader>ac", "webchat.select"],
+
     // Every extension, uBlock Origin included, through one picker.
     ["n", "<leader>x", "extensions.pick"],
 

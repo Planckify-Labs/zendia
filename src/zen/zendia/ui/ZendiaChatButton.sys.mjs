@@ -27,17 +27,17 @@ ChromeUtils.defineESModuleGetters(lazy, {
 const WIDGET_ID = "zendia-chat-button";
 const TOP_BAR_ID = "zendia-chat-topbar";
 const LABEL = "Chat";
-const PREF_SINGLE_TOOLBAR = "zen.view.use-single-toolbar";
+export const PREF_SINGLE_TOOLBAR = "zen.view.use-single-toolbar";
 const PREF_NO_WINDOW_CONTROLS = "zen.view.experimental-no-window-controls";
 const PREF_IN_TITLEBAR = "browser.tabs.inTitlebar";
-const FOOT_AREA = "zen-sidebar-foot-buttons";
+export const FOOT_AREA = "zen-sidebar-foot-buttons";
 // The foot row's + button, which Chat goes before.
-const CREATE_BUTTON = "zen-create-new-button";
+export const CREATE_BUTTON = "zen-create-new-button";
 
 let gRegistered = false;
 
 // Where Chat belongs in the current layout.
-function homeArea() {
+export function homeArea() {
   return Services.prefs.getBoolPref(PREF_SINGLE_TOOLBAR, true)
     ? FOOT_AREA
     : lazy.CustomizableUI.AREA_NAVBAR;

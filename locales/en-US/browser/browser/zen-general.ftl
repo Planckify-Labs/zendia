@@ -75,6 +75,7 @@ zendia-split-pinned-toast = Tab pinned to join this split.
 zendia-yank-empty-toast = Nothing yanked yet.
 zendia-yank-copied-toast = Copied to the clipboard.
 zendia-yank-cleared-toast = Yank history cleared.
+zendia-webchat-synced-toast = Browser logins copied to the web chat.
 
 zen-toggle-compact-mode-button =
     .label = Compact Mode
