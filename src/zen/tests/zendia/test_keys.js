@@ -103,6 +103,64 @@ add_task(function test_from_event_chords() {
   );
 });
 
+add_task(function test_token_to_event_round_trip() {
+  // tokenToEvent is the reverse of fromEvent: a key pressed without a
+  // keyboard must read back as the token it was built from.
+  const tokens = [
+    "a",
+    "H",
+    "z",
+    "5",
+    ".",
+    ",",
+    "|",
+    "<CR>",
+    "<Tab>",
+    "<Esc>",
+    "<Space>",
+    "<BS>",
+    "<Up>",
+    "<Down>",
+    "<Left>",
+    "<Right>",
+    "<C-r>",
+    "<C-a>",
+    "<C-p>",
+    "<C-S-d>",
+    "<A-j>",
+  ];
+  for (const token of tokens) {
+    const built = ZendiaKeys.tokenToEvent(token);
+    Assert.ok(built, `tokenToEvent builds an event for ${token}`);
+    Assert.equal(
+      ZendiaKeys.fromEvent(built),
+      token,
+      `${token} reads back from its event`
+    );
+  }
+});
+
+add_task(function test_token_to_event_fields() {
+  Assert.deepEqual(
+    ZendiaKeys.tokenToEvent("<C-r>"),
+    ZendiaKeys.tokenToEvent("<C-r>"),
+    "stable"
+  );
+  const ctrlR = ZendiaKeys.tokenToEvent("<C-r>");
+  Assert.equal(ctrlR.key, "r");
+  Assert.equal(ctrlR.code, "KeyR");
+  Assert.ok(ctrlR.ctrlKey && !ctrlR.shiftKey);
+  const enter = ZendiaKeys.tokenToEvent("<CR>");
+  Assert.equal(enter.key, "Enter");
+  const space = ZendiaKeys.tokenToEvent("<Space>");
+  Assert.equal(space.key, " ");
+  const cap = ZendiaKeys.tokenToEvent("H");
+  Assert.equal(cap.key, "H");
+  Assert.ok(cap.shiftKey, "an uppercase letter carries Shift");
+  Assert.equal(ZendiaKeys.tokenToEvent(""), null);
+  Assert.equal(ZendiaKeys.tokenToEvent("<nope>"), null);
+});
+
 add_task(function test_from_event_named_and_ignored() {
   Assert.equal(ZendiaKeys.fromEvent(event("Escape")), "<Esc>");
   Assert.equal(ZendiaKeys.fromEvent(event("Enter")), "<CR>");

@@ -34,9 +34,10 @@ const { ZendiaAgents, PREF_CONTEXT, PREF_EFFORT } = ChromeUtils.importESModule(
 const { ZendiaAgentServer, handleMcpMessage } = ChromeUtils.importESModule(
   "resource:///modules/zendia/agent/ZendiaAgentServer.sys.mjs"
 );
-const { formatObservation, normalizeCall } = ChromeUtils.importESModule(
-  "resource:///modules/zendia/agent/ZendiaAgentTools.sys.mjs"
-);
+const { ZendiaPictureToolbox, formatObservation, normalizeCall } =
+  ChromeUtils.importESModule(
+    "resource:///modules/zendia/agent/ZendiaAgentTools.sys.mjs"
+  );
 const { Subprocess } = ChromeUtils.importESModule(
   "resource://gre/modules/Subprocess.sys.mjs"
 );
@@ -1969,4 +1970,85 @@ add_task(async function test_a_saved_agy_variant_becomes_model_and_effort() {
     driver.models = original;
     clearPicks();
   }
+});
+
+add_task(async function test_picture_toolbox_shows_only_pictures() {
+  const box = new ZendiaPictureToolbox([
+    { name: "challenge.jpg", bytes: new Uint8Array([1, 2, 3]) },
+  ]);
+  const tools = box.listTools();
+  Assert.deepEqual(
+    tools.map(tool => tool.name),
+    ["picture_view"],
+    "No browser tool is offered"
+  );
+  const seen = await box.callTool("picture_view", { name: "challenge.jpg" });
+  Assert.equal(seen.image.mimeType, "image/jpeg");
+  Assert.equal(seen.image.data, "AQID");
+  const missing = await box.callTool("page_screenshot", {});
+  Assert.ok(missing.isError, "Anything else is refused");
+  const init = await handleMcpMessage(box, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {},
+  });
+  Assert.ok(
+    !/browser|tab/i.test(init.result.instructions),
+    "The server tells an isolated session nothing of the browser"
+  );
+});
+
+add_task(async function test_picture_toolbox_acts_when_it_may() {
+  const pressed = [];
+  const typedText = [];
+  let looks = 0;
+  const box = new ZendiaPictureToolbox(
+    [{ name: "challenge-area.jpg", bytes: new Uint8Array([1, 2, 3]) }],
+    {
+      type: async keys => {
+        pressed.push(keys);
+        return { ok: true, detail: `Pressed ${keys.join(" ")}.` };
+      },
+      text: async text => {
+        typedText.push(text);
+        return { ok: true, detail: `Typed ${text}.` };
+      },
+      look: async () => {
+        looks++;
+        return {
+          name: "challenge-area.jpg",
+          bytes: new Uint8Array([9, 9]),
+          said: "pick the trucks",
+        };
+      },
+    }
+  );
+  Assert.deepEqual(
+    box.listTools().map(tool => tool.name),
+    ["picture_view", "type_keys", "type_text", "look_again"],
+    "The acting tools are offered beside the picture"
+  );
+  const typed = await box.callTool("type_keys", { keys: ["ac", "Enter"] });
+  Assert.ok(!typed.isError);
+  Assert.deepEqual(pressed, [["ac", "Enter"]], "The keys reach the act handler");
+  const text = await box.callTool("type_text", { text: "55PSJ8" });
+  Assert.ok(!text.isError);
+  Assert.deepEqual(typedText, ["55PSJ8"], "The text reaches the act handler");
+  const looked = await box.callTool("look_again", {});
+  Assert.equal(looks, 1);
+  Assert.equal(looked.image.data, "CQk=", "look_again returns the fresh shot");
+  Assert.ok(
+    looked.text.includes("pick the trucks"),
+    "look_again carries what the task asks now"
+  );
+  const again = await box.callTool("picture_view", { name: "challenge-area.jpg" });
+  Assert.equal(
+    again.image.data,
+    "CQk=",
+    "the fresh shot replaces what picture_view returns"
+  );
+  // A wrong name still returns the only picture rather than an error.
+  const guessed = await box.callTool("picture_view", { name: "wrong.jpg" });
+  Assert.equal(guessed.image.data, "CQk=", "the sole picture is returned anyway");
 });

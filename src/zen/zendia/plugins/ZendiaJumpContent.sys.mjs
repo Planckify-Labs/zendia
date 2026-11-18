@@ -1750,6 +1750,54 @@ export const actions = {
   // <C-r>, <C-a> and <C-p> press them.
   "captcha.verify": pressCaptcha("verify"),
   "captcha.answer": pressCaptcha("answer"),
+
+  // Fill the CAPTCHA's answer field with given text, as the user typing it,
+  // for a challenge solved by reading its characters. The field is found
+  // among the CAPTCHA's controls; only one in this page (not a cross-process
+  // frame, whose control is named by a string) can be filled, so a remote
+  // one returns false.
+  "captcha.fill": async ({ actor, window }, args = {}) => {
+    const text = String(args.text ?? "");
+    const targets = (
+      await controlsSource(window, actor, { scope: "captcha" })
+    ).matches("");
+    const local = each => (typeof each.key != "string" ? each.key : null);
+    const typeable = element => {
+      if (!element) {
+        return false;
+      }
+      if (element.localName == "textarea" || element.isContentEditable) {
+        return true;
+      }
+      return (
+        element.localName == "input" &&
+        !/^(checkbox|radio|button|submit|image|file|range|color|hidden)$/i.test(
+          element.type || "text"
+        )
+      );
+    };
+    // The control marked the answer, or, where nothing was marked (a widget
+    // whose field the layer does not name), the one text field of the
+    // challenge.
+    const field =
+      targets.find(each => each.purpose == "answer" && typeable(local(each))) ??
+      targets.find(each => typeable(local(each)));
+    const element = field ? local(field) : null;
+    if (!element) {
+      return false;
+    }
+    element.focus();
+    if (element.localName == "input" || element.localName == "textarea") {
+      // As the user typing it, which a framework's value tracker notices.
+      element.setUserInput(text);
+    } else {
+      window.getSelection().selectAllChildren(element);
+      window.document.execCommand("insertText", false, text);
+    }
+    element.dispatchEvent(new window.Event("input", { bubbles: true }));
+    element.dispatchEvent(new window.Event("change", { bubbles: true }));
+    return true;
+  },
   "captcha.reload": pressCaptcha("reload"),
   "captcha.audio": pressCaptcha("audio", "visual"),
   "captcha.play": pressCaptcha("play"),

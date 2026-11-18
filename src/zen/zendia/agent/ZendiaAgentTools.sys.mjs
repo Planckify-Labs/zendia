@@ -1739,3 +1739,162 @@ export class ZendiaAgentToolbox {
     });
   }
 }
+
+function imageResult(text, bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return { text, image: { data: btoa(binary), mimeType: "image/jpeg" } };
+}
+
+/**
+ * The tools of an isolated turn: pictures handed over by name, and, where the
+ * turn may act, the keys to work what the pictures show, text to type into it,
+ * and a fresh look at it. Nothing of the browser, its tabs or the page they
+ * come from.
+ */
+export class ZendiaPictureToolbox {
+  #pictures;
+  #paths;
+  #act;
+
+  /**
+   * @param {{name: string, bytes: Uint8Array}[]} pictures JPEGs.
+   * @param {{type: (keys: string[]) => Promise<{ok: boolean, detail: string}>,
+   *   text: (text: string) => Promise<{ok: boolean, detail: string}>,
+   *   look: () => Promise<{name: string, bytes: Uint8Array, said?: string}|null>}|null} [act]
+   *   How the turn acts: `type` presses keys, `text` types into a field,
+   *   `look` takes a fresh picture. Without it the turn can only look.
+   * @param {{name: string, path: string}[]} [files] The same pictures on disk,
+   *   for an agent that reads files rather than image tool results; `look`
+   *   keeps them fresh.
+   */
+  constructor(pictures, act = null, files = []) {
+    this.#pictures = new Map(pictures.map(({ name, bytes }) => [name, bytes]));
+    this.#paths = new Map(files.map(({ name, path }) => [name, path]));
+    this.#act = act;
+  }
+
+  get instructions() {
+    return this.#act
+      ? "Pictures to look at and keys to work what they show."
+      : "A picture to look at, by its name.";
+  }
+
+  listTools() {
+    const tools = [
+      {
+        name: "picture_view",
+        description:
+          "Shows you one of the pictures you were given, by its name. Only useful if you can see images.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string", enum: [...this.#pictures.keys()] },
+          },
+          required: ["name"],
+          additionalProperties: false,
+        },
+        annotations: { readOnlyHint: true },
+      },
+    ];
+    if (this.#act) {
+      tools.push(
+        {
+          name: "type_keys",
+          description:
+            'Presses keys on what the picture shows, one list item at a time, in order. An item is a label\'s letters typed together ("ac"), a single move ("h", "H", "."), or a named key: "Enter", "Tab", "Esc", "Space", "Ctrl+R", "Ctrl+A", "Ctrl+P".',
+          inputSchema: {
+            type: "object",
+            properties: {
+              keys: {
+                type: "array",
+                items: { type: "string" },
+                description: 'The keys in order, e.g. ["ac", "bf", "Enter"]',
+              },
+            },
+            required: ["keys"],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: "type_text",
+          description:
+            "Types text into the answer field of what you are working on, for a task that shows characters to copy. Read them from the picture and pass them here, then press Enter to submit.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "The characters to type" },
+            },
+            required: ["text"],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: "look_again",
+          description:
+            "Takes a fresh picture of what you are working on, to see what changed and what it asks now. Returns it as challenge-area.jpg.",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+          annotations: { readOnlyHint: true },
+        }
+      );
+    }
+    return tools;
+  }
+
+  async callTool(name, args = {}) {
+    if (this.#act && name.endsWith("type_keys")) {
+      const { ok, detail } = await this.#act.type(args.keys);
+      return { text: detail, isError: !ok };
+    }
+    if (this.#act && name.endsWith("type_text")) {
+      const { ok, detail } = await this.#act.text(String(args.text ?? ""));
+      return { text: detail, isError: !ok };
+    }
+    if (this.#act && name.endsWith("look_again")) {
+      const shot = await this.#act.look();
+      if (!shot?.bytes) {
+        return {
+          text: "There is nothing to see now: it may be finished, or not ready.",
+          isError: true,
+        };
+      }
+      await this.#store(shot.name, shot.bytes);
+      const label = shot.said
+        ? `It now asks: "${shot.said}". This is ${shot.name}.`
+        : shot.name;
+      return imageResult(label, shot.bytes);
+    }
+    // picture_view: the named picture, or the only one when the name is off.
+    let bytes = this.#pictures.get(args.name);
+    if (!bytes && name.endsWith("picture_view") && this.#pictures.size == 1) {
+      bytes = [...this.#pictures.values()][0];
+    }
+    if (!name.endsWith("picture_view") || !bytes) {
+      return {
+        text: `The pictures are: ${[...this.#pictures.keys()].join(", ")}.`,
+        isError: true,
+      };
+    }
+    return imageResult(args.name ?? [...this.#pictures.keys()][0], bytes);
+  }
+
+  // Keep the picture current for both ways the turn may read it: the image
+  // tool result, and the file on disk where one was given.
+  async #store(name, bytes) {
+    this.#pictures.set(name, bytes);
+    const path = this.#paths.get(name);
+    if (path) {
+      try {
+        await IOUtils.write(path, bytes);
+      } catch {
+        // The copy is gone; the image result still carries the picture.
+      }
+    }
+  }
+}

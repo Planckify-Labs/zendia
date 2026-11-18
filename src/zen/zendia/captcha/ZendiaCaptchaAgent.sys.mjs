@@ -23,6 +23,7 @@
 import { ZendiaAgents } from "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs";
 import { pageFromArgs } from "resource:///modules/zendia/agent/ZendiaAgentUi.sys.mjs";
 import { ZendiaCaptchaWatch } from "resource:///modules/zendia/captcha/ZendiaCaptchaWatch.sys.mjs";
+import { ZendiaKeys } from "resource:///modules/zendia/core/ZendiaKeys.sys.mjs";
 
 // The module scope has no timers of its own this early in the startup.
 import { clearTimeout, setTimeout } from "resource://gre/modules/Timer.sys.mjs";
@@ -89,6 +90,64 @@ const IDLE_POLL_MS = 2000;
 // How often a summary the user's own turn preempted is tried again.
 const SEND_TRIES = 3;
 
+// The pace of the keys the subagent presses when it works a challenge: a gap
+// between keys for a pick to register and the labels to redraw, and a settle
+// after the last before it looks again.
+const KEY_GAP_MS = 90;
+const KEY_SETTLE_MS = 500;
+
+// How many times the subagent is sent back to the challenge before it is
+// left for the user: each turn loops on its own, this covers a turn that
+// stops early with the challenge still there, so a reload or a second
+// challenge is worked too. A pause between turns lets a reload settle.
+const SOLVE_ATTEMPTS = 3;
+const RETRY_GAP_MS = 600;
+
+// The named keys the subagent may press, to the tokens the keys take, so it
+// can write them as the labels reference names them ("Enter", "Ctrl+R")
+// rather than in vim notation. A label's letters and the cursor moves (h, H,
+// ., ,) are already their own tokens and parse as they are.
+const NAMED_KEY_TOKENS = {
+  enter: "<CR>",
+  return: "<CR>",
+  cr: "<CR>",
+  tab: "<Tab>",
+  esc: "<Esc>",
+  escape: "<Esc>",
+  space: "<Space>",
+  backspace: "<BS>",
+  bs: "<BS>",
+  delete: "<Del>",
+  up: "<Up>",
+  down: "<Down>",
+  left: "<Left>",
+  right: "<Right>",
+  "ctrl+r": "<C-r>",
+  "ctrl-r": "<C-r>",
+  "ctrl+a": "<C-a>",
+  "ctrl-a": "<C-a>",
+  "ctrl+p": "<C-p>",
+  "ctrl-p": "<C-p>",
+};
+
+// One item the subagent passed to type_keys to the tokens it stands for: a
+// named key, or a run of label letters and moves parsed as they are written.
+function keyTokensOf(item) {
+  const text = String(item ?? "").trim();
+  if (!text) {
+    return [];
+  }
+  const named = NAMED_KEY_TOKENS[text.toLowerCase()];
+  if (named) {
+    return [named];
+  }
+  try {
+    return ZendiaKeys.parse(text);
+  } catch {
+    return [];
+  }
+}
+
 // Text the service wrote cannot break out of the page's markup.
 function escapeHtml(text) {
   return String(text)
@@ -110,7 +169,7 @@ function keysReference(key) {
 - \`Tab\`: into the answer field, to type the characters or what the audio says; \`Esc\` back out, then \`Enter\`.
 - \`Ctrl+R\` a new challenge, \`Ctrl+A\` the audio challenge (or back to images), \`Ctrl+P\` play the audio.
 - \`.\`: the virtual cursor over the challenge, for what no tag names: a point to click in a picture. \`,\`: the same, holding the mouse down after its first jump, to drag from that point.
-- \`Esc\`: leave the labels${key ? `; \`${key}\` labels the CAPTCHA again` : ""}.
+- \`Esc\`: leave the labels${key ? `; \`${key}\` labels the challenge again` : ""}.
 The virtual cursor (an arrow with a grid of tags over the picture; a tag on a whole picture opens it too):
 - Type a grid tag: the cursor jumps there; its last letter as a capital clicks there.
 - \`h\` \`j\` \`k\` \`l\` move it 2px, \`H\` \`J\` \`K\` \`L\` 10px, the arrows 1px; a count first repeats it (\`12l\`).
@@ -301,9 +360,9 @@ class ZendiaCaptchaAgentService {
     });
   }
 
-  // One summary: the agent's turn once the agent is done with the tab, the
-  // tab in front for the challenge, its picture and the finding's line in
-  // the chat. Forced (the button), the worked gate is skipped.
+  // The subagent's work on a tab: the tab in front for the challenge, its
+  // picture in the chat, and a solve turn sent back to it until it is gone
+  // or it has had its tries. Forced (the button), the worked gate is skipped.
   async #deliver(browser, record, force = false) {
     const conversation = ZendiaAgents.conversationFor(browser);
     if (!conversation) {
@@ -319,54 +378,252 @@ class ZendiaCaptchaAgentService {
     if (!(await this.#idle(conversation, browser))) {
       return;
     }
-    // To the front first: a background tab's browser has no size to
-    // capture, and the user is handed the challenge anyway.
+    // To the front first: a background tab's browser has no size to capture.
     this.#toFront(browser);
-    const shot = await this.captureChallenge(browser).catch(() => null);
-    const shown = await this.#showShot(browser, conversation, record, shot);
-    // The picture goes to the agent too, at its full size whatever the
-    // panel took: the cropped challenge, sharper than a shot of the whole
-    // tab, is what it should read. Not to a model known to be blind to
-    // pictures: it reads the page instead.
+    // Not to a model known to be blind to pictures: it cannot work a visual
+    // task, and only says so.
     const inputs = ZendiaAgents.inputsOf?.(conversation.agent?.id);
     const sees = !inputs || inputs.includes("image");
-    const picture = sees ? (shot ?? shown) : null;
-    const parts = picture?.parts?.area ? picture.parts : null;
-    const said = shot?.parts?.instruction?.text ?? null;
-    const prompt = this.#prompt(
-      record,
-      picture,
-      parts,
-      said,
-      shot?.labeled || false,
-      shot?.state ?? null
-    );
-    let files = [];
-    if (parts) {
-      files = [{ name: "captcha-challenge-area.jpg", bytes: parts.area.bytes }];
-      // The instruction's words are in the request; its picture goes too
-      // only where it shows what words cannot: an example to match, icons
-      // to click in order.
-      if (parts.instruction?.shot && parts.instruction.pictures) {
-        files.push({
-          name: "captcha-instruction-example.jpg",
-          bytes: parts.instruction.shot.bytes,
-        });
+    for (
+      let attempt = 0;
+      attempt < SOLVE_ATTEMPTS && browser.isConnected;
+      attempt++
+    ) {
+      const shot = await this.captureChallenge(browser).catch(() => null);
+      const picture = sees ? shot : null;
+      const parts = picture?.parts?.area ? picture.parts : null;
+      const said = shot?.parts?.instruction?.text ?? null;
+      // The subagent works the challenge itself when it is under the keys:
+      // its controls are labeled ("captcha") or the cursor is on it
+      // ("cursor"), there is an area to act on, and it is there to act on.
+      const canAct =
+        sees &&
+        !!parts &&
+        (shot?.labeled == "captcha" || shot?.labeled == "cursor") &&
+        ["open", "settled", "clicked"].includes(shot?.state);
+      // A later pass that finds nothing to act on: the challenge is solved
+      // and gone, so there is nothing left to do or say.
+      if (!canAct && attempt > 0) {
+        this.#endCapture(browser);
+        return;
       }
-    } else if (picture) {
-      files = [{ name: "captcha-challenge.jpg", bytes: picture.bytes }];
+      // The picture in the chat, the first time only; after that the labels
+      // on the user's screen update live.
+      if (attempt == 0) {
+        await this.#showShot(browser, conversation, record, shot);
+      }
+      let files = [];
+      if (parts) {
+        files = [{ name: "challenge-area.jpg", bytes: parts.area.bytes }];
+        // The instruction's words are in the request; its picture goes too
+        // only where it shows what words cannot: an example to match, icons
+        // to click in order.
+        if (parts.instruction?.shot && parts.instruction.pictures) {
+          files.push({
+            name: "challenge-instruction-example.jpg",
+            bytes: parts.instruction.shot.bytes,
+          });
+        }
+      } else if (picture) {
+        files = [{ name: "challenge.jpg", bytes: picture.bytes }];
+      }
+      // Whether this turn actually moved the challenge: a key or text that
+      // took. A turn that only looked and gave up (no field to type in, an
+      // audio it cannot do) made no progress, and is not sent back in.
+      let progressed = false;
+      const act = canAct
+        ? {
+            type: async keys => {
+              const result = await this.#typeKeys(browser, keys);
+              progressed ||= result.ok;
+              return result;
+            },
+            text: async text => {
+              const result = await this.#typeText(browser, text);
+              progressed ||= result.ok;
+              return result;
+            },
+            look: () => this.#relook(browser),
+          }
+        : null;
+      const prompt = act
+        ? this.#solvePrompt(said, shot.labeled)
+        : this.#statusPrompt(
+            files[0]?.name ?? null,
+            said,
+            shot?.state ?? null,
+            sees
+          );
+      const echo =
+        attempt > 0
+          ? "Still working on it…"
+          : said
+            ? `Challenge: "${said}"`
+            : "A verification challenge needs your attention.";
+      let ran = false;
+      try {
+        ran = await this.#sendSolve(
+          conversation,
+          browser,
+          prompt,
+          files,
+          echo,
+          act
+        );
+      } finally {
+        // The labels come off once the turn is over, so the next pass labels
+        // afresh and the user is not left with stale ones.
+        if (act) {
+          this.#endCapture(browser);
+        }
+      }
+      // Go round again only to carry on work that is actually moving: not
+      // after a one-off status turn, a turn that never ran, a turn that made
+      // no progress (it gave up), or one the user stopped by hand.
+      if (!ran || !act || !progressed || conversation.stoppedByUser) {
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, RETRY_GAP_MS));
     }
-    const echo = `CAPTCHA on this tab: ${record.text}.${said ? ` It asks: "${said}"` : ""} You complete the challenge; the assistant tells you how.`;
+  }
+
+  // Send one turn, giving way to a user turn that preempts it; whether it ran.
+  async #sendSolve(conversation, browser, prompt, files, echo, act) {
     for (let tries = 0; tries < SEND_TRIES; tries++) {
       const before = conversation.messages.length;
-      await conversation.send(prompt, files, { echo });
+      await conversation.send(prompt, files, { echo, isolated: true, act });
       if (conversation.messages.length > before) {
-        return;
+        return true;
       }
       // The user's own request went first; the summary follows it.
       if (!(await this.#idle(conversation, browser))) {
-        return;
+        return false;
       }
+    }
+    return false;
+  }
+
+  // Press a run of keys in the live jump session the shot labeled, as a
+  // keyboard would: the subagent types the labels it reads off the picture to
+  // pick tiles, move the cursor, slide a piece, or press a button. Returns
+  // whether any key was taken, so the subagent hears when its labels are gone.
+  async #typeKeys(browser, keys) {
+    const items = Array.isArray(keys) ? keys : [keys];
+    const tokens = items.flatMap(keyTokensOf);
+    if (!tokens.length) {
+      return { ok: false, detail: "No keys to press." };
+    }
+    let took = 0;
+    for (const token of tokens) {
+      if (!browser.isConnected) {
+        break;
+      }
+      const actor =
+        browser.browsingContext?.currentWindowGlobal?.getActor("ZendiaKeys");
+      if (!actor) {
+        break;
+      }
+      let consumed = false;
+      try {
+        consumed = await Promise.race([
+          actor.sendQuery("Zendia:FeedToken", { token }),
+          new Promise(resolve => setTimeout(() => resolve(false), RECT_TIMEOUT_MS)),
+        ]);
+      } catch {
+        consumed = false;
+      }
+      if (consumed) {
+        took++;
+      }
+      await new Promise(resolve => setTimeout(resolve, KEY_GAP_MS));
+    }
+    await new Promise(resolve => setTimeout(resolve, KEY_SETTLE_MS));
+    return took
+      ? {
+          ok: true,
+          detail: `Pressed ${ZendiaKeys.format(tokens)}. Look again to see what changed.`,
+        }
+      : {
+          ok: false,
+          detail: "The keys did nothing: the task is over, or its labels are not up.",
+        };
+  }
+
+  // Type text into the challenge's answer field, for a task solved by reading
+  // its characters: the subagent reads them off the picture and types them
+  // here, then presses the verify key. Only a field in the page itself can be
+  // filled; a cross-process frame's cannot, and the subagent is told so.
+  async #typeText(browser, text) {
+    const value = String(text ?? "").trim();
+    if (!value) {
+      return { ok: false, detail: "No text to type." };
+    }
+    try {
+      const filled = await ZendiaAgents.zendia?.run(
+        "captcha.fill",
+        { text: value },
+        { browser }
+      );
+      if (filled) {
+        await new Promise(resolve => setTimeout(resolve, KEY_SETTLE_MS));
+        return {
+          ok: true,
+          detail: `Typed "${value}". Press Enter to submit, then look again.`,
+        };
+      }
+    } catch (e) {
+      say(`type text failed: ${e}`);
+    }
+    return {
+      ok: false,
+      detail:
+        "There is no answer field here that can be typed into — this part cannot be done.",
+    };
+  }
+
+  // A fresh picture of the challenge for the subagent between its moves, with
+  // the labels the live session keeps on it, and what it asks now, so a
+  // changed challenge is read from the latest picture, not the first. It is
+  // not labeled again: that would start a second session over the keys'.
+  async #relook(browser, maxWidth = SHOT_MAX_WIDTH) {
+    if (!browser.isConnected) {
+      return null;
+    }
+    this.#toFront(browser);
+    const shot = await this.#screenshot(browser, maxWidth, true).catch(
+      () => null
+    );
+    // No challenge located: it is solved and gone, or no longer where it was.
+    // The whole tab is not the subagent's to see, so there is nothing to show.
+    if (!shot?.area) {
+      return null;
+    }
+    const parts = await this.#shootParts(
+      browser,
+      shot.area,
+      maxWidth,
+      true
+    ).catch(() => null);
+    const bytes = parts?.area?.bytes ?? shot.bytes;
+    if (!bytes) {
+      return null;
+    }
+    return {
+      name: "challenge-area.jpg",
+      bytes,
+      said: parts?.instruction?.text ?? null,
+    };
+  }
+
+  // End the live jump session the solving used, so its labels do not linger
+  // on the user's screen once the subagent is done.
+  #endCapture(browser) {
+    try {
+      browser.browsingContext?.currentWindowGlobal
+        ?.getActor("ZendiaKeys")
+        ?.sendAsyncMessage("Zendia:EndCapture");
+    } catch {
+      // The tab is gone; nothing to clear.
     }
   }
 
@@ -1117,63 +1374,48 @@ class ZendiaCaptchaAgentService {
     ZendiaAgents.zendia?.agentDockFor(window)?.open(browser, { focus: false });
   }
 
-  // The key that labels a CAPTCHA, as the user's keymap has it: `gc` by
-  // default, or what they moved it to; null when nothing does.
-  #captchaKey() {
-    const keymap = ZendiaAgents.zendia?.keymap;
-    try {
-      return (
-        keymap?.list("n").find(mapping => mapping.rhs == "jump.captcha")?.lhs ??
-        null
-      );
-    } catch {
-      return null;
-    }
+  // The turn the subagent gets when it works the challenge itself: the task's
+  // picture is on the user's screen with the keys' labels on it, and the
+  // subagent reads the labels, presses them or types the answer, and looks
+  // again, until the task is done. It is told nothing of where the challenge
+  // is from. `said` is what it asks at the start; the picture is the truth,
+  // and look_again gives what it asks after each move, since it can change.
+  #solvePrompt(said, labeled) {
+    const nowLine = LABELED_NOW[labeled] ?? LABELED_NOW.captcha;
+    return [
+      said ? `At the start it asks: "${said}" — but the picture is the truth, and it can change.` : null,
+      `A picture of the task is on the user's screen with small key labels on it, and you do it yourself. ${nowLine}`,
+      `These are the keys, exactly as they work; use no others:\n${keysReference(null)}`,
+      `Pass type_keys a list of keys in order: a tile's letters typed together like "ac", a move like "h", "H" or ".", or a named key exactly as above ("Enter", "Tab", "Ctrl+R", "Ctrl+A", "Ctrl+P", "Space"). Pass type_text the characters to put in an answer field.
+Work it on your own, and do not stop until it is finished:
+1. First see the task: call picture_view on challenge-area.jpg (or open the file you were given). Only after you have truly tried and got no image may you say you cannot see it, in one short line, and stop.
+2. Read what it asks and the labels off the picture, and make the move for its kind: pick images (type each matching tile's letters, then verify); slide a piece to a gap; rotate; click points in order; press and hold; a checkbox — all with type_keys. If it shows characters to copy, read them and put them in with type_text, then verify.
+3. Call look_again: it returns a fresh picture and what the task asks now. Read it again from that, not from memory, and make the next move. When one is complete, submit with the verify key; if it then shows another, solve that one too.
+4. Keep looking and acting until the task is finished (it is gone, or it says it passed). If a picture is too blurred or it keeps refusing, get a fresh one with the new-task key and carry on.
+Do not press \`Esc\` to leave — that drops your control; use it only to cancel a drag under the cursor. If type_text reports there is no field it can fill, or the task needs listening to audio, that part cannot be done: say so in one short line and stop. Do not name or guess what this is or where it is from, do not explain it, and do not write steps for the user — just do it yourself. When it is finished, or you are truly stuck, answer in one short line that says only that.`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   }
 
-  // The turn the agent gets: look at the challenge, tell the user how to
-  // complete it, step by step. With the pictures attached, that is where it
-  // looks first: the area to act on and the instruction, each cut from the
-  // page, sharper than a shot of the whole tab; or the whole challenge,
-  // where it did not come apart. The instruction's words, read from the
-  // page, go in the request. A labeled challenge is on the user's screen
-  // with key labels on it: the steps are the keys they type, from the
-  // reference of the jump and the cursor, and `labeled` says which are up
-  // (#labelChallenge). Unlabeled, they are the mouse's. `state` is how
-  // the wait for the challenge ended (#prepareChallenge): one that never
-  // showed, or passed by itself, has no steps to give.
-  #prompt(record, picture, parts, said, labeled = false, state = null) {
-    let look = `1. Call page_screenshot to look at the challenge (page_observe if your model cannot see images).`;
-    if (parts) {
-      look = `1. Look at the attached pictures first, each cut from the page and drawn larger than on screen: captcha-challenge-area.jpg is only the part of the challenge to act on (its images, puzzle or distorted text)${parts.instruction?.shot && parts.instruction.pictures ? `; captcha-instruction-example.jpg is the instruction's own picture (an example to match, icons to click in order)` : ""}. Call page_screenshot only if you cannot view them or they do not show the challenge (page_observe if your model cannot see images).`;
-    } else if (picture?.cropped) {
-      look = `1. Look at the attached picture first: it is the challenge cut from the page, drawn larger than on screen. Call page_screenshot only if you cannot view the picture or it does not show the challenge (page_observe if your model cannot see images).`;
+  // The turn the subagent gets when there is nothing for it to work: it could
+  // not act (a check that passed on its own, one that never showed, a picture
+  // it cannot see). It does not advise the user; it only says in one line
+  // whether anything is left, and names nothing.
+  #statusPrompt(pictureName, said, state, sees) {
+    if (!sees) {
+      return "You were given a picture you may not be able to see. Say in one short line that you cannot see it. Do not guess what it shows, do not name it, and do not write steps.";
     }
-    const key = this.#captchaKey();
-    return [
-      `You are the browser's CAPTCHA assistant. The watch layer found a CAPTCHA on the tab you work on: ${record.text}. Page: ${record.url}.`,
-      said
-        ? `The challenge's instruction, read from its own text: "${said}" Quote it as it is; do not guess another.`
-        : null,
-      `The user has the tab in front of them and was just shown a screenshot of it in the panel. Where the challenge opens from a checkbox, it was clicked for them already, so the challenge is open and waiting. They complete it themselves, by hand: never click, fill, press or scroll the challenge, and never navigate the tab away. Your part is to tell them how.`,
+    const note =
       state == "passed"
-        ? "The check went through by itself while it was being opened: there is likely nothing left for the user to do."
-        : null,
-      state == "timeout"
-        ? `The challenge had not shown when it was shot (it may still be loading, or open only once something on the page is clicked). If the picture shows none, say so in one sentence: it has not loaded yet${key ? `, and \`${key}\` labels it for the keys once it shows` : ""}. Give no steps for a challenge you cannot see.`
-        : null,
-      labeled
-        ? `The challenge on their screen is labeled for the keys, and the labels are in the pictures. ${LABELED_NOW[labeled] ?? LABELED_NOW.captcha} These are the keys, exactly as they work; use no others:\n${keysReference(key)}`
-        : null,
-      !labeled && state != "passed"
-        ? `The challenge is not labeled for the keys: tell them where to click or drag with the mouse.${key ? ` In a last step, tell them \`${key}\` labels it so it can be done from the keyboard.` : ""}`
-        : null,
-      `Do exactly this:
-${look}
-2. Write one sentence: which service the challenge is from (or that the page draws it itself) and what it asks${said ? ", in the instruction's own words" : ""}.
-3. Then a numbered list of the steps to complete this challenge, as it is on screen, at most six, one short line each, keys in backticks. Fit them to its kind (pick images, type characters, an audio challenge, slide a piece to a gap, rotate, click points in order, press and hold, a checkbox).${labeled ? ' Name a label only when you can read it in the picture (the slider\'s handle, the rotate button), and otherwise say which tag to type ("the tag on each tile that shows…").' : ""} End with how to submit it and what to do if it asks again or the challenge is too hard to read (a new challenge, the audio one).
-4. Do not give the answer itself: not which tiles match, what the characters say, where the gap is or which way is upright. Say what to look for; the user decides.
-If the check looks invisible, runs on its own (a progress bar, "Verifying"), or already passed, say that in one sentence instead, with no steps.`,
+        ? "It may already be done."
+        : state == "timeout"
+          ? "It may not have loaded yet, or it opens only once something on the page is used."
+          : "There may be nothing here to act on.";
+    return [
+      said ? `The task says: "${said}"` : null,
+      pictureName ? `Look at ${pictureName}. ${note}` : note,
+      "Say in one short line whether anything still needs doing. Do not name or guess what this is or where it is from, do not explain it, and do not write steps for the user.",
     ]
       .filter(Boolean)
       .join("\n\n");

@@ -75,6 +75,11 @@ const EVENT_KEYS = {
   "<": "lt",
 };
 
+// Canonical names back to a KeyboardEvent.key, for tokenToEvent.
+const CANONICAL_TO_KEY = Object.fromEntries(
+  Object.entries(EVENT_KEYS).map(([key, name]) => [name, key])
+);
+
 // Keys that never form a token on their own.
 const IGNORED_EVENT_KEYS = new Set([
   "Shift",
@@ -270,6 +275,107 @@ export const ZendiaKeys = {
       }
     }
     return makeToken(key, modifiers);
+  },
+
+  /**
+   * Build a synthetic keydown event for a canonical token: the reverse of
+   * fromEvent. Feed it where a real KeyboardEvent would go (a jump session,
+   * the keymap engine) to press that key without a keyboard. The object
+   * carries only the fields those readers use, and fromEvent turns it back
+   * into the same token.
+   *
+   * @param {string} token A canonical token such as "a", "H", "<CR>",
+   *   "<C-r>", "<Esc>", "<Space>", ".".
+   * @returns {{key: string, code: string, ctrlKey: boolean, altKey: boolean,
+   *   metaKey: boolean, shiftKey: boolean, isComposing: boolean,
+   *   getModifierState: (name: string) => boolean}|null} Null for a string
+   *   that is not a key.
+   */
+  tokenToEvent(token) {
+    if (typeof token != "string" || !token.length) {
+      return null;
+    }
+    const modifiers = new Set();
+    let key;
+    if (token.length == 1) {
+      // A printable character stands for itself; an uppercase letter is sent
+      // with Shift, as the keyboard would send it.
+      key = token;
+      if (token != token.toLowerCase() && token == token.toUpperCase()) {
+        modifiers.add("S");
+      }
+    } else if (token.startsWith("<") && token.endsWith(">")) {
+      const inner = token.slice(1, -1);
+      const parts = inner.split("-");
+      // "<C-->" is Ctrl and the "-" key.
+      if (inner.endsWith("--")) {
+        parts.splice(-2, 2, "-");
+      }
+      const keyPart = parts.pop();
+      for (const part of parts) {
+        const modifier = MODIFIER_ALIASES[part.toLowerCase()];
+        if (!modifier) {
+          return null;
+        }
+        modifiers.add(modifier);
+      }
+      const mapped = CANONICAL_TO_KEY[keyPart];
+      // A bracketed name that is neither a known key nor a function key nor a
+      // single character is not a key at all.
+      if (
+        mapped === undefined &&
+        keyPart.length > 1 &&
+        !isFunctionKey(keyPart)
+      ) {
+        return null;
+      }
+      key = mapped ?? keyPart;
+    } else {
+      return null;
+    }
+    const chorded =
+      modifiers.has("C") || modifiers.has("A") || modifiers.has("D");
+    let code = "";
+    if (key.length == 1) {
+      const lower = key.toLowerCase();
+      if (/[a-z]/.test(lower)) {
+        // A chorded letter is the physical key in lower case, with Shift
+        // spelled out; fromEvent reads event.code for it.
+        code = `Key${lower.toUpperCase()}`;
+        if (chorded) {
+          key = lower;
+        }
+      } else if (/[0-9]/.test(key)) {
+        code = `Digit${key}`;
+      }
+    }
+    const shiftKey = modifiers.has("S");
+    const ctrlKey = modifiers.has("C");
+    const altKey = modifiers.has("A");
+    const metaKey = modifiers.has("D");
+    return {
+      key,
+      code,
+      ctrlKey,
+      altKey,
+      metaKey,
+      shiftKey,
+      isComposing: false,
+      getModifierState(state) {
+        switch (state) {
+          case "Shift":
+            return shiftKey;
+          case "Control":
+            return ctrlKey;
+          case "Alt":
+            return altKey;
+          case "Meta":
+            return metaKey;
+          default:
+            return false;
+        }
+      },
+    };
   },
 
   /**

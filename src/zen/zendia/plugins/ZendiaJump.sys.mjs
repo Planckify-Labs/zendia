@@ -31,6 +31,11 @@ export const ZendiaJumpSpec = {
     // Its controls by what they do, whatever their labels.
     "captcha.verify": jump("Verify the CAPTCHA (Verify, Next, Skip)"),
     "captcha.answer": jump("Type the CAPTCHA's Answer"),
+    // Fill the answer field with given text, for a challenge solved by
+    // reading characters. Only a field in this page can be filled.
+    "captcha.fill": jump("Fill the CAPTCHA's Answer Field", {
+      text: "string",
+    }),
     "captcha.reload": jump("Get a New CAPTCHA Challenge"),
     "captcha.audio": jump("Switch the CAPTCHA to Audio, or Back to Images"),
     "captcha.play": jump("Play the CAPTCHA's Audio"),

@@ -168,6 +168,15 @@ export class ZendiaKeysChild extends JSWindowActorChild {
           this.#ensureEngine()?.feed(message.data.token);
         }
         break;
+      // A key pressed in the active capture without a keyboard: the agent
+      // that works a challenge on its own types its labels this way.
+      case "Zendia:FeedToken":
+        return this.#feedToken(message.data?.token);
+      // That capture, ended: its labels come off when the turn is over.
+      case "Zendia:EndCapture":
+        this.#capture?.finish?.();
+        this.#capture = null;
+        break;
       case "Zendia:LeaveField":
         this.#leaveField();
         break;
@@ -428,6 +437,27 @@ export class ZendiaKeysChild extends JSWindowActorChild {
     if (engine.feed(ZendiaKeys.fromEvent(event))) {
       this.#swallow(event);
     }
+  }
+
+  // Press a token in the active capture, as a keyboard would, for the agent
+  // that works a challenge on its own. Returns whether a capture took it:
+  // false when there is none (its labels are gone), so the caller knows the
+  // key did nothing.
+  #feedToken(token) {
+    const event =
+      typeof token == "string" ? ZendiaKeys.tokenToEvent(token) : null;
+    if (!event) {
+      return false;
+    }
+    if (this.#capture?.done) {
+      this.#capture = null;
+    }
+    const engine = this.#ensureEngine();
+    if (!this.#capture || !engine) {
+      return false;
+    }
+    this.#giveToCapture(event, engine);
+    return true;
   }
 
   #giveToCapture(event, engine) {
