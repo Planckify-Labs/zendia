@@ -19,6 +19,12 @@ export const ZendiaJumpSpec = {
     "jump.hints": jump("Label Every Link, Button and Field"),
     // Solving a CAPTCHA with the keys alone.
     "jump.captcha": jump("Label the CAPTCHA to Solve it with the Keys"),
+    // Its controls by what they do, whatever their labels.
+    "captcha.verify": jump("Verify the CAPTCHA (Verify, Next, Skip)"),
+    "captcha.answer": jump("Type the CAPTCHA's Answer"),
+    "captcha.reload": jump("Get a New CAPTCHA Challenge"),
+    "captcha.audio": jump("Switch the CAPTCHA to Audio, or Back to Images"),
+    "captcha.play": jump("Play the CAPTCHA's Audio"),
     "jump.text": jump("Jump to a Word by its Letters"),
     "jump.words": jump("Label Every Word and Paragraph"),
     // Where visual mode starts, which `v` offers.

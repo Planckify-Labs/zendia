@@ -9,12 +9,13 @@
 #
 #   browser.dom.window.dump.enabled  lets dump() reach the terminal
 #   zendia.agent.log.stdout      one line per agent log entry there
+#   zendia.captcha.watch.notify  a doorhanger when a page holds a CAPTCHA
 
 set -e
 profile="$1"
 mkdir -p "$profile"
 touch "$profile/user.js"
-for pref in browser.dom.window.dump.enabled zendia.agent.log.stdout; do
+for pref in browser.dom.window.dump.enabled zendia.agent.log.stdout zendia.captcha.watch.notify; do
   grep -q "\"$pref\"" "$profile/user.js" ||
     echo "user_pref(\"$pref\", true);" >> "$profile/user.js"
 done

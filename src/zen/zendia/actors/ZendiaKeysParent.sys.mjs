@@ -6,9 +6,39 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   Zendia: "resource:///modules/zendia/Zendia.sys.mjs",
+  ZENDIA_CAPTURING_KEY: "resource:///modules/zendia/core/ZendiaShared.sys.mjs",
   recordYank: "resource:///modules/zendia/plugins/ZendiaYank.sys.mjs",
   yankAt: "resource:///modules/zendia/plugins/ZendiaYank.sys.mjs",
 });
+
+// The pages whose jump has the keys, by top browsing context id, as every
+// content process reads them (ZENDIA_CAPTURING_KEY).
+const gCapturing = new Set();
+
+function publishCapturing() {
+  Services.ppmm.sharedData.set(lazy.ZENDIA_CAPTURING_KEY, [...gCapturing]);
+  Services.ppmm.sharedData.flush();
+}
+
+// A key a frame passes to its page's jump: only what a key event says, and
+// no more of it than a key name takes.
+function keyData(data) {
+  const text = value =>
+    typeof value == "string" && value.length <= 32 ? value : null;
+  const key = text(data?.key);
+  if (!key) {
+    return null;
+  }
+  return {
+    key,
+    code: text(data.code) ?? "",
+    ctrlKey: data.ctrlKey === true,
+    altKey: data.altKey === true,
+    metaKey: data.metaKey === true,
+    shiftKey: data.shiftKey === true,
+    altGraph: data.altGraph === true,
+  };
+}
 
 // What a frame may ask of another frame of its page, and which content
 // actions it may start in it.
@@ -44,8 +74,48 @@ export class ZendiaKeysParent extends JSWindowActorParent {
       case "Zendia:FrameIdle":
         this.#topActor(browser)?.sendAsyncMessage("Zendia:ResendState");
         break;
+      case "Zendia:Capturing":
+        this.#setCapturing(data?.on === true);
+        break;
+      case "Zendia:CaptureKey":
+        this.#passKeyToTop(browser, data);
+        break;
     }
     return undefined;
+  }
+
+  didDestroy() {
+    // The page is gone, and its jump with it.
+    if (gCapturing.delete(this.browsingContext?.id)) {
+      publishCapturing();
+    }
+  }
+
+  // Only a page's top frame runs a jump that takes the keys of its frames.
+  #setCapturing(on) {
+    const id = this.browsingContext.id;
+    if (this.browsingContext.parent || gCapturing.has(id) == on) {
+      return;
+    }
+    if (on) {
+      gCapturing.add(id);
+    } else {
+      gCapturing.delete(id);
+    }
+    publishCapturing();
+  }
+
+  // A key typed in a frame, while the page's jump has the keys.
+  #passKeyToTop(browser, data) {
+    const key = keyData(data);
+    if (
+      !key ||
+      !this.browsingContext.parent ||
+      !gCapturing.has(this.browsingContext.top.id)
+    ) {
+      return;
+    }
+    this.#topActor(browser)?.sendAsyncMessage("Zendia:CaptureKey", key);
   }
 
   #topActor(browser) {

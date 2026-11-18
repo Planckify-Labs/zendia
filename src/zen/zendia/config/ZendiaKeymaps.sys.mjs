@@ -76,8 +76,17 @@ export const ZendiaKeymapsSpec = {
     ["n", "s", "jump.hints"],
     ["n", "gs", "jump.controls"],
     // Only the CAPTCHA, to solve it with the keys: labels that stay while
-    // images are picked, `.` to click and `,` to drag anywhere in it.
+    // images are picked, `.` to click and `,` to drag anywhere in it. In it,
+    // Enter verifies, Tab goes to the answer field, <C-r> asks for a new
+    // challenge, <C-a> for the audio one and <C-p> plays it.
     ["n", "gc", "jump.captcha"],
+    // The same, from normal mode, without labels.
+    ["n", "<leader>cc", "jump.captcha"],
+    ["n", "<leader>cv", "captcha.verify"],
+    ["n", "<leader>ci", "captcha.answer"],
+    ["n", "<leader>cr", "captcha.reload"],
+    ["n", "<leader>ca", "captcha.audio"],
+    ["n", "<leader>cp", "captcha.play"],
 
     // Visual mode on the page's text, after vim's. The motions grow the
     // selection; the cursor is a bar at its moving end.
@@ -323,6 +332,7 @@ export const ZendiaKeymapsSpec = {
     ["n", "<leader><tab>", "spaces"],
     ["n", "<leader>a", "ai"],
     ["n", "<leader>b", "buffer"],
+    ["n", "<leader>c", "captcha"],
     ["n", "<leader>f", "file/find"],
     ["n", "<leader>o", "library"],
     ["n", "<leader>q", "quit/session"],

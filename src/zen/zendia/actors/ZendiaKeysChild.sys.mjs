@@ -7,6 +7,7 @@ import { ZendiaKeyClaims } from "resource:///modules/zendia/core/ZendiaKeyClaims
 import { ZendiaKeys } from "resource:///modules/zendia/core/ZendiaKeys.sys.mjs";
 import { ZendiaKeyEngine } from "resource:///modules/zendia/core/ZendiaKeyEngine.sys.mjs";
 import {
+  ZENDIA_CAPTURING_KEY,
   ZENDIA_SHARED_KEY,
   buildKeymap,
 } from "resource:///modules/zendia/core/ZendiaShared.sys.mjs";
@@ -63,6 +64,16 @@ export class ZendiaKeysChild extends JSWindowActorChild {
   // stop them, unless the page itself has a key listener that could cancel
   // them. Ours is on the window root, where APZ does not look.
   #deferApzScrolling = () => {};
+  // The keys whose keydown went to the keymap or a jump: their keyup is not
+  // the page's either. A widget that acts on keyup, as reCAPTCHA's checkbox
+  // does on Space, would take <Space> (the leader) for a press.
+  #swallowed = new Set();
+  #onKeyUp = event => {
+    if (event.isTrusted && this.#swallowed.delete(event.code || event.key)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  };
 
   actorCreated() {
     this.contentWindow?.addEventListener(
@@ -71,6 +82,7 @@ export class ZendiaKeysChild extends JSWindowActorChild {
       true,
       true
     );
+    this.contentWindow?.addEventListener("keyup", this.#onKeyUp, true);
   }
 
   didDestroy() {
@@ -80,9 +92,16 @@ export class ZendiaKeysChild extends JSWindowActorChild {
         this.#deferApzScrolling,
         true
       );
+      this.contentWindow?.removeEventListener("keyup", this.#onKeyUp, true);
     } catch {
       // The window is already gone.
     }
+  }
+
+  #swallow(event) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.#swallowed.add(event.code || event.key);
   }
 
   handleEvent(event) {
@@ -157,6 +176,10 @@ export class ZendiaKeysChild extends JSWindowActorChild {
       case "Zendia:TakeFocus":
         this.contentWindow?.focus();
         break;
+      // A key typed in a frame of this page while its jump has the keys.
+      case "Zendia:CaptureKey":
+        this.#onFrameKey(message.data);
+        break;
       // A frame has nothing to say any more; the page speaks again.
       case "Zendia:ResendState": {
         const engine = this.#ensureEngine();
@@ -177,6 +200,38 @@ export class ZendiaKeysChild extends JSWindowActorChild {
   startCapture(session) {
     // A session with nothing to pick is over before it starts.
     this.#capture = session.done ? null : session;
+    if (!this.#capture) {
+      return;
+    }
+    // The frames of the page pass their keys to it while it lasts: a
+    // CAPTCHA moves the focus into its challenge when it opens, and the
+    // labels must still take the keys.
+    this.#announceCapture(true);
+    session.finished?.then(() => {
+      if (this.#capture === session) {
+        this.#capture = null;
+      }
+      if (!this.#capture) {
+        this.#announceCapture(false);
+      }
+    });
+  }
+
+  #announceCapture(on) {
+    if (this.browsingContext.parent) {
+      return;
+    }
+    try {
+      this.sendAsyncMessage("Zendia:Capturing", { on });
+    } catch {
+      // The page is gone, and the parent forgets it.
+    }
+  }
+
+  // Whether the page this frame is in has a jump that takes the keys.
+  #pageCaptures() {
+    const ids = Services.cpmm.sharedData.get(ZENDIA_CAPTURING_KEY);
+    return Array.isArray(ids) && ids.includes(this.browsingContext.top.id);
   }
 
   /**
@@ -320,6 +375,8 @@ export class ZendiaKeysChild extends JSWindowActorChild {
   }
 
   #onKeyDown(event) {
+    // Whether its keyup is the page's is decided again by this keydown.
+    this.#swallowed.delete(event.code || event.key);
     const engine = this.#ensureEngine();
     if (!engine || ZendiaDom.agentTyping) {
       return;
@@ -328,18 +385,35 @@ export class ZendiaKeysChild extends JSWindowActorChild {
     if (this.#capture?.done) {
       this.#capture = null;
     }
-    if (this.#capture) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      const capture = this.#capture;
-      capture.handleKey(event);
-      if (capture.done) {
-        this.#capture = null;
+    const editing = () =>
+      ZendiaDom.isEditable(ZendiaDom.deepActiveElement(this.document));
+    if (
+      this.browsingContext.parent &&
+      !this.#capture &&
+      this.#pageCaptures() &&
+      !editing()
+    ) {
+      // The page's jump has the keys; a field of the frame keeps its own,
+      // for the answer of a CAPTCHA to be typed in.
+      const token = ZendiaKeys.fromEvent(event);
+      if (token) {
+        this.#swallow(event);
+        this.sendAsyncMessage("Zendia:CaptureKey", {
+          key: event.key,
+          code: event.code,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+          altGraph: event.getModifierState("AltGraph"),
+        });
       }
-      // A jump that ended on this key leaves it to the keymap.
-      if (capture.passesKey) {
-        engine.feed(ZendiaKeys.fromEvent(event));
-      }
+      return;
+    }
+    // A CAPTCHA's jump stays while its answer is typed in a field.
+    if (this.#capture && !(this.#capture.yieldsToFields && editing())) {
+      this.#swallow(event);
+      this.#giveToCapture(event, engine);
       return;
     }
     this.#syncMode();
@@ -352,8 +426,49 @@ export class ZendiaKeysChild extends JSWindowActorChild {
       return;
     }
     if (engine.feed(ZendiaKeys.fromEvent(event))) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      this.#swallow(event);
+    }
+  }
+
+  #giveToCapture(event, engine) {
+    const capture = this.#capture;
+    capture.handleKey(event);
+    if (capture.done) {
+      this.#capture = null;
+    }
+    // A jump that ended on this key leaves it to the keymap.
+    if (capture.passesKey) {
+      engine.feed(ZendiaKeys.fromEvent(event));
+    }
+  }
+
+  // A key from a frame of this page, as the frame's keydown had it.
+  #onFrameKey(data) {
+    const engine = this.#ensureEngine();
+    if (!engine || !data) {
+      return;
+    }
+    const event = {
+      key: data.key,
+      code: data.code,
+      ctrlKey: data.ctrlKey,
+      altKey: data.altKey,
+      metaKey: data.metaKey,
+      shiftKey: data.shiftKey,
+      isComposing: false,
+      getModifierState: state => state == "AltGraph" && data.altGraph,
+    };
+    if (this.#capture?.done) {
+      this.#capture = null;
+    }
+    if (this.#capture) {
+      this.#giveToCapture(event, engine);
+      return;
+    }
+    // The jump ended before the key came: it is the page's now.
+    const token = ZendiaKeys.fromEvent(event);
+    if (token) {
+      engine.feed(token);
     }
   }
 

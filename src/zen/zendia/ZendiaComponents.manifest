@@ -7,3 +7,5 @@ category browser-before-ui-startup resource:///modules/zendia/Zendia.sys.mjs Zen
 category browser-window-delayed-startup resource:///modules/zendia/Zendia.sys.mjs Zendia.onWindowReady
 
 category browser-idle-startup resource:///modules/zendia/ublock/ZendiaUblock.sys.mjs ZendiaUblock.init
+
+category browser-idle-startup resource:///modules/zendia/captcha/ZendiaCaptchaWatch.sys.mjs ZendiaCaptchaWatch.init

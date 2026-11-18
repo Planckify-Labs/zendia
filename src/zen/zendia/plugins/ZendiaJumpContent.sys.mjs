@@ -16,6 +16,7 @@ import { LABELS } from "resource:///modules/zendia/ui/ZendiaPicker.sys.mjs";
 import {
   askFrame,
   captchaAreas,
+  ownCaptchas,
   PointerPad,
   plainRect,
 } from "resource:///modules/zendia/plugins/ZendiaPointerContent.sys.mjs";
@@ -44,6 +45,59 @@ const VACANT_POLLS = 3;
 const MAX_SEGMENTS = 3000;
 const MAX_MATCHES = 500;
 const NOT_TEXT = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "SELECT"]);
+
+// The keys of a jump that stays in a CAPTCHA for the controls every
+// challenge has, whatever their labels (ZendiaCaptcha.purposeOf). Labels are
+// letters, so these are not: Enter, Tab and Ctrl with a letter. The first
+// purpose found is pressed: <C-a> is the audio, or back to the images from
+// it.
+const PURPOSE_KEYS = {
+  "<CR>": ["verify"],
+  "<Tab>": ["answer"],
+  "<C-r>": ["reload"],
+  "<C-a>": ["audio", "visual"],
+  "<C-p>": ["play"],
+};
+const PURPOSE_NAMES = {
+  verify: "verify button",
+  answer: "answer field",
+  reload: "new-challenge button",
+  audio: "audio challenge",
+  visual: "image challenge",
+  play: "play button",
+};
+const STAYING_PROMPT =
+  "captcha · label clicks · Label holds · Enter verify · Tab answer · ^R new · ^A audio · ^P play · . click · , drag · Esc leave";
+// How long the prompt says a key found nothing to press.
+const NOTICE_MS = 1500;
+
+// The fields the CAPTCHAs of a page leave their answer in that hold one.
+function captchaTokens(window) {
+  let count = 0;
+  try {
+    for (const field of window.document.querySelectorAll(
+      "input[name], textarea[name]"
+    )) {
+      if (field.value && ZendiaCaptcha.isTokenField(field.name)) {
+        count++;
+      }
+    }
+  } catch {
+    // The window is already gone.
+  }
+  return count;
+}
+
+// What a control of a CAPTCHA is for, read from the DOM.
+function purposeOf(element) {
+  return ZendiaCaptcha.purposeOf({
+    tag: element.localName,
+    type: element.getAttribute("type") ?? "",
+    editable: ZendiaDom.isEditable(element),
+    label: `${ZendiaControls.textOf(element)} ${element.getAttribute("title") ?? ""}`,
+    name: `${element.id ?? ""} ${element.getAttribute("class") ?? ""}`,
+  });
+}
 
 function style(element, properties) {
   // Through the CSSOM, which a page's CSP does not block.
@@ -132,6 +186,9 @@ async function collectFrames(actor, window) {
           captcha:
             ZendiaCaptcha.nameOf(frame.src) !== null || item.captcha === true,
           drag: item.drag === true,
+          purpose: ZendiaCaptcha.PURPOSES.includes(item.purpose)
+            ? item.purpose
+            : null,
           frame: [frame.browsingContext.id, ...item.frame],
           rect: plainRect(
             item.rect.left + left,
@@ -153,6 +210,12 @@ async function collectFrames(actor, window) {
   return found.flat();
 }
 
+// Whether an element is part of a CAPTCHA the page draws: a service's
+// widget, or a CAPTCHA the site makes itself (ownCaptchas).
+function inPageCaptcha(element, own) {
+  return !!element.closest(WIDGETS) || own.some(box => box.contains(element));
+}
+
 /**
  * The controls of this frame and of the frames in it, for the jump of the
  * page they are all in.
@@ -164,7 +227,8 @@ async function collectFrames(actor, window) {
  */
 export async function collectControls(actor, window) {
   const pressable = new Map();
-  const own = ZendiaControls.find(window).map(element => {
+  const own = ownCaptchas(window);
+  const found = ZendiaControls.find(window).map(element => {
     const id = idOf(element);
     pressable.set(id, new WeakRef(element));
     const { left, top, width, height } = element.getBoundingClientRect();
@@ -173,13 +237,16 @@ export async function collectControls(actor, window) {
       text: ZendiaControls.textOf(element),
       rect: { left, top, width, height },
       // Part of a CAPTCHA the page draws itself, and what to drag.
-      captcha: !!element.closest(ZendiaCaptcha.WIDGETS),
+      captcha: inPageCaptcha(element, own),
       drag: ZendiaControls.isDraggable(window, element),
+      // What it does, if it is a button of a CAPTCHA: the frame above
+      // knows whether it is in one.
+      purpose: purposeOf(element),
       frame: [],
     };
   });
   gPressable.set(window, pressable);
-  return [...own, ...(await collectFrames(actor, window))];
+  return [...found, ...(await collectFrames(actor, window))];
 }
 
 /**
@@ -209,7 +276,7 @@ export async function pressControl(actor, window, target) {
   }
   const element = gPressable.get(window)?.get(id)?.deref();
   if (element?.isConnected) {
-    return pressElement(window, element, { newTab: !!newTab });
+    return pressElement(window, element, { newTab: !!newTab, actor });
   }
   return false;
 }
@@ -225,10 +292,11 @@ function isPicture(rect) {
 //   "captcha" those of any part of a CAPTCHA, a checkbox and a badge too.
 async function controlsSource(window, actor, { scope = "all" } = {}) {
   const from = center(window);
+  const own = ownCaptchas(window);
   // What is part of a CAPTCHA stays labeled between picks, can be held and
   // dragged, and, if it is a picture, is clicked at a point of it.
   const local = ZendiaControls.find(window).flatMap(element => {
-    const inCaptcha = !!element.closest(WIDGETS);
+    const inCaptcha = inPageCaptcha(element, own);
     if (scope != "all" && !inCaptcha) {
       return [];
     }
@@ -247,7 +315,8 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
         challenge: inCaptcha,
         drag: inCaptcha && ZendiaControls.isDraggable(window, element),
         picture: inCaptcha && isPicture(rect),
-        pick: options => pressElement(window, element, options),
+        purpose: inCaptcha ? purposeOf(element) : null,
+        pick: options => pressElement(window, element, { ...options, actor }),
       },
     ];
   });
@@ -263,6 +332,7 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
       challenge: scope == "captcha" || item.challenge,
       drag: item.drag && (item.challenge || item.captcha),
       picture: (item.challenge || item.captcha) && isPicture(item.rect),
+      purpose: item.challenge || item.captcha ? item.purpose : null,
       pick: ({ newTab }) =>
         askFrame(actor, window, item.frame[0], "Zendia:PressControl", {
           frame: item.frame.slice(1),
@@ -277,7 +347,7 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
     // labeled.
     matches(pattern) {
       return items.flatMap(item => {
-        const { key, rect, challenge, drag, picture, pick } = item;
+        const { key, rect, challenge, drag, picture, purpose, pick } = item;
         const found = pattern ? findMatches(item.text, pattern) : [];
         if (pattern && !found.length) {
           return [];
@@ -291,6 +361,7 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
             challenge,
             drag,
             picture,
+            purpose,
             pick,
           },
         ];
@@ -503,8 +574,10 @@ function moveCaret(window, actor, node, offset, extend = true) {
 }
 
 // Whether it was a field, which takes the focus rather than a press.
-function pressElement(window, element, { newTab }) {
+function pressElement(window, element, { newTab, actor = null }) {
   if (ZendiaDom.isEditable(element)) {
+    // The keys asked for it: it is insert mode, not focus a page stole.
+    actor?.setMode("i");
     element.focus();
     return true;
   }
@@ -567,6 +640,14 @@ class JumpSession {
   #passes = false;
   // The board of a gobang CAPTCHA, once found.
   #board = null;
+  // A line the prompt shows for a moment: a key with nothing to press.
+  #notice = "";
+  #noticeTimer = 0;
+  // The answers the CAPTCHAs of the page had left when the jump began: one
+  // more means one was solved, and the jump has done its work.
+  #tokens = 0;
+  #resolveFinished;
+  #finished = new Promise(resolve => (this.#resolveFinished = resolve));
 
   constructor(
     window,
@@ -589,6 +670,7 @@ class JumpSession {
     if (this.#staying) {
       this.#makeSource = challengeSource ?? makeSource;
     }
+    this.#tokens = captchaTokens(window);
     window.addEventListener("pagehide", this);
     window.addEventListener("resize", this);
     window.addEventListener("mousedown", this, true);
@@ -604,6 +686,18 @@ class JumpSession {
 
   get done() {
     return this.#done;
+  }
+
+  // Settles when the jump is over, however it ended.
+  get finished() {
+    return this.#finished;
+  }
+
+  // A jump that stays in a CAPTCHA leaves the keys to the field its answer
+  // is typed in, while it has the focus; <Esc> leaves the field, and the
+  // labels have the keys again.
+  get yieldsToFields() {
+    return this.#staying;
   }
 
   // Whether the key last given was not for this jump but for the keymap: the
@@ -661,6 +755,10 @@ class JumpSession {
     } else if (this.#challengeSource && (token == "." || token == ",")) {
       // "." clicks anywhere in the CAPTCHA, "," drags from anywhere in it.
       this.#point(token == ",");
+    } else if (this.#staying && PURPOSE_KEYS[token]) {
+      // The buttons every challenge has, by a key of their own: the labels
+      // change with each challenge, these keys do not.
+      this.#pressPurpose(PURPOSE_KEYS[token]);
     } else if (token == "<CR>") {
       this.#pickAt(0, { newTab: false });
     } else if (token == "<BS>") {
@@ -684,6 +782,7 @@ class JumpSession {
       this.#window.removeEventListener("scroll", this, true);
       this.#window.cancelAnimationFrame(this.#redraw);
       this.#window.clearTimeout(this.#pollTimer);
+      this.#window.clearTimeout(this.#noticeTimer);
       const pad = this.#pad;
       this.#pad = null;
       pad?.finish();
@@ -692,6 +791,30 @@ class JumpSession {
       // The window is already gone.
     }
     this.#root = null;
+    this.#resolveFinished();
+  }
+
+  // The control of the challenge that does `purposes` (the first of them
+  // found): verify, reload, the audio, its play button, the answer field.
+  async #pressPurpose(purposes) {
+    const target = purposes
+      .map(purpose => this.#shown.find(each => each.purpose == purpose))
+      .find(Boolean);
+    if (!target) {
+      this.#flash(`no ${PURPOSE_NAMES[purposes[0]]} here`);
+      return;
+    }
+    await this.#pickInChallenge(target, { newTab: false, press: true });
+  }
+
+  #flash(text) {
+    this.#notice = text;
+    this.#window.clearTimeout(this.#noticeTimer);
+    this.#noticeTimer = this.#window.setTimeout(() => {
+      this.#notice = "";
+      this.#draw();
+    }, NOTICE_MS);
+    this.#draw();
   }
 
   #backspace() {
@@ -770,12 +893,13 @@ class JumpSession {
     // by the label's last letter, typed as a capital.
     // So is a piece on a board with empty places: it is moved onto one. A
     // grid with no place to spare is of images to pick, and they are clicked.
-    const board = this.#boardOf(target);
+    const board = options.press ? null : this.#boardOf(target);
     const hold =
-      target.drag ||
-      options.newTab ||
-      (board && board.places.length > board.pieces);
-    if (hold || target.picture) {
+      !options.press &&
+      (target.drag ||
+        options.newTab ||
+        (board && board.places.length > board.pieces));
+    if (hold || (target.picture && !options.press)) {
       this.#switching = false;
       if (hold) {
         await this.#point(true, {
@@ -790,16 +914,19 @@ class JumpSession {
     }
     let field = false;
     try {
-      field = (await target.pick(options)) === true;
+      field = (await target.pick({ newTab: !!options.newTab })) === true;
     } catch {
       // The frame is gone: the next read finds it so.
     }
-    if (field) {
-      // A field of the challenge has the focus now, for the user to type in.
-      this.finish();
+    if (this.#done) {
       return;
     }
-    if (this.#done) {
+    if (field) {
+      // A field of the challenge has the focus now, for the user to type the
+      // answer in. The jump stays, and has the keys again after <Esc>: an
+      // answer that was wrong brings another challenge.
+      this.#switching = false;
+      this.#schedulePoll(CHALLENGE_POLL_MS);
       return;
     }
     // The click moved focus into the frame, where the keys would not reach
@@ -930,6 +1057,11 @@ class JumpSession {
       return;
     }
     const targets = source.matches("");
+    if (this.#staying && captchaTokens(this.#window) > this.#tokens) {
+      // Solved: the CAPTCHA left its answer in the form.
+      this.finish();
+      return;
+    }
     this.#vacant = targets.length ? 0 : this.#vacant + 1;
     if (this.#vacant >= VACANT_POLLS) {
       this.finish();
@@ -1056,11 +1188,7 @@ class JumpSession {
     if (!this.#hints) {
       root.append(this.#prompt(`› ${this.#pattern}`));
     } else if (this.#staying) {
-      root.append(
-        this.#prompt(
-          "captcha · label clicks · Label (capital) holds · . click anywhere · , drag · Esc leave"
-        )
-      );
+      root.append(this.#prompt(this.#notice || STAYING_PROMPT));
     }
     this.#root = root;
     document.documentElement.append(root);
@@ -1128,6 +1256,9 @@ class JumpSession {
       left: "50%",
       bottom: "16px",
       transform: "translateX(-50%)",
+      // On one line, unless the window is too narrow for it.
+      width: "max-content",
+      maxWidth: "90vw",
       padding: "2px 10px",
       borderRadius: "6px",
       background: LABEL_BACKGROUND,
@@ -1226,6 +1357,33 @@ const labelWords =
       hints: true,
     });
 
+// A control every CAPTCHA challenge has, pressed from normal mode without
+// labels: the first of `purposes` the CAPTCHAs of the page have. The answer
+// field takes the focus, in insert mode; anything else is pressed, and the
+// page has the keys after it, as the press moved them into the frame.
+const pressCaptcha =
+  (...purposes) =>
+  async ({ actor, window }) => {
+    const targets = (
+      await controlsSource(window, actor, { scope: "captcha" })
+    ).matches("");
+    const target = purposes
+      .map(purpose => targets.find(each => each.purpose == purpose))
+      .find(Boolean);
+    if (!target) {
+      return false;
+    }
+    const field = (await target.pick({ newTab: false })) === true;
+    if (!field) {
+      const focused = window.document.activeElement;
+      if (focused?.browsingContext) {
+        focused.blur();
+      }
+      window.focus();
+    }
+    return true;
+  };
+
 export const actions = {
   // Type some of a control's text, then its label.
   "jump.controls": labelControls("jump.controls"),
@@ -1245,6 +1403,14 @@ export const actions = {
     hints: true,
     captcha: true,
   }),
+
+  // The controls of a CAPTCHA by what they do, as the jump's Enter, Tab,
+  // <C-r>, <C-a> and <C-p> press them.
+  "captcha.verify": pressCaptcha("verify"),
+  "captcha.answer": pressCaptcha("answer"),
+  "captcha.reload": pressCaptcha("reload"),
+  "captcha.audio": pressCaptcha("audio", "visual"),
+  "captcha.play": pressCaptcha("play"),
 
   "jump.text": ({ actor, window }) =>
     begin(actor, window, () => textSource(window, actor)),

@@ -22,6 +22,9 @@ const AREA_OUTLINE = "rgba(255, 199, 119, 0.8)";
 // A frame that does not answer is left out rather than waited for.
 const FRAME_TIMEOUT_MS = 1000;
 
+// How far above its answer field the picture of a site's own CAPTCHA may be.
+const OWN_CAPTCHA_LEVELS = 4;
+
 // About how wide a cell of the grid is, and the most cells there may be (two
 // letters make 576 labels).
 const CELL_SIZE = 40;
@@ -107,6 +110,90 @@ function outermost(rects) {
 }
 
 /**
+ * The CAPTCHAs a site makes itself, with no service to know them by: a
+ * picture of a text or a sum, and a field for the answer, known by their
+ * names (ZendiaCaptcha.namesOwnCaptcha). Each is the smallest box that holds
+ * a field and the picture it is for, or the field or picture alone.
+ *
+ * @param {Window} window
+ * @returns {Element[]}
+ */
+export function ownCaptchas(window) {
+  const named = [];
+  try {
+    for (const element of window.document.querySelectorAll(
+      "img, canvas, input:not([type=hidden]), textarea"
+    )) {
+      // The names first: they cost no layout, and few elements have them.
+      if (
+        !ZendiaCaptcha.namesOwnCaptcha(
+          [
+            "src",
+            "alt",
+            "id",
+            "class",
+            "name",
+            "placeholder",
+            "aria-label",
+            "title",
+          ]
+            .map(name => element.getAttribute(name) ?? "")
+            .join(" ")
+        )
+      ) {
+        continue;
+      }
+      const rect = element.getBoundingClientRect();
+      if (
+        rect.width >= 20 &&
+        rect.height >= 10 &&
+        rect.bottom > 0 &&
+        rect.top < window.innerHeight &&
+        element.checkVisibility() &&
+        !element.closest(ZendiaCaptcha.WIDGETS)
+      ) {
+        named.push(element);
+      }
+    }
+  } catch {
+    // The window is already gone.
+  }
+  const pictures = named.filter(
+    each => each.localName != "input" && each.localName != "textarea"
+  );
+  const fields = named.filter(each => !pictures.includes(each));
+  const boxes = new Set();
+  for (const field of fields) {
+    // Up to the box that holds a picture too, if one is near.
+    let box = field.parentElement;
+    for (
+      let level = 0;
+      box &&
+      level < OWN_CAPTCHA_LEVELS &&
+      !pictures.some(each => box.contains(each));
+      level++
+    ) {
+      box = box.parentElement;
+    }
+    boxes.add(
+      box && pictures.some(each => box.contains(each))
+        ? box
+        : (field.parentElement ?? field)
+    );
+  }
+  for (const picture of pictures) {
+    if (![...boxes].some(box => box.contains(picture))) {
+      boxes.add(picture.parentElement ?? picture);
+    }
+  }
+  // None inside another.
+  return [...boxes].filter(
+    box =>
+      box && ![...boxes].some(other => other !== box && other.contains(box))
+  );
+}
+
+/**
  * Where the CAPTCHAs are in this window: the frames of the services, found
  * by their address, and the widgets a page draws itself. The frames in the
  * frames are asked for theirs.
@@ -145,9 +232,10 @@ export async function captchaAreas(actor, window) {
   );
   const widgets = [];
   try {
-    for (const element of window.document.querySelectorAll(
-      ZendiaCaptcha.WIDGETS
-    )) {
+    for (const element of [
+      ...window.document.querySelectorAll(ZendiaCaptcha.WIDGETS),
+      ...ownCaptchas(window),
+    ]) {
       const rect = element.getBoundingClientRect();
       if (
         element.checkVisibility() &&
@@ -266,6 +354,8 @@ export class PointerPad {
   // The places of a board the held piece can be put on, and their labels.
   #lattice = null;
   #latticeLabels = [];
+  #resolveFinished;
+  #finished = new Promise(resolve => (this.#resolveFinished = resolve));
 
   /**
    * @param {object} actor
@@ -304,6 +394,11 @@ export class PointerPad {
 
   get done() {
     return this.#done;
+  }
+
+  // Settles when the pad is over, however it ended.
+  get finished() {
+    return this.#finished;
   }
 
   #buildCells() {
@@ -580,6 +675,7 @@ export class PointerPad {
       // The window is already gone.
     }
     this.#root = null;
+    this.#resolveFinished();
   }
 
   #draw() {

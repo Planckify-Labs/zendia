@@ -38,6 +38,15 @@ support-files = [
   "file_captcha_slider_host.html",
 ]
 
+["browser_zendia_captcha_watch.js"]
+support-files = [
+  "file_captcha_host.html",
+  "file_captcha_frame.html",
+  "file_jump_frame_host.html",
+  "file_jump_frame.html",
+  "file_jump_inner.html",
+]
+
 ["browser_zendia_chat_button.js"]
 
 ["browser_zendia_explorer.js"]

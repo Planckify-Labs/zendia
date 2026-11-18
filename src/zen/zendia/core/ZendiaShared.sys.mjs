@@ -10,6 +10,14 @@ import { ZendiaKeymap } from "resource:///modules/zendia/core/ZendiaKeymap.sys.m
  */
 export const ZENDIA_SHARED_KEY = "zendia:config";
 
+/**
+ * The sharedData key the parent lists, under it, the pages (by the id of
+ * their top browsing context) whose jump or keyboard mouse has the keys: a
+ * key typed in one of their frames is for it, not for the frame, as a
+ * CAPTCHA moves the focus into its challenge as it opens.
+ */
+export const ZENDIA_CAPTURING_KEY = "zendia:capturing";
+
 function cloneable(value) {
   try {
     return JSON.parse(JSON.stringify(value ?? {}));

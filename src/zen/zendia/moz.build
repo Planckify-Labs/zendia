@@ -30,6 +30,12 @@ EXTRA_JS_MODULES.zendia.actors += [
     "actors/ZendiaUiParent.sys.mjs",
 ]
 
+EXTRA_JS_MODULES.zendia.captcha += [
+    "captcha/ZendiaCaptchaWatch.sys.mjs",
+    "captcha/ZendiaCaptchaWatchChild.sys.mjs",
+    "captcha/ZendiaCaptchaWatchParent.sys.mjs",
+]
+
 EXTRA_JS_MODULES.zendia.config += [
     "config/ZendiaKeymaps.sys.mjs",
     "config/ZendiaOptions.sys.mjs",
