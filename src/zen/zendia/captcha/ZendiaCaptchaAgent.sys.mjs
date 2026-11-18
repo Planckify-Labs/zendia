@@ -76,7 +76,7 @@ const OPENED_PICTURELESS_MS = 6000;
 const LABELS_SETTLE_MS = 150;
 // How long the parts may wait for the last of their pictures to be drawn
 // and to hold still, and how far apart the looks for the latter are.
-const PARTS_DRAW_MS = 3000;
+const PARTS_DRAW_MS = 5000;
 const PARTS_STILL_MS = 250;
 
 // About how wide a page in the panel is, for the page's height guess.
@@ -367,11 +367,14 @@ class ZendiaCaptchaAgentService {
    */
   async captureChallenge(browser, maxWidth = SHOT_MAX_WIDTH) {
     const state = await this.#prepareChallenge(browser);
-    // Nothing to act on (an invisible pass, a finished check) is shot
-    // bare; anything else is labeled for the keys first, so the shot shows
-    // the labels the user finishes by.
+    // Only a challenge that is there to act on is labeled for the keys: an
+    // invisible pass or a finished check has nothing to label, and one
+    // that never came (a frame still blank when the wait ran out) would be
+    // labeled empty. Anything else is labeled first, so the shot shows the
+    // labels the user finishes by.
     const labeled =
-      state != "passed" && (await this.#labelChallenge(browser));
+      ["open", "settled", "clicked"].includes(state) &&
+      (await this.#labelChallenge(browser));
     const shot = await this.#screenshot(browser, maxWidth, labeled);
     if (shot) {
       shot.labeled = labeled;
@@ -886,8 +889,7 @@ class ZendiaCaptchaAgentService {
   // the rect's own window's scroll and view, for when it is the top's
   // already. Null when a frame on the way answers nothing.
   async #inTopDocument(window, context, rect, view, padding) {
-    let { left, top } = rect;
-    const { width, height } = rect;
+    let { left, top, width, height } = rect;
     while (context.parent) {
       let box = null;
       try {
@@ -905,8 +907,25 @@ class ZendiaCaptchaAgentService {
       if (!box) {
         return null;
       }
-      left += box.left + box.clientLeft;
-      top += box.top + box.clientTop;
+      // A frame drawn scaled shows its document at that scale, and what of
+      // it is outside the frame's box is not shown at all.
+      const scaleX = box.scaleX ?? 1;
+      const scaleY = box.scaleY ?? 1;
+      left = box.left + (box.clientLeft + left) * scaleX;
+      top = box.top + (box.clientTop + top) * scaleY;
+      width *= scaleX;
+      height *= scaleY;
+      if (box.width && box.height) {
+        const right = Math.min(left + width, box.left + box.width);
+        const bottom = Math.min(top + height, box.top + box.height);
+        left = Math.max(left, box.left);
+        top = Math.max(top, box.top);
+        width = right - left;
+        height = bottom - top;
+        if (width <= 0 || height <= 0) {
+          return null;
+        }
+      }
       view = box;
       context = context.parent;
     }
@@ -965,10 +984,12 @@ class ZendiaCaptchaAgentService {
     let parts = await ask("Zendia:CaptchaWatch:Parts");
     // And holding still: two looks a moment apart find every picture in
     // the same place, so tiles a script slides in are not shot halfway.
+    // A challenge still loading its task (a loader over it, its pieces
+    // still coming) is waited out the same way.
     for (const until = Date.now() + PARTS_DRAW_MS; parts && Date.now() < until; ) {
       await new Promise((resolve) => setTimeout(resolve, PARTS_STILL_MS));
       const again = await ask("Zendia:CaptchaWatch:Parts");
-      if (!again || again.still == parts.still) {
+      if (!again || (again.still == parts.still && !again.loading)) {
         parts = again ?? parts;
         break;
       }

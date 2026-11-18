@@ -14,7 +14,11 @@ import { ZendiaCaptcha } from "resource:///modules/zendia/core/ZendiaCaptcha.sys
 // an invisible mode's strip, nothing to look at.
 const MIN_SIDE = 20;
 // The least a side of a challenge's picture can be: smaller is an icon.
-const PICTURE_SIDE = 40;
+// A Gobang piece is 39 px.
+const PICTURE_SIDE = 36;
+// How big a service's widget is once its challenge is open: the popups
+// are 300 px and up, a checkbox or button is far smaller.
+const OPEN_SIDE = 260;
 // How opaque a challenge is at the least once it is in: less is a fade.
 const FADED = 0.95;
 // The room left around each part of a challenge, inside it.
@@ -260,7 +264,16 @@ function boxAround(window, element, levels, growth = Infinity) {
       break;
     }
     const rect = node.getBoundingClientRect();
+    // An ancestor that does not hold the element where it is drawn is no
+    // box around it: a popup placed outside the button it opens from
+    // (GeeTest's float mode) sits under the button's holder.
+    const holds =
+      rect.left <= own.left + 1 &&
+      rect.top <= own.top + 1 &&
+      rect.right >= own.right - 1 &&
+      rect.bottom >= own.bottom - 1;
     if (
+      !holds ||
       rect.width > BOX_MAX_WIDTH ||
       rect.height > BOX_MAX_HEIGHT ||
       rect.width * rect.height > most
@@ -676,6 +689,48 @@ function backgroundsLoaded(window, root) {
   return true;
 }
 
+// The names of what a challenge shows while it loads its task: a spinner,
+// a loader, a skeleton.
+const LOADER_NAMES =
+  /(?:^|[-_\s])(?:loading|loader|spinner|spin|skeleton)(?:$|[-_\s])/i;
+// What a challenge draws over its task that is no picture of it:
+// GeeTest's "AI detect" scan, always laid over the board.
+const OVERLAY_NAMES = /(?:^|[-_\s])ai[-_]?detect(?:$|[-_\s])/i;
+
+// The names of an element, its id and classes.
+const namesOf = (element) =>
+  `${element.id} ${element.getAttribute?.("class") ?? ""}`;
+
+// Whether an element is named and shown as a loader.
+function isLoader(element) {
+  return (
+    LOADER_NAMES.test(namesOf(element)) && element.checkVisibility(VISIBILITY)
+  );
+}
+
+// Whether a challenge is still loading its task: a loader shown in it, or
+// a picture of it still fading or moving in (pieces that come one by one).
+// It is shot once it is past that.
+function loading(window, root) {
+  const elements = [root, ...root.querySelectorAll("*")];
+  if (elements.length > MAX_EXTENT_ELEMENTS) {
+    return false;
+  }
+  for (const element of elements) {
+    if (element == root) {
+      continue;
+    }
+    const { width, height } = element.getBoundingClientRect();
+    if (width < MIN_SIDE || height < MIN_SIDE) {
+      continue;
+    }
+    if (isLoader(element)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Whether an element is still on its way in: a fade or a slide that ends
 // (a spinner that never does is no wait), of it, what it holds, or what
 // holds it (hCaptcha fades in the box around its frame). A challenge shot
@@ -850,7 +905,11 @@ export function challengeRect(window, stay = false) {
         frame: isFrame,
         own: kind >= 3,
         inside: isCaptchaFrame(window),
-        drawn: isFrame || (picturesLoaded(window, target) && !arriving(target)),
+        drawn:
+          isFrame ||
+          (picturesLoaded(window, target) &&
+            !arriving(target) &&
+            !loading(window, target)),
         arriving: arriving(target),
         pictures: isFrame ? null : picturesShown(window, target),
         frameId: isFrame ? (element.browsingContext?.id ?? null) : null,
@@ -883,11 +942,19 @@ export function embedderBox(window, childId) {
     return null;
   }
   const rect = element.getBoundingClientRect();
+  // A frame drawn scaled (a CSS transform, a zoom) shows its document at
+  // that scale: a rect of it is scaled on the way up.
+  const scaleX = element.offsetWidth ? rect.width / element.offsetWidth : 1;
+  const scaleY = element.offsetHeight ? rect.height / element.offsetHeight : 1;
   return {
     left: rect.left,
     top: rect.top,
+    width: rect.width,
+    height: rect.height,
     clientLeft: element.clientLeft ?? 0,
     clientTop: element.clientTop ?? 0,
+    scaleX: Number.isFinite(scaleX) && scaleX > 0 ? scaleX : 1,
+    scaleY: Number.isFinite(scaleY) && scaleY > 0 ? scaleY : 1,
     scrollX: window.scrollX,
     scrollY: window.scrollY,
     viewWidth: window.innerWidth,
@@ -1092,6 +1159,22 @@ function pageCheckbox(window, peek) {
   if (own.some(({ kind }) => kind != "checkbox")) {
     return null;
   }
+  // A service's challenge already open in the page (GeeTest's popup over
+  // its button) is not clicked open again: a second click could close or
+  // renew it.
+  const view = window.innerWidth * window.innerHeight;
+  const open = widgetsOf(window, true).some((widget) => {
+    const { width, height } = widget.getBoundingClientRect();
+    return (
+      width >= OPEN_SIDE &&
+      height >= OPEN_SIDE &&
+      width * height < view * MOSTLY_VIEW &&
+      isShown(window, widget)
+    );
+  });
+  if (open) {
+    return null;
+  }
   const roots = [
     ...own.map(({ box }) => ({ root: box, name: "page" })),
     ...widgetsOf(window)
@@ -1188,7 +1271,13 @@ function picturesOf(window, root) {
       rect.width < ICON_SIDE &&
       rect.height < ICON_SIDE &&
       element.closest("button, [role=button], a[href]");
-    if (!picture || icon || !element.checkVisibility(VISIBILITY)) {
+    if (
+      !picture ||
+      icon ||
+      isLoader(element) ||
+      OVERLAY_NAMES.test(namesOf(element)) ||
+      !element.checkVisibility(VISIBILITY)
+    ) {
       continue;
     }
     const seen = visibleRect(window, element, rect, { viewport: false });
@@ -1342,6 +1431,72 @@ function taskAreaOf(window, root, instruction) {
   return best && { element: best.element, rect: best.rect };
 }
 
+// The box a challenge's pictures sit on together: the nearest element
+// holding every one of them, within the challenge's root. Where that box
+// is too much (it holds the instruction, or is bigger than a challenge), a
+// stray picture is to blame — a logo, the button the challenge opened
+// from — and the box of the pictures alike in size (a board's pieces, a
+// grid's tiles) is tried instead. None for a single picture, its own area.
+function boardOf(window, root, elements, instruction) {
+  const box = (members) => {
+    if (members.length < 2) {
+      return null;
+    }
+    let common = members[0].parentElement;
+    while (common && !members.every((element) => common.contains(element))) {
+      common = common.parentElement;
+    }
+    if (
+      !common ||
+      !(common == root || root.contains(common)) ||
+      (instruction && common.contains(instruction)) ||
+      !common.checkVisibility(VISIBILITY)
+    ) {
+      return null;
+    }
+    const whole = common.getBoundingClientRect();
+    if (whole.width > BOX_MAX_WIDTH || whole.height > BOX_MAX_HEIGHT) {
+      return null;
+    }
+    const rect = visibleRect(window, common, whole, { viewport: false });
+    return rect && { element: common, rect };
+  };
+  const found = box(elements);
+  if (found) {
+    return found;
+  }
+  // The size most of the pictures share, within a quarter.
+  const sizes = elements.map((element) => {
+    const { width, height } = element.getBoundingClientRect();
+    return { element, size: width * height };
+  });
+  const near = (a, b) => Math.abs(a - b) <= Math.max(a, b) / 4;
+  let alike = [];
+  for (const { size } of sizes) {
+    const group = sizes.filter((other) => near(other.size, size));
+    if (group.length > alike.length) {
+      alike = group;
+    }
+  }
+  return alike.length < elements.length
+    ? box(alike.map(({ element }) => element))
+    : null;
+}
+
+// The area's pictures, replaced by the board they sit on where there is
+// one (boardOf).
+function onBoard(window, root, area, instruction) {
+  const board = boardOf(
+    window,
+    root,
+    area.map(({ element }) => element),
+    instruction,
+  );
+  if (board) {
+    area.splice(0, area.length, board);
+  }
+}
+
 /**
  * A challenge in two parts, for a picture of each and the words of one:
  * its instruction (what it asks, read from its text) and the area to act
@@ -1389,6 +1544,11 @@ export function challengeParts(window) {
   if (!area.length) {
     return null;
   }
+  // The area is the board the pictures sit on, not the pictures alone: a
+  // board's empty places (Gobang's cells, a grid's blank tiles) are no
+  // pictures, and the union of the filled ones leaves rows of the board
+  // out.
+  onBoard(window, root, area, instruction?.element ?? null);
   // Which of the area's parts are pictures, before a slider's track joins.
   const picturesOnly = new Set(area.map(({ element }) => element));
   // A slider is shot with its track, which is no picture.
@@ -1547,6 +1707,9 @@ export function challengeParts(window) {
   }
   return {
     area: pad(areaRect, told ?? null),
+    // Whether it still shows a loader, or pictures on their way in: the
+    // parts are shot once it does not.
+    loading: loading(window, root),
     // Where every picture is, for telling a challenge that holds still
     // from one whose tiles a script is still moving in.
     still: pictures
@@ -1586,7 +1749,8 @@ export function challengeDrawn(window, any = false) {
   if (
     document.readyState != "complete" ||
     !body ||
-    arriving(document.documentElement)
+    arriving(document.documentElement) ||
+    loading(window, body)
   ) {
     return { drawn: false };
   }
