@@ -523,3 +523,54 @@ add_task(async function test_enter_verifies_from_the_cursor() {
   is(await selected(), 0, "and clicks nothing on the way");
   BrowserTestUtils.removeTab(tab);
 });
+
+add_task(async function test_gc_says_what_it_labeled() {
+  const { Zendia } = ChromeUtils.importESModule(
+    "resource:///modules/zendia/Zendia.sys.mjs"
+  );
+  const { tab } = await openChallenge();
+  is(
+    await Zendia.run(
+      "jump.captcha",
+      { orPage: true },
+      { browser: tab.linkedBrowser }
+    ),
+    "captcha",
+    "the CAPTCHA is labeled"
+  );
+  await TestUtils.waitForCondition(
+    async () => (await labelsShown(tab)).length == 4,
+    "its controls alone"
+  );
+  EventUtils.synthesizeKey("KEY_Escape");
+  BrowserTestUtils.removeTab(tab);
+});
+
+add_task(
+  async function test_or_page_labels_a_page_whose_captcha_is_not_found() {
+    const { Zendia } = ChromeUtils.importESModule(
+      "resource:///modules/zendia/Zendia.sys.mjs"
+    );
+    const tab = await BrowserTestUtils.openNewForegroundTab(
+      gBrowser,
+      "data:text/html,<button>One</button> <button>Two</button> <a href='%23x'>Three</a>"
+    );
+    const browser = tab.linkedBrowser;
+    browser.focus();
+    is(
+      await Zendia.run("jump.captcha", { orPage: true }, { browser }),
+      "page",
+      "with no CAPTCHA to find, the page is labeled"
+    );
+    await TestUtils.waitForCondition(
+      async () => (await labelsShown(tab)).length == 3,
+      "every control of it, as `s` labels them"
+    );
+    EventUtils.synthesizeKey("KEY_Escape");
+    await TestUtils.waitForCondition(
+      async () => !(await labelsShown(tab)).length,
+      "<Esc> drops them"
+    );
+    BrowserTestUtils.removeTab(tab);
+  }
+);

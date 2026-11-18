@@ -1625,62 +1625,72 @@ export function labelElements(actor, window, find, pick) {
 // Labels for the controls of the whole page, frames included. They are
 // drawn by its top window, so a key typed in a frame starts them there, and
 // focus leaves the frame, so the keys that pick a label reach the top.
-const labelControls = (id, options) => async context => {
-  const { actor, window } = context;
-  if (window.browsingContext.parent) {
-    await actor.sendQuery("Zendia:FrameQuery", {
-      bcId: window.browsingContext.top.id,
-      name: "Zendia:RunContent",
-      data: { id, args: {} },
-    });
-    return;
-  }
-  const focused = window.document.activeElement;
-  if (focused?.browsingContext) {
-    focused.blur();
-    window.focus();
-  }
-  const { stayInChallenges, captcha, ...rest } = options ?? {};
-  const makeSource = () =>
-    controlsSource(window, actor, { scope: captcha ? "captcha" : "all" });
-  const source = await makeSource();
-  if (captcha && !source.matches("").length) {
-    // Nothing to label: a picture drawn in a canvas, say, or a button to
-    // hold that answers no clicks. What is left is the cursor, over the
-    // CAPTCHA, or over the page if there is none to be found.
-    let areas = await captchaAreas(actor, window);
-    const found = !!areas.length;
-    if (!found) {
-      areas = [plainRect(0, 0, window.innerWidth, window.innerHeight)];
+// What was labeled comes back: "captcha", "cursor" (a CAPTCHA with nothing
+// to label, under the cursor's grid) or "page". With `args.orPage`, a
+// CAPTCHA's labels that find none label the page instead, as `s` does,
+// rather than put the cursor on it: the CAPTCHA subagent's way, for a
+// challenge the watch found where the jump does not.
+const labelControls =
+  (id, options) =>
+  async (context, args = {}) => {
+    const { actor, window } = context;
+    if (window.browsingContext.parent) {
+      return actor.sendQuery("Zendia:FrameQuery", {
+        bcId: window.browsingContext.top.id,
+        name: "Zendia:RunContent",
+        data: { id, args },
+      });
+    }
+    const focused = window.document.activeElement;
+    if (focused?.browsingContext) {
+      focused.blur();
+      window.focus();
+    }
+    const { stayInChallenges, captcha, ...rest } = options ?? {};
+    const makeSource = () =>
+      controlsSource(window, actor, { scope: captcha ? "captcha" : "all" });
+    const source = await makeSource();
+    if (captcha && !source.matches("").length) {
+      // Nothing to label: a picture drawn in a canvas, say, or a button to
+      // hold that answers no clicks. What is left is the cursor, over the
+      // CAPTCHA, or over the page if there is none to be found.
+      let areas = await captchaAreas(actor, window);
+      const found = !!areas.length;
+      if (!found && args.orPage) {
+        return actions["jump.hints"](context);
+      }
+      if (!found) {
+        areas = [plainRect(0, 0, window.innerWidth, window.innerHeight)];
+      }
+      actor.startCapture(
+        new PointerPad(actor, window, {
+          areas,
+          drag: false,
+          notice: found ? "" : "no CAPTCHA found: the cursor is on the page",
+          onVerify: found
+            ? () => actions["captcha.verify"]({ actor, window })
+            : null,
+          isThere: found ? shown => captchaIsThere(actor, window, shown) : null,
+        })
+      );
+      return found ? "cursor" : "page";
     }
     actor.startCapture(
-      new PointerPad(actor, window, {
-        areas,
-        drag: false,
-        notice: found ? "" : "no CAPTCHA found: the cursor is on the page",
-        onVerify: found
-          ? () => actions["captcha.verify"]({ actor, window })
-          : null,
-        isThere: found ? shown => captchaIsThere(actor, window, shown) : null,
+      new JumpSession(window, makeSource, source, {
+        ...rest,
+        actor,
+        staying: !!captcha,
+        challengeSource:
+          stayInChallenges || captcha
+            ? () =>
+                controlsSource(window, actor, {
+                  scope: captcha ? "captcha" : "challenge",
+                })
+            : null,
       })
     );
-    return;
-  }
-  actor.startCapture(
-    new JumpSession(window, makeSource, source, {
-      ...rest,
-      actor,
-      staying: !!captcha,
-      challengeSource:
-        stayInChallenges || captcha
-          ? () =>
-              controlsSource(window, actor, {
-                scope: captcha ? "captcha" : "challenge",
-              })
-          : null,
-    })
-  );
-};
+    return captcha ? "captcha" : "page";
+  };
 
 const labelWords =
   land =>

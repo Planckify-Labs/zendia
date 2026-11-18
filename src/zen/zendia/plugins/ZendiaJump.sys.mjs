@@ -8,8 +8,14 @@
 
 const CONTENT = "resource:///modules/zendia/plugins/ZendiaJumpContent.sys.mjs";
 
-function jump(desc) {
-  return { desc, where: "content", module: CONTENT, agent: false };
+function jump(desc, params) {
+  return {
+    desc,
+    where: "content",
+    module: CONTENT,
+    agent: false,
+    ...(params && { params }),
+  };
 }
 
 export const ZendiaJumpSpec = {
@@ -18,7 +24,10 @@ export const ZendiaJumpSpec = {
     "jump.controls": jump("Jump to a Link, Button or Field by its Text"),
     "jump.hints": jump("Label Every Link, Button and Field"),
     // Solving a CAPTCHA with the keys alone.
-    "jump.captcha": jump("Label the CAPTCHA to Solve it with the Keys"),
+    // With orPage, a page whose CAPTCHA it cannot find is labeled whole.
+    "jump.captcha": jump("Label the CAPTCHA to Solve it with the Keys", {
+      orPage: "boolean?",
+    }),
     // Its controls by what they do, whatever their labels.
     "captcha.verify": jump("Verify the CAPTCHA (Verify, Next, Skip)"),
     "captcha.answer": jump("Type the CAPTCHA's Answer"),
