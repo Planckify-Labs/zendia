@@ -12,9 +12,10 @@
 // address of a loader script (SCRIPTS), the only sign of the invisible and
 // scored ones, which draw nothing of their own; the widgets a page draws
 // itself (WIDGETS); and the answer field a solved one leaves in the form
-// (TOKEN_FIELDS). Each service is filed under the kind of check it is
-// (KINDS), so what is found can be grouped the way the survey of CAPTCHAs
-// groups them.
+// (TOKEN_FIELDS). A challenge a page draws itself, with none of those, is
+// known by what it asks (CHALLENGE_PROMPTS). Each service is filed under
+// the kind of check it is (KINDS), so what is found can be grouped the way
+// the survey of CAPTCHAs groups them.
 
 // The kinds of check a service can ask for, after the survey of the field:
 // read a distorted text, pick the images, drag a slider, play a little
@@ -134,8 +135,11 @@ const CAPTCHAS = [
     kind: "text",
   },
   {
+    // v2's widget and its hidden agent are frames of frcapi.com (global. or
+    // eu.); v1 draws in the page and only fetches its puzzle from the API.
+    // friendlycaptcha.com itself is the company's site, not the CAPTCHA.
     name: "Friendly Captcha",
-    frame: /friendlycaptcha\.com\//,
+    frame: /\bfrcapi\.com\/|\b(?:eu-)?api\.friendlycaptcha\.(?:com|eu)\//,
     challenge: null,
     kind: "proof-of-work",
   },
@@ -163,6 +167,9 @@ const WIDGETS = [
   ".h-captcha",
   ".cf-turnstile",
   ".frc-captcha",
+  "#lemin-cropped-captcha",
+  // Lemin's puzzle opens in a popup of its own, outside its checkbox.
+  ".lemin-captcha-popup",
   "altcha-widget",
   ".altcha",
   ".mtcaptcha",
@@ -181,6 +188,30 @@ const WIDGETS = [
   "#challenge-stage",
   "#challenge-form",
   "#amzn-captcha-verify-button",
+  // The puzzle AWS WAF shows once Begin is pressed, and its JS API's.
+  ".amzn-captcha-modal",
+  "awswaf-captcha",
+].join(",");
+
+// The widgets whose box is not to be clicked open: the proof-of-work and
+// managed ones, where a click runs the check itself and shows no
+// challenge (Friendly Captcha, ALTCHA, mCaptcha, Turnstile), the ones a
+// text challenge shows from the start (MTCaptcha), and those that only
+// hold a service's frames, whose checkbox is clicked inside its frame.
+const NOT_OPENED = [
+  ".frc-captcha",
+  "altcha-widget",
+  ".altcha",
+  ".mcaptcha__widget-container",
+  ".cf-turnstile",
+  "#cf-challenge-running",
+  "#challenge-stage",
+  "#challenge-form",
+  ".mtcaptcha",
+  "#mtcaptcha",
+  ".g-recaptcha",
+  ".grecaptcha-badge",
+  ".h-captcha",
 ].join(",");
 
 // The loader scripts, by their address: the sign of the CAPTCHAs that draw
@@ -218,8 +249,9 @@ const SCRIPTS = [
     kind: "game",
   },
   {
+    // A site may serve GeeTest v4's loader itself, as gt4.js.
     name: "GeeTest",
-    script: /geetest\.(?:com|cn)\/|geevisit\.com\//,
+    script: /geetest\.(?:com|cn)\/|geevisit\.com\/|\/gt4[\w.-]*\.js(?:[?#]|$)/,
     kind: "slider",
   },
   {
@@ -234,10 +266,15 @@ const SCRIPTS = [
   },
   { name: "AWS WAF", script: /awswaf\.com\//, kind: "puzzle" },
   {
+    // v2's SDK (@friendlycaptcha/sdk, from a CDN or the API) and v1's
+    // widget (friendly-challenge). Not every script of friendlycaptcha.com:
+    // that is the company's own site.
     name: "Friendly Captcha",
-    script: /friendlycaptcha\.com\/|friendly-challenge/,
+    script:
+      /@friendlycaptcha\/sdk|friendly-challenge|\bfrcapi\.com\/|\b(?:eu-)?api\.friendlycaptcha\.(?:com|eu)\//,
     kind: "proof-of-work",
   },
+  { name: "Lemin", script: /leminnow\.com\//, kind: "puzzle" },
   {
     name: "ALTCHA",
     script: /\/altcha[@/.]/,
@@ -268,6 +305,7 @@ const TOKEN_FIELDS = [
   "h-captcha-response",
   "cf-turnstile-response",
   "frc-captcha-solution",
+  "frc-captcha-response",
   "mtcaptcha-verifiedtoken",
   "aws-waf-token",
   "fc-token",
@@ -291,6 +329,65 @@ const HONEYPOT_NAMES =
 const OWN_CAPTCHA_NAMES =
   /captcha|security[\s_-]?code|verification[\s_-]?code|verify[\s_-]?code|anti[\s_-]?bot|human[\s_-]?check|enter (?:the )?(?:characters|code|text|letters|numbers) (?:you see|shown|above|below|in the (?:image|picture))/i;
 const NOT_OWN_CAPTCHA = /logo|icon|badge|recaptcha-response|captcha-response/i;
+
+// The website of a service, where its regexes would otherwise take every
+// frame and script of the company's own pages for its CAPTCHA's.
+const SERVICE_SITES =
+  /^https?:\/\/www\.(?:hcaptcha|arkoselabs|geetest|mtcaptcha|friendlycaptcha|leminnow|keycaptcha)\.(?:com|cn|eu)\//;
+
+// What a challenge says it asks, in the words the services and the sites
+// that draw their own use: the one sign of a challenge with no service
+// frame, script or class to know it by. Read from short texts only, so an
+// article about CAPTCHAs is not one. The first rule that matches names the
+// kind; the checkbox phrases, the weakest sign, are last.
+const CHALLENGE_PROMPTS = [
+  [
+    "image",
+    /^(?:please )?(?:select|click|tap|pick)(?: on)?(?: all| each| every| any)?(?: of)?(?: the)? (?:images?|squares?|pictures?|tiles?|photos?|boxes)\b/i,
+  ],
+  [
+    "text",
+    /^(?:please )?(?:type|enter)(?: in)?(?: the)? (?:characters?|letters?|text|code|words?|numbers?)\b.*\b(?:see|shown|image|picture|above|below)\b/i,
+  ],
+  [
+    "slider",
+    /^(?:please )?(?:slide|drag)\b.*\b(?:into place|gap|to (?:complete|fit|verify)|right)\b/i,
+  ],
+  ["rotate", /^(?:please )?(?:rotate|turn) the (?:image|picture|object)\b/i],
+  [
+    "click",
+    /^(?:please )?(?:click|tap|select)(?: on)?(?: the)?(?: (?:icons?|characters?|symbols?|letters?|objects?))? in (?:the |this )?(?:following |given )?order\b/i,
+  ],
+  ["math", /^(?:what is|solve|calculate|how much is) \d+ ?[-+x×*÷/] ?\d+/i],
+  ["behavioral", /^press (?:&|and) hold\b/i],
+  [
+    "checkbox",
+    /^(?:i['’]?m|i am) (?:not a robot|a human|human)\.?$|^verify (?:that )?you(?:['’]re| are)(?: a)? human\.?$|^(?:are you a )?robot or human\??$|^click (?:here )?to verify\.?$/i,
+  ],
+];
+// The words one of them starts with, for finding the texts to test without
+// reading every text of the page.
+const PROMPT_WORDS = [
+  "select",
+  "click",
+  "tap",
+  "pick",
+  "type",
+  "enter",
+  "slide",
+  "drag",
+  "rotate",
+  "turn",
+  "robot",
+  "human",
+  "press",
+  "what is",
+  "solve",
+  "calculate",
+  "how much",
+];
+// The longest text a prompt can be.
+const PROMPT_MAX = 120;
 
 // What the controls of a challenge are for, beyond the images and pieces
 // that labels pick: a key of its own reaches each of them, whatever label it
@@ -335,16 +432,35 @@ const ANSWER_TYPES = new Set([
   "url",
 ]);
 
+// The service a frame address is a CAPTCHA's, if any; and the loader a
+// script address is. Neither on a service's own website.
+function serviceOf(url) {
+  url = String(url);
+  return SERVICE_SITES.test(url)
+    ? null
+    : (CAPTCHAS.find(({ frame }) => frame.test(url)) ?? null);
+}
+
+function loaderOf(url) {
+  url = String(url);
+  return SERVICE_SITES.test(url)
+    ? null
+    : (SCRIPTS.find(({ script }) => script.test(url)) ?? null);
+}
+
 export const ZendiaCaptcha = {
   KINDS,
   WIDGETS,
+  NOT_OPENED,
+  PROMPT_WORDS,
+  PROMPT_MAX,
 
   /**
    * @param {string} url The address of a frame.
    * @returns {string|null} The service it belongs to, if it is a CAPTCHA's.
    */
   nameOf(url) {
-    return CAPTCHAS.find(({ frame }) => frame.test(url))?.name ?? null;
+    return serviceOf(url)?.name ?? null;
   },
 
   /**
@@ -353,8 +469,7 @@ export const ZendiaCaptcha = {
    *   clicks, rather than the checkbox that opens it.
    */
   isChallenge(url) {
-    const captcha = CAPTCHAS.find(({ frame }) => frame.test(url));
-    return !!captcha?.challenge?.test(url);
+    return !!serviceOf(url)?.challenge?.test(url);
   },
 
   /**
@@ -363,7 +478,7 @@ export const ZendiaCaptcha = {
    *   it is a CAPTCHA's.
    */
   kindOf(url) {
-    const captcha = CAPTCHAS.find(({ frame }) => frame.test(url));
+    const captcha = serviceOf(url);
     if (!captcha) {
       return ZendiaCaptcha.kindOfScript(url);
     }
@@ -383,7 +498,7 @@ export const ZendiaCaptcha = {
    * @returns {string|null} The service it loads, if it is a CAPTCHA's.
    */
   nameOfScript(url) {
-    return SCRIPTS.find(({ script }) => script.test(url))?.name ?? null;
+    return loaderOf(url)?.name ?? null;
   },
 
   /**
@@ -391,7 +506,23 @@ export const ZendiaCaptcha = {
    * @returns {string|null} The kind of check it arms, one of KINDS.
    */
   kindOfScript(url) {
-    return SCRIPTS.find(({ script }) => script.test(url))?.kind ?? null;
+    return loaderOf(url)?.kind ?? null;
+  },
+
+  /**
+   * What a short text of a page asks, if it is the prompt of a challenge:
+   * "Select all images with crosswalks", "Slide the piece into place",
+   * "I'm not a robot". The sign of a challenge a page draws itself.
+   *
+   * @param {string} text
+   * @returns {string|null} The kind it asks for, one of KINDS.
+   */
+  promptKind(text) {
+    text = String(text).replace(/\s+/g, " ").trim();
+    if (!text || text.length > PROMPT_MAX) {
+      return null;
+    }
+    return CHALLENGE_PROMPTS.find(([, rule]) => rule.test(text))?.[0] ?? null;
   },
 
   /**

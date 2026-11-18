@@ -4,7 +4,8 @@
 
 // Watches the pages the browser opens and says when a CAPTCHA is on one:
 // a frame of a known service, a loader script, a widget the page drew
-// itself, the answer field of a solved one, or a trap field of the form.
+// itself, a challenge it draws with no service to know it by, the answer
+// field of a solved one, or a trap field of the form.
 // The page's own actor does the reading (ZendiaCaptchaWatchChild); this
 // service keeps what was found per tab, logs it, and puts up a doorhanger,
 // so a detection is seen without anyone asking for it.
@@ -43,7 +44,11 @@ function sanitize(detections) {
   }
   return detections.slice(0, MAX_DETECTIONS).flatMap((detection) => {
     const signal = text(detection?.signal, 32);
-    if (!["frame", "script", "widget", "token", "honeypot"].includes(signal)) {
+    if (
+      !["frame", "script", "widget", "own", "token", "honeypot"].includes(
+        signal,
+      )
+    ) {
       return [];
     }
     return [
@@ -52,6 +57,7 @@ function sanitize(detections) {
         name: text(detection.name, 64),
         kind: text(detection.kind, 64),
         challenge: detection.challenge === true,
+        hidden: detection.hidden === true,
         detail: text(detection.detail),
       },
     ];
@@ -60,7 +66,8 @@ function sanitize(detections) {
 
 /**
  * One line for what a page holds, for the log and the doorhanger:
- * "reCAPTCHA (image, score); Kasada (sensor); 2 page widgets; token field
+ * "reCAPTCHA (image, score); Kasada (sensor); 2 page widgets; page-drawn
+ * image challenge "Select all images with buses"; token field
  * cf-turnstile-response; honeypot field website".
  *
  * @param {object[]} detections What scanPage found, sanitized.
@@ -85,6 +92,13 @@ export function describe(detections) {
   if (widget?.detail) {
     parts.push(
       `${widget.detail} page widget${widget.detail == "1" ? "" : "s"}`,
+    );
+  }
+  for (const { kind, detail } of detections.filter(
+    ({ signal }) => signal == "own",
+  )) {
+    parts.push(
+      `page-drawn ${kind ? `${kind} ` : ""}challenge${detail ? ` "${detail.slice(0, 80)}"` : ""}`,
     );
   }
   const details = (signal) =>
@@ -113,8 +127,10 @@ export function describe(detections) {
  */
 export function signatureOf(detections) {
   return detections
-    .map(({ signal, name, kind, detail }) =>
-      [signal, name ?? "", kind ?? "", detail ?? ""].join(":"),
+    .map(({ signal, name, kind, detail, hidden }) =>
+      [signal, name ?? "", kind ?? "", detail ?? "", hidden ? "hidden" : ""].join(
+        ":",
+      ),
     )
     .sort()
     .join("|");
