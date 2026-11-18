@@ -29,6 +29,10 @@ const { clearTimeout, setTimeout } = ChromeUtils.importESModule(
 
 // zendia.captcha.agent: whether a found challenge is summarized in the chat.
 export const PREF_AGENT = "zendia.captcha.agent";
+// zendia.captcha.agent.labels: whether the challenge is labeled for the
+// keys (as `s` labels a page) before it is shot, so the shot shows the
+// labels and the user finishes by typing them.
+export const PREF_LABELS = "zendia.captcha.agent.labels";
 // zendia.captcha.agent.debug: say each step of a delivery on stdout.
 export const PREF_DEBUG = "zendia.captcha.agent.debug";
 
@@ -67,6 +71,9 @@ const CHALLENGE_MIN_HEIGHT = 260;
 // moving before it is shot.
 const OPENED_SETTLE_MS = 1000;
 const OPENED_PICTURELESS_MS = 6000;
+// How long the jump labels have to be painted before the shot: the action
+// that draws them returns with them in the page, this covers the paint.
+const LABELS_SETTLE_MS = 150;
 // How long the parts may wait for the last of their pictures to be drawn
 // and to hold still, and how far apart the looks for the latter are.
 const PARTS_DRAW_MS = 3000;
@@ -284,7 +291,13 @@ class ZendiaCaptchaAgentService {
     const picture = sees ? (shot ?? shown) : null;
     const parts = picture?.parts?.area ? picture.parts : null;
     const said = shot?.parts?.instruction?.text ?? null;
-    const prompt = this.#prompt(record, picture, parts, said);
+    const prompt = this.#prompt(
+      record,
+      picture,
+      parts,
+      said,
+      shot?.labeled === true,
+    );
     let files = [];
     if (parts) {
       files = [{ name: "captcha-challenge-area.jpg", bytes: parts.area.bytes }];
@@ -353,15 +366,26 @@ class ZendiaCaptchaAgentService {
    *   to shoot.
    */
   async captureChallenge(browser, maxWidth = SHOT_MAX_WIDTH) {
-    await this.#prepareChallenge(browser);
-    const shot = await this.#screenshot(browser, maxWidth);
+    const state = await this.#prepareChallenge(browser);
+    // Nothing to act on (an invisible pass, a finished check) is shot
+    // bare; anything else is labeled for the keys first, so the shot shows
+    // the labels the user finishes by.
+    const labeled =
+      state != "passed" && (await this.#labelChallenge(browser));
+    const shot = await this.#screenshot(browser, maxWidth, labeled);
+    if (shot) {
+      shot.labeled = labeled;
+    }
     if (shot?.area) {
-      shot.parts = await this.#shootParts(browser, shot.area, maxWidth).catch(
-        (e) => {
-          console.error("Zendia: CAPTCHA subagent could not cut the parts", e);
-          return null;
-        },
-      );
+      shot.parts = await this.#shootParts(
+        browser,
+        shot.area,
+        maxWidth,
+        labeled,
+      ).catch((e) => {
+        console.error("Zendia: CAPTCHA subagent could not cut the parts", e);
+        return null;
+      });
     }
     return shot;
   }
@@ -396,7 +420,11 @@ class ZendiaCaptchaAgentService {
     }
     for (const maxWidth of [SHOT_MAX_WIDTH, SHOT_FALLBACK_WIDTH]) {
       if (maxWidth != SHOT_MAX_WIDTH) {
-        shot = await this.#screenshot(browser, maxWidth).catch(() => null);
+        shot = await this.#screenshot(
+          browser,
+          maxWidth,
+          shot?.labeled === true,
+        ).catch(() => null);
       }
       if (!shot) {
         return null;
@@ -440,10 +468,14 @@ class ZendiaCaptchaAgentService {
   // A challenge with nothing to open (a slider, a managed check) is shot
   // once it is drawn and holds still between two looks. An invisible pass,
   // and a widget that never comes, end the wait with the poll.
+  //
+  // @returns {Promise<string>} How the wait ended: "open", "settled" or
+  //   "clicked" — the challenge is there to act on; "passed" — the check
+  //   went by itself, nothing to act on; "timeout" — it never said.
   async #prepareChallenge(browser) {
     const top = browser.browsingContext;
     if (!top) {
-      return;
+      return "timeout";
     }
     this.#opening.add(browser);
     this.#lastFrame.delete(browser);
@@ -488,12 +520,12 @@ class ZendiaCaptchaAgentService {
           `poll: challenge=${!!area?.challenge} size=${area ? `${Math.round(area.fullWidth)}x${Math.round(area.fullHeight)}` : "-"} open=${open} drawn=${drawn} still=${still} left=${deadline - Date.now()}ms`,
         );
         if (open && drawn) {
-          return;
+          return "open";
         }
         const peek = await this.#peek(browser);
         if (peek.passed) {
           say("an invisible pass: nothing to show");
-          return;
+          return "passed";
         }
         checkbox ||= peek.checkbox;
         // A challenge frame still opening is waited on; anything else that
@@ -502,7 +534,7 @@ class ZendiaCaptchaAgentService {
           area && !open && !(area.challenge && area.frame) && drawn && still;
         if (settled && !checkbox) {
           say("nothing to open: the challenge is shot as it is");
-          return;
+          return "settled";
         }
         // What a click opened in the page is shot once its puzzle is past
         // its spinner: a picture of it is up, loaded, and holds still. A
@@ -517,7 +549,7 @@ class ZendiaCaptchaAgentService {
             Date.now() - clickedAt >= OPENED_PICTURELESS_MS)
         ) {
           say("the click opened the challenge in the page");
-          return;
+          return "clicked";
         }
         await this.#eachFrame(
           browser,
@@ -537,11 +569,39 @@ class ZendiaCaptchaAgentService {
         );
         await new Promise((resolve) => setTimeout(resolve, CHALLENGE_POLL_MS));
       }
+      return "timeout";
     } finally {
       // The rescan the opening brings can lag the poll: keep the findings
       // it reports the same finding's a moment longer.
       setTimeout(() => this.#opening.delete(browser), CHALLENGE_DRAW_MS);
     }
+  }
+
+  // The challenge labeled for the keys, as `s` labels a page: every
+  // control of it takes a label, and in a challenge the labels stay while
+  // it is solved, so the shot shows them and the user finishes by typing
+  // them. The labels are drawn in the top page; the shot is taken there
+  // when this returns true. False when the keys are not running (the jump
+  // plugin off, the pref off): the shot is taken as before.
+  async #labelChallenge(browser) {
+    if (!Services.prefs.getBoolPref(PREF_LABELS, true)) {
+      return false;
+    }
+    const zendia = ZendiaAgents.zendia;
+    if (!zendia || !browser.isConnected) {
+      return false;
+    }
+    try {
+      await zendia.run("jump.hints", {}, { browser });
+    } catch (e) {
+      say(`labels failed: ${e}`);
+      return false;
+    }
+    say("labeled the challenge");
+    // The labels are in the page once the action returns; this covers the
+    // paint before the shot.
+    await new Promise((resolve) => setTimeout(resolve, LABELS_SETTLE_MS));
+    return browser.isConnected;
   }
 
   // Ask the tab's frames one after another, those `only` lets through,
@@ -625,14 +685,16 @@ class ZendiaCaptchaAgentService {
   }
 
   // Where the challenge is and in which frame of the tab, so the shot is
-  // of it rather than the whole page; asking scrolls it into view. Every
-  // frame is asked: a CAPTCHA may sit in a sub-frame the top page cannot
-  // see into. The frame that asks for clicks wins over a service's plainer
-  // frame, a frame over a page's widget, a widget over a challenge the
-  // page draws itself; and what a page shows of a CAPTCHA's frame over
-  // what that frame shows inside it. Of the same rank, the bigger. Null
-  // when no frame answers in time.
-  async #challengeRect(browser) {
+  // of it rather than the whole page; asking scrolls it into view, unless
+  // `stay` asks it not to: the jump labels are drawn already, and a
+  // scroll would move them off what they name. Every frame is asked: a
+  // CAPTCHA may sit in a sub-frame the top page cannot see into. The
+  // frame that asks for clicks wins over a service's plainer frame, a
+  // frame over a page's widget, a widget over a challenge the page draws
+  // itself; and what a page shows of a CAPTCHA's frame over what that
+  // frame shows inside it. Of the same rank, the bigger. Null when no
+  // frame answers in time.
+  async #challengeRect(browser, stay = false) {
     const top = browser.browsingContext;
     if (!top) {
       return null;
@@ -647,7 +709,7 @@ class ZendiaCaptchaAgentService {
           const rect = await Promise.race([
             context.currentWindowGlobal
               .getActor("ZendiaCaptchaWatch")
-              .sendQuery("Zendia:CaptchaWatch:Rect"),
+              .sendQuery("Zendia:CaptchaWatch:Rect", { stay }),
             timeout,
           ]);
           return rect && { context, ...rect };
@@ -685,8 +747,12 @@ class ZendiaCaptchaAgentService {
   // What the tab shows, canvases and frames included, after
   // ZendiaAgentTools' #screenshot, with the picture's size kept. When a
   // frame of the tab says where the challenge is, only it, with a little
-  // room around, taken from that frame's own global.
-  async #screenshot(browser, maxWidth) {
+  // room around, taken from that frame's own global. Labeled, the labels
+  // are drawn in the top page: the shot is taken from the top global
+  // instead, of the challenge's rect moved up the frames to it, and the
+  // page is not scrolled again — the labels would move off what they
+  // name.
+  async #screenshot(browser, maxWidth, labeled = false) {
     const window = this.#windowFor(browser);
     if (!window || !browser.isConnected) {
       return null;
@@ -700,8 +766,25 @@ class ZendiaCaptchaAgentService {
     let viewWidth;
     let viewHeight;
     let rect = null;
-    const area = await this.#challengeRect(browser);
-    if (area) {
+    const area = await this.#challengeRect(browser, labeled);
+    if (area && labeled) {
+      const moved = await this.#inTopDocument(
+        window,
+        area.context,
+        area,
+        area,
+        SHOT_PADDING,
+      );
+      if (moved) {
+        rect = moved.rect;
+        ({ viewWidth, viewHeight } = moved);
+      } else {
+        // A frame on the way up did not answer: the labels are in the top
+        // page, so the whole view is the next best shot of them.
+        ({ width: viewWidth, height: viewHeight } =
+          browser.getBoundingClientRect());
+      }
+    } else if (area) {
       global = area.context.currentWindowGlobal;
       if (!global) {
         // The frame with the challenge navigated away: no shot at all is
@@ -713,7 +796,7 @@ class ZendiaCaptchaAgentService {
       // viewport's: the frame's scroll moves between them on a scrolled
       // page.
       rect = this.#inDocument(window, area, area, SHOT_PADDING);
-    } else if (this.#lastFrame.get(browser)?.context.currentWindowGlobal) {
+    } else if (!labeled && this.#lastFrame.get(browser)?.context.currentWindowGlobal) {
       // Nothing answers now, but the challenge was last seen in a sub-frame
       // (a click there replaced its widget with a puzzle the layer has no
       // name for): that frame, whole, is closer to it than the page.
@@ -796,13 +879,61 @@ class ZendiaCaptchaAgentService {
       : null;
   }
 
+  // A rect of a frame moved up the frames to the top page, where the jump
+  // labels are drawn: each frame above answers where the one below sits in
+  // it (its embedder's box and border), to the top, whose scroll and view
+  // the document coordinates and the shot's bounds come from. `view` is
+  // the rect's own window's scroll and view, for when it is the top's
+  // already. Null when a frame on the way answers nothing.
+  async #inTopDocument(window, context, rect, view, padding) {
+    let { left, top } = rect;
+    const { width, height } = rect;
+    while (context.parent) {
+      let box = null;
+      try {
+        box = await Promise.race([
+          context.parent.currentWindowGlobal
+            ?.getActor("ZendiaCaptchaWatch")
+            .sendQuery("Zendia:CaptchaWatch:Embedder", {
+              childId: context.id,
+            }),
+          new Promise((resolve) => setTimeout(resolve, RECT_TIMEOUT_MS)),
+        ]);
+      } catch {
+        box = null;
+      }
+      if (!box) {
+        return null;
+      }
+      left += box.left + box.clientLeft;
+      top += box.top + box.clientTop;
+      view = box;
+      context = context.parent;
+    }
+    const moved = this.#inDocument(
+      window,
+      { left, top, width, height },
+      view,
+      padding,
+    );
+    return (
+      moved && {
+        rect: moved,
+        viewWidth: view.viewWidth,
+        viewHeight: view.viewHeight,
+      }
+    );
+  }
+
   // The challenge in its two parts, each drawn alone: the area to act on
   // (the grid, the puzzle) and its instruction, with the instruction's
   // words read from its text. Asked of the frame the challenge is drawn
-  // in: a CAPTCHA's own frame, or the page that drew it. Null when the
-  // challenge has no pictures to tell them apart by (a checkbox, a check
-  // running on its own).
-  async #shootParts(browser, area, maxWidth) {
+  // in: a CAPTCHA's own frame, or the page that drew it. Labeled, the
+  // area is shot from the top page instead, where the labels are drawn,
+  // its rect moved up the frames; the frame's own shot is the fallback.
+  // Null when the challenge has no pictures to tell them apart by (a
+  // checkbox, a check running on its own).
+  async #shootParts(browser, area, maxWidth, labeled = false) {
     const window = this.#windowFor(browser);
     const context =
       area.frame && area.frameId != null
@@ -843,14 +974,31 @@ class ZendiaCaptchaAgentService {
       }
       parts = again;
     }
-    const areaRect =
+    let areaRect =
       parts?.area && this.#inDocument(window, parts.area, parts, 0);
+    // Labeled, the area's shot is taken from the top page, where the
+    // labels are drawn; a frame on the way up that answers nothing leaves
+    // the frame's own shot.
+    let areaGlobal = global;
+    if (areaRect && labeled) {
+      const moved = await this.#inTopDocument(
+        window,
+        context,
+        parts.area,
+        parts,
+        0,
+      );
+      if (moved) {
+        areaRect = moved.rect;
+        areaGlobal = browser.browsingContext?.currentWindowGlobal ?? global;
+      }
+    }
     if (!areaRect) {
       return null;
     }
     const shot = await this.#encode(
       window,
-      global,
+      areaGlobal,
       areaRect,
       this.#scaleFor(window, areaRect, maxWidth),
     );
@@ -894,8 +1042,10 @@ class ZendiaCaptchaAgentService {
   // the pictures attached, that is where it looks first: the area to act
   // on and the instruction, each cut from the page, sharper than a shot of
   // the whole tab; or the whole challenge, where it did not come apart.
-  // The instruction's words, read from the page, go in the request.
-  #prompt(record, picture, parts, said) {
+  // The instruction's words, read from the page, go in the request. A
+  // labeled challenge is on the user's screen with key labels on it: the
+  // user finishes by typing them, and the summary says so.
+  #prompt(record, picture, parts, said, labeled = false) {
     let look = `1. Call page_screenshot to look at the challenge (page_observe if your model cannot see images).`;
     if (parts) {
       look = `1. Look at the attached pictures first, each cut from the page and drawn larger than on screen: captcha-challenge-area.jpg is only the part of the challenge to act on (its images, puzzle or distorted text)${parts.instruction?.shot && parts.instruction.pictures ? `; captcha-instruction-example.jpg is the instruction's own picture (an example to match, icons to click in order)` : ""}. Call page_screenshot only if you cannot view them or they do not show the challenge (page_observe if your model cannot see images).`;
@@ -907,10 +1057,10 @@ class ZendiaCaptchaAgentService {
       said
         ? `The challenge's instruction, read from its own text: "${said}" Quote it as it is; do not guess another.`
         : null,
-      `The user has the tab in front of them and was just shown a screenshot of it in the panel. Where the challenge opens from a checkbox, it was clicked for them already, so the challenge is open and waiting. They complete it themselves: never click, fill, press or scroll the challenge, and never navigate the tab away.`,
+      `The user has the tab in front of them and was just shown a screenshot of it in the panel. Where the challenge opens from a checkbox, it was clicked for them already, so the challenge is open and waiting. They complete it themselves: never click, fill, press or scroll the challenge, and never navigate the tab away.${labeled ? " The challenge on their screen shows key labels: they finish it by typing the labels, and your summary tells them so." : ""}`,
       `Do exactly this:
 ${look}
-2. Answer in at most three short sentences: which service the challenge is from (or that the page draws it itself), what it asks the user to do${said ? ", in the instruction's own words," : ""} (pick images, type the characters, slide a piece into place, press and hold, check a box),${parts ? " what the area to act on shows," : ""} and where on the page it sits. If the check looks invisible, runs on its own (a progress bar, "Verifying"), or already passed, say that instead.`,
+2. Answer in at most three short sentences: which service the challenge is from (or that the page draws it itself), what it asks the user to do${said ? ", in the instruction's own words," : ""} (pick images, type the characters, slide a piece into place, press and hold, check a box),${parts ? " what the area to act on shows," : ""}${labeled ? " and that the labels on it are typed to finish it," : ""} and where on the page it sits. If the check looks invisible, runs on its own (a progress bar, "Verifying"), or already passed, say that instead.`,
     ]
       .filter(Boolean)
       .join("\n\n");

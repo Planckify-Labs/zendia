@@ -751,6 +751,9 @@ function picturesShown(window, element) {
  * in a sub-frame needs no coordinates moved.
  *
  * @param {Window} window
+ * @param {boolean} [stay] Report where it is, without scrolling to it:
+ *   the page's jump labels are drawn already, and a scroll would move
+ *   them off what they name.
  * @returns {{left: number, top: number, width: number, height: number,
  *   fullWidth: number, fullHeight: number, viewWidth: number,
  *   viewHeight: number, scrollX: number, scrollY: number,
@@ -763,7 +766,7 @@ function picturesShown(window, element) {
  *   frame itself; whether its pictures are loaded, and the frame's browsing
  *   context, for asking it whether it is drawn. Null when the page has none.
  */
-export function challengeRect(window) {
+export function challengeRect(window, stay = false) {
   const document = window.document;
   if (!document?.documentElement) {
     return null;
@@ -810,23 +813,26 @@ export function challengeRect(window) {
       // What a page draws reaches as far as its popups; a frame is its box.
       const reach = () =>
         isFrame ? target.getBoundingClientRect() : extentOf(window, target);
-      target.scrollIntoView({
-        block: reach().height > window.innerHeight ? "start" : "center",
-        inline: "nearest",
-        behavior: "instant",
-      });
-      // A popup under its checkbox may still be out of view: the page is
-      // scrolled to the middle of the two, or to their top if they do not
-      // fit.
       let full = reach();
-      if (full.top < 0 || full.bottom > window.innerHeight) {
-        window.scrollBy({
-          top:
-            full.top -
-            Math.max(0, (window.innerHeight - full.height) / 2),
+      if (!stay) {
+        target.scrollIntoView({
+          block: full.height > window.innerHeight ? "start" : "center",
+          inline: "nearest",
           behavior: "instant",
         });
+        // A popup under its checkbox may still be out of view: the page is
+        // scrolled to the middle of the two, or to their top if they do not
+        // fit.
         full = reach();
+        if (full.top < 0 || full.bottom > window.innerHeight) {
+          window.scrollBy({
+            top:
+              full.top -
+              Math.max(0, (window.innerHeight - full.height) / 2),
+            behavior: "instant",
+          });
+          full = reach();
+        }
       }
       const rect = visibleRect(window, target, full);
       if (!rect || rect.width < MIN_SIDE || rect.height < MIN_SIDE) {
@@ -852,6 +858,41 @@ export function challengeRect(window) {
     }
   }
   return null;
+}
+
+/**
+ * Where a child frame of this window sits, for moving a rect of its
+ * document into this window's coordinates: the box of the element that
+ * embeds it and the border inside the box, with this window's scroll and
+ * view. The jump labels are drawn in the top page, so a shot that shows
+ * them is taken there, of a challenge's rect moved up frame by frame.
+ * Null when this window does not hold the child.
+ *
+ * @param {Window} window
+ * @param {number} childId The child frame's browsing context id.
+ * @returns {{left: number, top: number, clientLeft: number,
+ *   clientTop: number, scrollX: number, scrollY: number,
+ *   viewWidth: number, viewHeight: number}|null}
+ */
+export function embedderBox(window, childId) {
+  const child = [...(window.browsingContext?.children ?? [])].find(
+    (context) => context.id == childId,
+  );
+  const element = child?.embedderElement;
+  if (!element) {
+    return null;
+  }
+  const rect = element.getBoundingClientRect();
+  return {
+    left: rect.left,
+    top: rect.top,
+    clientLeft: element.clientLeft ?? 0,
+    clientTop: element.clientTop ?? 0,
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+    viewWidth: window.innerWidth,
+    viewHeight: window.innerHeight,
+  };
 }
 
 // The names a checkbox gets in a page that draws its own: rc-cb, hc-cb,
@@ -1642,7 +1683,10 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
       this.#watch();
     }
     if (message.name == "Zendia:CaptchaWatch:Rect") {
-      return challengeRect(this.contentWindow);
+      return challengeRect(this.contentWindow, message.data?.stay === true);
+    }
+    if (message.name == "Zendia:CaptchaWatch:Embedder") {
+      return embedderBox(this.contentWindow, message.data?.childId);
     }
     if (message.name == "Zendia:CaptchaWatch:Open") {
       return openChallenge(this.contentWindow, message.data?.peek === true);
