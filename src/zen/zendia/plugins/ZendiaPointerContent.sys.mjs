@@ -2,44 +2,95 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-// A mouse for the keyboard, for the CAPTCHAs that nothing can label: a
-// picture to click on a point of, a slider or a piece to drag, a button to
-// hold down. A grid of labels over the CAPTCHA picks the point; the keys then
-// click there, or hold the mouse down and move it by steps.
+// A cursor for the keyboard, for the CAPTCHAs that nothing can label: a
+// picture to click on points of, a slider or a piece to drag, a button to
+// hold down. Labels over the CAPTCHA move the cursor; the keys then nudge
+// it, click, or hold the mouse down and move it.
 
 import { ZendiaCaptcha } from "resource:///modules/zendia/core/ZendiaCaptcha.sys.mjs";
 import { ZendiaControls } from "resource:///modules/zendia/core/ZendiaControls.sys.mjs";
+import { ZendiaDom } from "resource:///modules/zendia/core/ZendiaDom.sys.mjs";
 import { ZendiaKeys } from "resource:///modules/zendia/core/ZendiaKeys.sys.mjs";
-import { hintLabels } from "resource:///modules/zendia/ui/ZendiaHints.sys.mjs";
 import { LABELS } from "resource:///modules/zendia/ui/ZendiaPicker.sys.mjs";
+
+const lazy = {};
+ChromeUtils.defineESModuleGetters(lazy, {
+  ownChallenges:
+    "resource:///modules/zendia/captcha/ZendiaCaptchaWatchChild.sys.mjs",
+});
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const LABEL_BACKGROUND = "#232136";
 const LABEL_TEXT = "#eef5ff";
+const TYPED_TEXT = "#ffc777";
 const CELL_OUTLINE = "rgba(162, 87, 114, 0.55)";
 const AREA_OUTLINE = "rgba(255, 199, 119, 0.8)";
+const RULER_LINE = "rgba(255, 199, 119, 0.8)";
+const HELD_FILL = "rgba(255, 199, 119, 0.45)";
+
+// How tall the band at the bottom of the window the prompt takes.
+const PROMPT_BAND = 52;
 
 // A frame that does not answer is left out rather than waited for.
 const FRAME_TIMEOUT_MS = 1000;
 
 // How far above its answer field the picture of a site's own CAPTCHA may be.
 const OWN_CAPTCHA_LEVELS = 4;
+// How far up a site's own CAPTCHA takes in the box around it, for its
+// buttons (Rotate, Check, Reset), while the box stays about its size.
+const OWN_CAPTCHA_WIDEN = 4;
+// The smallest picture a site's own CAPTCHA draws: an icon is none.
+const OWN_PICTURE_MIN = { width: 40, height: 24 };
+// The fields of a form that a box around a CAPTCHA does not take in.
+const OTHER_FIELDS =
+  "input:not([type=hidden], [type=submit], [type=button], [type=reset], [type=image]), textarea, select";
 
-// About how wide a cell of the grid is, and the most cells there may be (two
-// letters make 576 labels).
+// The letters of the cursor's labels: not h j k l, which move it, nor v,
+// which holds the mouse down.
+export const PAD_LETTERS = [...LABELS]
+  .filter(letter => !"hjklv".includes(letter))
+  .join("");
+
+// About how wide a cell of the grid is, and the most cells there may be (as
+// many as two letters label).
 const CELL_SIZE = 40;
-const MAX_CELLS = 24 * 24;
-// A cell is split into this many columns and rows to point more finely.
-const REFINE = 4;
-// How far a key moves a held pointer, in CSS pixels: h j k l the least, [ ]
-// a little more, H J K L the most. A move of a longer way is made in steps
-// of PATH_STEP.
-const FINE_STEP = 2;
-const STEP = 0.5;
-const FAR_STEP = 6;
+const MAX_CELLS = PAD_LETTERS.length ** 2;
+// How far a key moves the cursor, in CSS pixels, times the count before it:
+// h j k l 2, H J K L 10, the arrows 1 (10 with Shift).
+const STEP = 2;
+const FAR_STEP = 10;
+const FINE_STEP = 1;
+const STEPS = {
+  h: [-STEP, 0],
+  l: [STEP, 0],
+  k: [0, -STEP],
+  j: [0, STEP],
+  H: [-FAR_STEP, 0],
+  L: [FAR_STEP, 0],
+  K: [0, -FAR_STEP],
+  J: [0, FAR_STEP],
+  "<Left>": [-FINE_STEP, 0],
+  "<Right>": [FINE_STEP, 0],
+  "<Up>": [0, -FINE_STEP],
+  "<Down>": [0, FINE_STEP],
+  "<S-Left>": [-FAR_STEP, 0],
+  "<S-Right>": [FAR_STEP, 0],
+  "<S-Up>": [0, -FAR_STEP],
+  "<S-Down>": [0, FAR_STEP],
+};
+// How tall the ruler of a slider stands over its track, for its width: the
+// picture above a track is about two thirds as tall as it is wide.
+const RULER_HEIGHT = 0.7;
+// Room above the piece's row for the ruler's letters, two rows of them.
+const RULER_LABEL_ROOM = 30;
+// A move of a longer way is made in steps of PATH_STEP, like a hand does.
 const PATH_STEP = 12;
-// A drag moves like a hand does, not in one jump.
 const MOVE_PAUSE_MS = 8;
+// The challenge is looked for this long after a click, then at this pace;
+// GONE_LOOKS looks without it and the cursor is over.
+const WATCH_AFTER_CLICK_MS = 700;
+const WATCH_MS = 900;
+const GONE_LOOKS = 3;
 
 const MOUSE_TYPES = new Set(["mousemove", "mousedown", "mouseup"]);
 
@@ -76,15 +127,52 @@ export function askFrame(actor, window, bcId, name, data) {
   ]);
 }
 
-function boxOf(frame) {
+/**
+ * Where a frame shows its document in this window, and at what scale: a
+ * frame drawn scaled (a CSS transform, as sites shrink reCAPTCHA with)
+ * shows it smaller or bigger than it lays it out.
+ *
+ * @param {Element} frame
+ * @returns {{left: number, top: number, width: number, height: number,
+ *   right: number, bottom: number, scaleX: number, scaleY: number}}
+ */
+export function frameBox(frame) {
   const box = frame.getBoundingClientRect();
+  const scale = (drawn, laid) => {
+    const value = laid ? drawn / laid : 1;
+    return Number.isFinite(value) && value > 0 ? value : 1;
+  };
+  const scaleX = scale(box.width, frame.offsetWidth);
+  const scaleY = scale(box.height, frame.offsetHeight);
+  return {
+    ...plainRect(
+      box.left + frame.clientLeft * scaleX,
+      box.top + frame.clientTop * scaleY,
+      frame.clientWidth * scaleX,
+      frame.clientHeight * scaleY
+    ),
+    scaleX,
+    scaleY,
+  };
+}
+
+/**
+ * A rect of a frame's document, in this window.
+ *
+ * @param {object} box The frame's, from frameBox.
+ * @param {{left: number, top: number, width: number, height: number}} rect
+ * @returns {object}
+ */
+export function fromFrame(box, { left, top, width, height }) {
   return plainRect(
-    box.left + frame.clientLeft,
-    box.top + frame.clientTop,
-    frame.clientWidth,
-    frame.clientHeight
+    box.left + left * box.scaleX,
+    box.top + top * box.scaleY,
+    width * box.scaleX,
+    height * box.scaleY
   );
 }
+
+const boxOf = frameBox;
 
 const isArea = item =>
   ["left", "top", "width", "height"].every(key =>
@@ -92,6 +180,107 @@ const isArea = item =>
   ) &&
   item.width > 0 &&
   item.height > 0;
+
+// The most elements of a widget looked at for where it draws.
+const DRAWN_MAX = 400;
+
+/**
+ * Where an element draws, its shadow root and what overflows it included:
+ * HUMAN's "Press & Hold" is drawn from a closed shadow root, outside the box
+ * of the element that holds it.
+ *
+ * @param {Element} element
+ * @returns {{left: number, top: number, width: number, height: number, right: number, bottom: number}}
+ */
+export function drawnRect(element) {
+  const window = element.documentGlobal;
+  const box = element.getBoundingClientRect();
+  let { left, top, right, bottom } = box;
+  // What the boxes between a descendant and the element clip it to: a
+  // picture wider than its popup (Lemin's) shows only inside it.
+  // The element's own clip counts; nothing above it does.
+  const clips = new Map([[ZendiaDom.composedParent(element), null]]);
+  const clipOf = node => {
+    if (!node) {
+      return null;
+    }
+    if (clips.has(node)) {
+      return clips.get(node);
+    }
+    const above = clipOf(ZendiaDom.composedParent(node));
+    let clip = above;
+    const overflow = window.getComputedStyle(node);
+    const clipsX = overflow && overflow.overflowX != "visible";
+    const clipsY = overflow && overflow.overflowY != "visible";
+    if (clipsX || clipsY) {
+      const own = node.getBoundingClientRect();
+      clip = {
+        left: clipsX ? own.left : -Infinity,
+        top: clipsY ? own.top : -Infinity,
+        right: clipsX ? own.right : Infinity,
+        bottom: clipsY ? own.bottom : Infinity,
+      };
+      if (above) {
+        clip = {
+          left: Math.max(clip.left, above.left),
+          top: Math.max(clip.top, above.top),
+          right: Math.min(clip.right, above.right),
+          bottom: Math.min(clip.bottom, above.bottom),
+        };
+      }
+    }
+    clips.set(node, clip);
+    return clip;
+  };
+  let looked = 0;
+  const roots = [element, element.openOrClosedShadowRoot].filter(Boolean);
+  for (const root of roots) {
+    for (const each of ZendiaDom.deepElements(root)) {
+      if (++looked > DRAWN_MAX) {
+        break;
+      }
+      const rect = each.getBoundingClientRect();
+      if (
+        rect.width < 4 ||
+        rect.height < 4 ||
+        !each.checkVisibility({
+          visibilityProperty: true,
+          opacityProperty: true,
+        })
+      ) {
+        continue;
+      }
+      const clip = clipOf(ZendiaDom.composedParent(each)) ?? {
+        left: -Infinity,
+        top: -Infinity,
+        right: Infinity,
+        bottom: Infinity,
+      };
+      const shown = {
+        left: Math.max(rect.left, clip.left),
+        top: Math.max(rect.top, clip.top),
+        right: Math.min(rect.right, clip.right),
+        bottom: Math.min(rect.bottom, clip.bottom),
+      };
+      if (shown.right - shown.left < 4 || shown.bottom - shown.top < 4) {
+        continue;
+      }
+      left = Math.min(left, shown.left);
+      top = Math.min(top, shown.top);
+      right = Math.max(right, shown.right);
+      bottom = Math.max(bottom, shown.bottom);
+    }
+  }
+  // Only what is in the window can be pointed at.
+  left = Math.max(left, 0);
+  top = Math.max(top, 0);
+  right = Math.min(right, window.innerWidth);
+  bottom = Math.min(bottom, window.innerHeight);
+  if (right <= left || bottom <= top) {
+    return plainRect(box.left, box.top, box.width, box.height);
+  }
+  return plainRect(left, top, right - left, bottom - top);
+}
 
 // Of rects, those that no other holds.
 function outermost(rects) {
@@ -144,13 +333,19 @@ export function ownCaptchas(window) {
         continue;
       }
       const rect = element.getBoundingClientRect();
+      const isField =
+        element.localName == "input" || element.localName == "textarea";
+      const least = isField ? { width: 20, height: 10 } : OWN_PICTURE_MIN;
       if (
-        rect.width >= 20 &&
-        rect.height >= 10 &&
+        rect.width >= least.width &&
+        rect.height >= least.height &&
         rect.bottom > 0 &&
         rect.top < window.innerHeight &&
         element.checkVisibility() &&
-        !element.closest(ZendiaCaptcha.WIDGETS)
+        !element.closest(ZendiaCaptcha.WIDGETS) &&
+        // A picture in a link goes somewhere: an icon of a page about
+        // CAPTCHAs ("2Captcha Python SDK"), not one to solve.
+        (isField || !element.closest("a[href]"))
       ) {
         named.push(element);
       }
@@ -186,11 +381,73 @@ export function ownCaptchas(window) {
       boxes.add(picture.parentElement ?? picture);
     }
   }
+  const widened = new Set([...boxes].filter(Boolean).map(widen));
+  // And the challenges the watch knows a page draws itself, by what they
+  // ask: "I'm not a robot", "Select all images with...", "Slide the piece".
+  for (const box of drawnChallenges(window)) {
+    widened.add(box);
+  }
   // None inside another.
-  return [...boxes].filter(
-    box =>
-      box && ![...boxes].some(other => other !== box && other.contains(box))
+  return [...widened].filter(
+    box => ![...widened].some(other => other !== box && other.contains(box))
   );
+}
+
+// How long the challenges a page draws are kept between two looks: a jump
+// asks on every read of the page.
+const DRAWN_CACHE_MS = 400;
+const gDrawn = new WeakMap();
+
+function drawnChallenges(window) {
+  const now = Date.now();
+  const cached = gDrawn.get(window);
+  if (cached && now - cached.at < DRAWN_CACHE_MS) {
+    return cached.boxes.filter(box => box.isConnected);
+  }
+  let boxes = [];
+  try {
+    boxes = lazy.ownChallenges(window).map(({ box }) => box);
+  } catch {
+    // The watch cannot read this page.
+  }
+  gDrawn.set(window, { at: now, boxes });
+  return boxes;
+}
+
+// The box around a site's own CAPTCHA that holds its buttons too (Rotate
+// left, Check, Reset): up while it stays about the size of the CAPTCHA, and
+// no further than its form.
+function widen(box) {
+  const base = box.getBoundingClientRect();
+  const { body, documentElement } = box.ownerDocument;
+  let best = box;
+  for (
+    let each = box.parentElement, level = 0;
+    each &&
+    each != body &&
+    each != documentElement &&
+    level < OWN_CAPTCHA_WIDEN;
+    each = each.parentElement, level++
+  ) {
+    const rect = each.getBoundingClientRect();
+    if (
+      rect.height > base.height * 2 + 120 ||
+      rect.width * rect.height >
+        Math.max(base.width * base.height * 12, 160000) ||
+      // Not the rest of a form: a login's fields are not the CAPTCHA's, and
+      // its answer field is the one Tab is to find.
+      [...each.querySelectorAll(OTHER_FIELDS)].some(
+        field => !box.contains(field)
+      )
+    ) {
+      break;
+    }
+    best = each;
+    if (each.localName == "form") {
+      break;
+    }
+  }
+  return best;
 }
 
 /**
@@ -219,7 +476,7 @@ export async function captchaAreas(actor, window) {
       return (Array.isArray(nested) ? nested : [])
         .filter(isArea)
         .map(({ left, top, width, height }) =>
-          plainRect(box.left + left, box.top + top, width, height)
+          fromFrame(box, { left, top, width, height })
         )
         .filter(
           rect =>
@@ -232,11 +489,17 @@ export async function captchaAreas(actor, window) {
   );
   const widgets = [];
   try {
-    for (const element of [
+    const all = [
       ...window.document.querySelectorAll(ZendiaCaptcha.WIDGETS),
       ...ownCaptchas(window),
-    ]) {
-      const rect = element.getBoundingClientRect();
+    ];
+    // The outermost of them: a GeeTest names every part of itself.
+    const outer = all.filter(
+      element =>
+        !all.some(other => other !== element && other.contains(element))
+    );
+    for (const element of outer) {
+      const rect = drawnRect(element);
       if (
         element.checkVisibility() &&
         rect.width >= 20 &&
@@ -251,6 +514,20 @@ export async function captchaAreas(actor, window) {
     // A selector this page's engine does not know.
   }
   return outermost([...found.flat(), ...widgets]);
+}
+
+/**
+ * Whether a CAPTCHA is still where some areas are: a challenge that was
+ * passed, or closed, is gone from them.
+ *
+ * @param {object} actor
+ * @param {Window} window
+ * @param {{left: number, top: number, width: number, height: number}[]} areas
+ * @returns {Promise<boolean>}
+ */
+export async function captchaIsThere(actor, window, areas) {
+  const now = await captchaAreas(actor, window);
+  return now.some(area => areas.some(each => meets(area, each)));
 }
 
 /**
@@ -298,8 +575,8 @@ export async function pointerAt(actor, window, data) {
     const id = inner.browsingContext.id;
     const reply = await askFrame(actor, window, id, "Zendia:Pointer", {
       type,
-      x: x - box.left,
-      y: y - box.top,
+      x: (x - box.left) / box.scaleX,
+      y: (y - box.top) / box.scaleY,
       buttons: buttons ?? 0,
       frame: frame ? frame.slice(1) : undefined,
     });
@@ -323,37 +600,67 @@ function style(element, properties) {
   Object.assign(element.style, properties);
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// Whether two rects meet.
+function meets(a, b) {
+  return (
+    a.left < b.left + b.width &&
+    b.left < a.left + a.width &&
+    a.top < b.top + b.height &&
+    b.top < a.top + a.height
+  );
+}
+
 /**
- * The mouse, driven by keys, over the CAPTCHAs of a page.
+ * A cursor for the keyboard, over the CAPTCHAs of a page: for what nothing
+ * labels, a picture to click on points of, a slider or a piece to drag, a
+ * button to hold down. It is drawn where it is, and the page sees the mouse
+ * move with it.
  *
- * Choosing a point: a label of two letters for a cell of the grid, then, to
- * point more finely, one for a part of it (<CR> takes the middle of the cell).
- * With `click` a point is clicked. With `drag` the first point is where the
- * mouse is pressed; h j k l (H J K L farther) then move it, `.` takes it to
- * another point of the grid, <CR> lets go and <Esc> lets go where it began.
+ * Labels go where the cursor can jump to: a grid over the CAPTCHA, a ruler
+ * along a slider, the places of a board. A label moves the cursor there (a
+ * capital as its last letter clicks there too); h j k l move it 2px, H J K L
+ * 10px, the arrows 1px, after a count as in vim; <Space> and <CR> click, or
+ * let go of what is held; v presses the mouse and holds it, or lets go; <Tab>
+ * goes through the labels it has, and none; <Esc> lets go where it began, or
+ * gives the keys back.
  */
 export class PointerPad {
   #window;
   #actor;
   #areas;
+  // Whether the first jump presses the mouse and holds it (`,`).
   #drag;
-  #cells = [];
-  #labels = [];
-  #typed = "";
-  // Choosing: the cells, a part of one, or moving what is held.
-  #stage = "cells";
-  #cell = null;
-  #parts = [];
+  // Whether the pad began holding something (a slider, a piece): it is over
+  // once that is let go of.
+  #grabbed = false;
+  #cursor;
+  // The mouse as the keys asked for it: down since `start`, or up. The
+  // press and the moves follow in the queue (#held is what they did), so a
+  // key typed before a press is done still acts on what is held.
+  #holding = null;
   #held = null;
+  #typed = "";
+  #count = "";
+  // The ways to jump the cursor, each with its places and their labels.
+  #layouts = [];
+  // Which of them is shown; one past the last shows none.
+  #layout = 0;
   #queue = Promise.resolve();
   #done = false;
   #root = null;
-  // Where the user is asked next to point to.
-  #moveTo = false;
   #onFinish = null;
-  // The places of a board the held piece can be put on, and their labels.
-  #lattice = null;
-  #latticeLabels = [];
+  // Presses the challenge's verify button, for <CR>.
+  #onVerify = null;
+  // Whether the challenge is still there, asked after a click and now and
+  // then: once it is gone the pad is over.
+  #isThere = null;
+  #watchTimer = 0;
+  #gone = 0;
+  #notice = "";
+  // A line the prompt always starts with.
+  #banner = "";
   #resolveFinished;
   #finished = new Promise(resolve => (this.#resolveFinished = resolve));
 
@@ -362,33 +669,72 @@ export class PointerPad {
    * @param {Window} window
    * @param {object} options
    * @param {{left: number, top: number, width: number, height: number}[]} options.areas
-   *   Where the grid goes.
-   * @param {boolean} options.drag Whether the first point is pressed and held.
+   *   Where the cursor goes, and the grid with it.
+   * @param {boolean} options.drag Whether the first jump presses and holds.
    * @param {{x: number, y: number}} [options.grab] A point to hold at once.
+   * @param {{left: number, top: number, width: number, height: number}} [options.grabRect]
+   *   What is held there, a slider's handle with `slider`.
+   * @param {boolean} [options.slider] Whether what is held slides along a
+   *   track, and a ruler is laid along it.
+   * @param {{left: number, top: number, width: number, height: number}} [options.track]
+   *   The track it slides along.
+   * @param {{left: number, top: number, width: number, height: number}} [options.piece]
+   *   The piece a slider moves, for the ruler to say where it goes rather
+   *   than the handle.
    * @param {{left: number, top: number, width: number, height: number}[]|null} [options.lattice]
    *   The places of a board the held piece can be put on.
+   * @param {?() => Promise<boolean>} [options.isThere] Whether the CAPTCHA
+   *   is still there.
+   * @param {string} [options.notice] A line for the prompt to start with.
+   * @param {?() => void} [options.onVerify] Presses the verify button: <CR>
+   *   does, when nothing is held. Without it, <CR> clicks.
    * @param {?() => void} [options.onFinish] Called when the pad is over.
    */
   constructor(
     actor,
     window,
-    { areas, drag, grab, lattice = null, onFinish = null }
+    {
+      areas,
+      drag,
+      grab = null,
+      grabRect = null,
+      slider = false,
+      track = null,
+      piece = null,
+      lattice = null,
+      isThere = null,
+      notice = "",
+      onVerify = null,
+      onFinish = null,
+    }
   ) {
     this.#onFinish = onFinish;
+    this.#onVerify = onVerify;
     this.#actor = actor;
     this.#window = window;
     this.#areas = areas;
     this.#drag = drag;
-    this.#buildCells();
+    this.#isThere = isThere;
+    this.#banner = notice;
+    this.#cursor = grab ?? ZendiaCaptcha.middle(areas[0]);
     if (lattice?.length) {
-      this.#lattice = lattice;
-      this.#latticeLabels = hintLabels(lattice.length);
+      this.#layouts.push(this.#makeLayout("board", lattice));
     }
+    if (grab && slider && grabRect) {
+      const ruler = this.#rulerLayout(grab, grabRect, track, piece);
+      if (ruler) {
+        this.#layouts.push(ruler);
+      }
+    }
+    this.#layouts.push(this.#gridLayout());
     if (grab) {
-      // With a board to put the piece on, its places are labeled at once.
-      this.#stage = this.#lattice ? "drop" : "move";
-      this.#enqueue(() => this.#grab(grab));
+      this.#grabbed = true;
+      this.#startHold();
+    } else {
+      // The page sees the mouse where the cursor starts.
+      this.#enqueue(() => this.#send("mousemove", this.#cursor, 0));
     }
+    this.#watch();
     this.#draw();
   }
 
@@ -401,15 +747,71 @@ export class PointerPad {
     return this.#finished;
   }
 
-  #buildCells() {
+  // Where the cursor is, and whether the mouse is down there.
+  get cursor() {
+    return { ...this.#cursor, held: !!this.#holding };
+  }
+
+  #makeLayout(kind, rects, points = null) {
+    return {
+      kind,
+      rects,
+      points: points ?? rects.map(rect => ZendiaCaptcha.middle(rect)),
+      labels: ZendiaCaptcha.labelsOf(rects.length, PAD_LETTERS),
+    };
+  }
+
+  #gridLayout() {
     let size = CELL_SIZE;
     let cells;
     do {
       cells = this.#areas.flatMap(area => ZendiaCaptcha.gridCells(area, size));
       size *= 1.5;
     } while (cells.length > MAX_CELLS);
-    this.#cells = cells;
-    this.#labels = hintLabels(cells.length);
+    return this.#makeLayout("grid", cells);
+  }
+
+  // A line across the picture for every stop of the slider, a letter each:
+  // the line on the gap is where the piece goes. The stops go as far as the
+  // track lets the handle; the lines stand over the picture above it.
+  #rulerLayout(grab, handle, track, piece) {
+    const area =
+      this.#areas.find(each =>
+        meets(each, { left: grab.x, top: grab.y, width: 1, height: 1 })
+      ) ?? this.#areas[0];
+    const along = track ?? area;
+    const from = piece ? ZendiaCaptcha.middle(piece) : grab;
+    const stops = ZendiaCaptcha.rulerStops(
+      from,
+      handle,
+      along,
+      PAD_LETTERS.length
+    );
+    if (!stops.length) {
+      return null;
+    }
+    // The gap is on the piece's row: the lines stand there alone, and leave
+    // the rest of the picture to be seen. Without a piece, over the picture
+    // above the track.
+    let top;
+    let bottom;
+    if (piece) {
+      top = piece.top - RULER_LABEL_ROOM;
+      bottom = piece.top + piece.height;
+    } else {
+      bottom = Math.min(handle.top, track?.top ?? handle.top) - 2;
+      top = track ? bottom - track.width * RULER_HEIGHT : area.top;
+    }
+    top = Math.max(top, area.top, 0);
+    const height = Math.max(20, bottom - top);
+    const rects = stops.map(x => plainRect(x, top, 1, height));
+    // The handle goes as far as the piece does.
+    const points = stops.map(x => ({ x: grab.x + (x - from.x), y: grab.y }));
+    return this.#makeLayout("ruler", rects, points);
+  }
+
+  get #shown() {
+    return this.#layouts[this.#layout] ?? null;
   }
 
   #enqueue(task) {
@@ -424,163 +826,124 @@ export class PointerPad {
     }
     if (token == "<Esc>") {
       this.#escape();
-    } else if (this.#stage == "drop") {
-      this.#dropKey(token);
-    } else if (this.#stage == "move" && !this.#moveTo) {
-      this.#moveKey(token);
     } else if (token == "<BS>") {
-      this.#back();
-    } else if (this.#stage == "parts") {
-      this.#partKey(token);
+      if (this.#typed) {
+        this.#typed = this.#typed.slice(0, -1);
+      } else {
+        this.#count = "";
+      }
+      this.#draw();
+    } else if (token == "<Tab>") {
+      this.#typed = "";
+      this.#layout = (this.#layout + 1) % (this.#layouts.length + 1);
+      this.#draw();
+    } else if (/^\d$/.test(token) && !this.#typed) {
+      this.#count = ZendiaCaptcha.growCount(this.#count, token);
+      this.#draw();
+    } else if (STEPS[token]) {
+      const times = Number(this.#count || 1);
+      this.#count = "";
+      const [dx, dy] = STEPS[token];
+      this.#moveTo({
+        x: this.#cursor.x + dx * times,
+        y: this.#cursor.y + dy * times,
+      });
+    } else if (token == "<Space>" || token == "<CR>") {
+      this.#count = "";
+      if (this.#holding) {
+        this.#letGo();
+      } else if (token == "<CR>" && this.#onVerify) {
+        // As in the labels: <CR> checks what was picked. The cursor is put
+        // away first, and the keys go back to the labels.
+        const verify = this.#onVerify;
+        this.finish();
+        verify();
+      } else {
+        this.#click();
+      }
+    } else if (token == "v") {
+      this.#count = "";
+      if (this.#holding) {
+        this.#letGo();
+      } else {
+        this.#startHold();
+      }
     } else if (token.length == 1) {
-      this.#cellKey(token.toLowerCase());
+      this.#labelKey(token);
     }
   }
 
-  // The places of a board, one label each: the piece goes to the one typed
-  // and is let go of there.
-  #dropKey(token) {
-    if (token == ".") {
-      this.#moveTo = true;
-      this.#typed = "";
-      this.#stage = "cells";
-    } else if (token == "<BS>") {
-      this.#typed = this.#typed.slice(0, -1);
-    } else if (token.length == 1) {
-      const typed = this.#typed + token.toLowerCase();
-      const index = this.#latticeLabels.indexOf(typed);
-      if (index != -1) {
-        const at = ZendiaCaptcha.middle(this.#lattice[index]);
-        this.#typed = "";
-        this.#enqueue(async () => {
-          await this.#dragTo(at);
-          await this.#release(at);
-          this.#held = null;
-        }).then(() => this.finish());
-        this.#stage = "move";
-      } else if (this.#latticeLabels.some(label => label.startsWith(typed))) {
+  // A letter of a label: the cursor jumps once one is whole. Its last letter
+  // a capital, the cursor clicks there, or lets go there.
+  #labelKey(char) {
+    const layout = this.#shown ?? this.#layouts[this.#layouts.length - 1];
+    const typed = this.#typed + char.toLowerCase();
+    const index = layout.labels.indexOf(typed);
+    this.#count = "";
+    if (index == -1) {
+      if (layout.labels.some(label => label.startsWith(typed))) {
         this.#typed = typed;
+        // Labels that were hidden show, to type the rest of one.
+        if (!this.#shown) {
+          this.#layout = this.#layouts.indexOf(layout);
+        }
       }
+      this.#draw();
+      return;
     }
-    this.#draw();
+    this.#typed = "";
+    const at = layout.points[index];
+    const capital = char != char.toLowerCase();
+    this.#moveTo(at);
+    if (this.#holding) {
+      // A board's place takes the piece, as the drop it is for.
+      if (capital || layout.kind == "board") {
+        this.#letGo();
+      }
+    } else if (capital) {
+      this.#click();
+    } else if (this.#drag) {
+      // `,`: the first jump takes hold.
+      this.#drag = false;
+      this.#startHold();
+    }
   }
 
   #escape() {
-    if (this.#stage == "drop") {
-      // No place chosen: the keys move the piece by steps instead.
+    if (this.#typed || this.#count) {
       this.#typed = "";
-      this.#stage = "move";
+      this.#count = "";
       this.#draw();
-    } else if (this.#stage == "parts") {
-      this.#back();
-    } else if (this.#stage == "cells" && this.#typed) {
-      this.#typed = "";
-      this.#draw();
-    } else if (this.#stage == "cells" && this.#moveTo) {
-      // Back to moving what is held.
-      this.#moveTo = false;
-      this.#stage = "move";
-      this.#draw();
-    } else if (this.#held) {
-      this.#enqueue(() => this.#release(this.#held?.start)).then(() => {
-        this.#held = null;
-        this.finish();
-      });
+    } else if (this.#holding) {
+      // Back where it was taken, and let go: nothing moved.
+      const start = this.#holding.start;
+      this.#moveTo(start);
+      this.#letGo({ end: true });
     } else {
       this.finish();
     }
   }
 
-  #back() {
-    if (this.#stage == "parts") {
-      this.#stage = "cells";
-      this.#cell = null;
-    } else {
-      this.#typed = this.#typed.slice(0, -1);
-    }
-    this.#draw();
-  }
-
-  #cellKey(char) {
-    const typed = this.#typed + char;
-    const index = this.#labels.indexOf(typed);
-    if (index != -1) {
-      this.#typed = "";
-      this.#cell = this.#cells[index];
-      this.#parts = ZendiaCaptcha.splitRect(this.#cell, REFINE, REFINE);
-      this.#stage = "parts";
-    } else if (this.#labels.some(label => label.startsWith(typed))) {
-      this.#typed = typed;
-    }
-    this.#draw();
-  }
-
-  #partKey(token) {
-    if (token == "<CR>") {
-      this.#point(ZendiaCaptcha.middle(this.#cell));
-    } else if (token.length == 1) {
-      const index = [...LABELS].indexOf(token.toLowerCase());
-      if (index != -1 && index < this.#parts.length) {
-        this.#point(ZendiaCaptcha.middle(this.#parts[index]));
-      }
-    }
-  }
-
-  // A point was chosen.
-  #point(point) {
-    this.#stage = "cells";
-    this.#cell = null;
-    this.#typed = "";
-    if (this.#held) {
-      this.#moveTo = false;
-      this.#stage = "move";
-      this.#enqueue(() => this.#dragTo(point));
-    } else if (this.#drag) {
-      this.#stage = "move";
-      this.#enqueue(() => this.#grab(point));
-    } else {
-      this.#enqueue(() => this.#click(point));
-    }
-    this.#draw();
-  }
-
-  #moveKey(token) {
-    const steps = {
-      h: [-STEP, 0],
-      l: [STEP, 0],
-      k: [0, -STEP],
-      j: [0, STEP],
-      H: [-FAR_STEP, 0],
-      L: [FAR_STEP, 0],
-      K: [0, -FAR_STEP],
-      J: [0, FAR_STEP],
-      "[": [-FINE_STEP, 0],
-      "]": [FINE_STEP, 0],
-      "<Left>": [-STEP, 0],
-      "<Right>": [STEP, 0],
-      "<Up>": [0, -STEP],
-      "<Down>": [0, STEP],
-      "<S-Left>": [-FAR_STEP, 0],
-      "<S-Right>": [FAR_STEP, 0],
+  // The cursor goes to a point of the window, dragging what is held.
+  #moveTo(point) {
+    const { innerWidth, innerHeight } = this.#window;
+    const to = {
+      x: Math.min(Math.max(point.x, 0), innerWidth - 1),
+      y: Math.min(Math.max(point.y, 0), innerHeight - 1),
     };
-    if (token == "<CR>" || token == "<Space>") {
-      // Letting go ends the drag, and the pad with it.
-      this.#enqueue(() => this.#release(this.#held?.at)).then(() => {
-        this.#held = null;
-        this.finish();
-      });
-    } else if (token == ".") {
-      this.#moveTo = true;
-      this.#stage = "cells";
-      this.#draw();
-    } else if (steps[token] && this.#held) {
-      const [dx, dy] = steps[token];
-      const { at } = this.#held;
-      this.#enqueue(() => this.#dragTo({ x: at.x + dx, y: at.y + dy }));
-      // Shown at once, ahead of the mouse that follows it.
-      this.#held.at = { x: at.x + dx, y: at.y + dy };
-      this.#draw();
-    }
+    const from = this.#cursor;
+    this.#cursor = to;
+    this.#enqueue(async () => {
+      if (this.#held) {
+        await this.#dragTo(to);
+      } else {
+        // A hover goes the way a hand would too: some pages watch the way.
+        for (const next of ZendiaCaptcha.path(from, to, PATH_STEP * 3)) {
+          await this.#send("mousemove", next, 0);
+        }
+      }
+    });
+    this.#draw();
   }
 
   async #send(type, point, buttons) {
@@ -607,17 +970,33 @@ export class PointerPad {
     }
   }
 
-  async #click(point) {
-    await this.#send("mousemove", point, 0);
-    await this.#send("mousedown", point, 1);
-    await this.#send("mouseup", point, 0);
-    this.#refocus();
+  #click() {
+    const at = { ...this.#cursor };
+    this.#flash("click");
+    this.#enqueue(async () => {
+      await this.#send("mousemove", at, 0);
+      await this.#send("mousedown", at, 1);
+      await this.#send("mouseup", at, 0);
+      this.#refocus();
+    });
+    this.#checkSoon();
   }
 
-  async #grab(point) {
-    await this.#send("mousemove", point, 0);
-    const chain = await this.#send("mousedown", point, 1);
-    this.#held = { chain: chain ?? undefined, start: point, at: point };
+  #startHold() {
+    this.#holding = { start: { ...this.#cursor } };
+    this.#enqueue(() => this.#press());
+    this.#draw();
+  }
+
+  async #press() {
+    if (this.#done) {
+      // Over before its turn came: never a mouse left down.
+      return;
+    }
+    const at = { ...this.#cursor };
+    await this.#send("mousemove", at, 0);
+    const chain = await this.#send("mousedown", at, 1);
+    this.#held = { chain: chain ?? undefined, start: at, walked: at };
     this.#refocus();
     this.#draw();
   }
@@ -626,7 +1005,7 @@ export class PointerPad {
     if (!this.#held) {
       return;
     }
-    const from = this.#held.walked ?? this.#held.start;
+    const from = this.#held.walked;
     for (const next of ZendiaCaptcha.path(from, point, PATH_STEP)) {
       await this.#send("mousemove", next, 1);
       await new Promise(resolve =>
@@ -634,21 +1013,84 @@ export class PointerPad {
       );
     }
     this.#held.walked = point;
-    this.#held.at = point;
   }
 
-  async #release(point) {
-    if (!this.#held) {
+  // The mouse comes up where the cursor is. A pad that began by holding
+  // something is over with it; `end` ends any.
+  #letGo({ end = false } = {}) {
+    const over = end || this.#grabbed;
+    this.#holding = null;
+    this.#enqueue(async () => {
+      if (!this.#held) {
+        return;
+      }
+      const at = { ...this.#cursor };
+      await this.#dragTo(at);
+      await this.#send("mouseup", at, 0);
+      this.#held = null;
+      this.#refocus();
+      this.#draw();
+    }).then(() => {
+      if (over) {
+        this.finish();
+      } else {
+        this.#checkSoon();
+      }
+    });
+  }
+
+  // A line in the prompt for a moment, for what the keys did.
+  #flash(text) {
+    this.#notice = text;
+    this.#draw();
+    this.#window.setTimeout(() => {
+      if (this.#notice == text) {
+        this.#notice = "";
+        this.#draw();
+      }
+    }, 600);
+  }
+
+  // Whether the challenge went away, a moment after a click.
+  #checkSoon() {
+    if (!this.#isThere) {
       return;
     }
-    if (
-      point &&
-      (point.x != this.#held.walked?.x || point.y != this.#held.walked?.y)
-    ) {
-      await this.#dragTo(point);
+    this.#window.clearTimeout(this.#watchTimer);
+    this.#watchTimer = this.#window.setTimeout(
+      () => this.#watch(true),
+      WATCH_AFTER_CLICK_MS
+    );
+  }
+
+  // Now and then, whether the challenge is still there; three looks
+  // without it and the pad is over.
+  #watch(now = false) {
+    if (!this.#isThere || this.#done) {
+      return;
     }
-    await this.#send("mouseup", point ?? this.#held.start, 0);
-    this.#refocus();
+    this.#window.clearTimeout(this.#watchTimer);
+    const look = async () => {
+      if (this.#done) {
+        return;
+      }
+      let there = true;
+      try {
+        there = this.#holding ? true : await this.#isThere(this.#areas);
+      } catch {
+        // Not known: as if it were.
+      }
+      if (this.#done) {
+        return;
+      }
+      this.#gone = there ? 0 : this.#gone + 1;
+      if (this.#gone >= GONE_LOOKS) {
+        this.finish();
+        return;
+      }
+      this.#watchTimer = this.#window.setTimeout(look, WATCH_MS);
+    };
+    this.#watchTimer = this.#window.setTimeout(look, now ? 0 : WATCH_MS);
   }
 
   finish() {
@@ -656,15 +1098,19 @@ export class PointerPad {
       return;
     }
     this.#done = true;
-    this.#onFinish?.();
+    try {
+      this.#window.clearTimeout(this.#watchTimer);
+    } catch {
+      // The window is already gone.
+    }
     if (this.#held) {
       // Never leave the mouse down in a page.
       const held = this.#held;
       this.#held = null;
       pointerAt(this.#actor, this.#window, {
         type: "mouseup",
-        x: held.at.x,
-        y: held.at.y,
+        x: this.#cursor.x,
+        y: this.#cursor.y,
         buttons: 0,
         frame: held.chain,
       }).catch(() => {});
@@ -675,10 +1121,14 @@ export class PointerPad {
       // The window is already gone.
     }
     this.#root = null;
+    this.#onFinish?.();
     this.#resolveFinished();
   }
 
   #draw() {
+    if (this.#done) {
+      return;
+    }
     const document = this.#window.document;
     this.#root?.remove();
     const root = document.createElementNS(HTML_NS, "div");
@@ -687,43 +1137,71 @@ export class PointerPad {
     for (const area of this.#areas) {
       this.#box(root, area, `2px dashed ${AREA_OUTLINE}`);
     }
-    let prompt;
-    if (this.#stage == "drop") {
-      this.#crosshair(root);
-      this.#lattice.forEach((place, i) => {
-        const label = this.#latticeLabels[i];
-        if (label.startsWith(this.#typed)) {
-          this.#box(root, place, `1px solid ${CELL_OUTLINE}`);
-          this.#tag(root, place, label);
+    const layout = this.#shown;
+    if (layout) {
+      layout.rects.forEach((rect, i) => {
+        const label = layout.labels[i];
+        if (!label.startsWith(this.#typed)) {
+          return;
+        }
+        if (layout.kind == "ruler") {
+          this.#line(root, rect);
+          // Every other letter a row down, so that close ones do not touch.
+          this.#tag(root, { ...rect, left: rect.left - 4 }, label, {
+            dy: i % 2 ? 14 : 0,
+          });
+        } else {
+          this.#box(root, rect, `1px solid ${CELL_OUTLINE}`);
+          this.#tag(root, rect, label);
         }
       });
-      prompt = "put it on · a label drops it · Esc move by keys · . any point";
-    } else if (this.#stage == "move") {
-      this.#crosshair(root);
-      prompt = this.#held
-        ? "drag · hjkl 0.5px · [ ] 2px · HJKL 6px · . point · Enter release · Esc cancel"
-        : "…";
-    } else if (this.#stage == "parts") {
-      this.#box(root, this.#cell, `2px solid ${CELL_OUTLINE}`);
-      this.#parts.forEach((part, i) => {
-        this.#box(root, part, `1px solid ${CELL_OUTLINE}`);
-        this.#tag(root, part, [...LABELS][i]);
-      });
-      prompt = "point · letter picks · Enter the middle · Esc back";
-    } else {
-      this.#cells.forEach((cell, i) => {
-        const label = this.#labels[i];
-        if (label.startsWith(this.#typed)) {
-          this.#box(root, cell, `1px solid ${CELL_OUTLINE}`);
-          this.#tag(root, cell, label);
-        }
-      });
-      const verb = this.#held || this.#drag ? "drag" : "click";
-      prompt = `${verb} · two letters pick a cell · Esc leave`;
     }
-    this.#prompt(root, prompt);
+    this.#pointer(root);
+    this.#prompt(root, this.#promptText(layout));
     this.#root = root;
     document.documentElement.append(root);
+  }
+
+  #promptText(layout) {
+    const parts = [];
+    if (this.#banner) {
+      parts.push(this.#banner);
+    }
+    if (this.#notice) {
+      parts.push(this.#notice);
+    }
+    if (this.#count) {
+      parts.push(this.#count);
+    }
+    const kind = layout?.kind;
+    if (this.#holding) {
+      const what = {
+        ruler: "slide · letter puts the piece on its line",
+        board: "holding · label puts it there",
+      };
+      parts.push(
+        what[kind] ?? "holding · label drags there · Label drops",
+        "hjkl HJKL ←→ move",
+        "Space/Enter drop",
+        "Esc undo"
+      );
+    } else {
+      parts.push(
+        this.#drag
+          ? "drag · label takes hold there"
+          : "cursor · label moves · Label clicks",
+        "hjkl HJKL ←→ move",
+        "Space click",
+        "v hold",
+        ...(this.#onVerify ? ["Enter verify"] : []),
+        "Esc labels"
+      );
+    }
+    if (this.#layouts.length) {
+      const next = this.#layouts[this.#layout + 1]?.kind ?? "none";
+      parts.push(`Tab ${next == "none" ? "hide" : next}`);
+    }
+    return parts.join(" · ");
   }
 
   #box(root, rect, outline) {
@@ -741,13 +1219,36 @@ export class PointerPad {
     root.append(box);
   }
 
-  #tag(root, rect, text) {
+  // A ruler's line, light on dark and dark on light pictures alike.
+  #line(root, rect) {
+    const line = this.#window.document.createElementNS(HTML_NS, "div");
+    style(line, {
+      position: "absolute",
+      left: `${rect.left}px`,
+      top: `${rect.top}px`,
+      width: "1px",
+      height: `${rect.height}px`,
+      background: RULER_LINE,
+      boxShadow: "1px 0 0 rgba(35, 33, 54, 0.35)",
+    });
+    root.append(line);
+  }
+
+  #tag(root, rect, text, { dy = 0 } = {}) {
     const tag = this.#window.document.createElementNS(HTML_NS, "span");
-    tag.textContent = text;
+    const typed = this.#typed.length;
+    if (typed) {
+      const pressed = this.#window.document.createElementNS(HTML_NS, "span");
+      pressed.textContent = text.slice(0, typed);
+      style(pressed, { color: TYPED_TEXT });
+      tag.append(pressed, text.slice(typed));
+    } else {
+      tag.textContent = text;
+    }
     style(tag, {
       position: "absolute",
       left: `${rect.left + 1}px`,
-      top: `${rect.top + 1}px`,
+      top: `${rect.top + 1 + dy}px`,
       padding: "0 2px",
       borderRadius: "3px",
       background: LABEL_BACKGROUND,
@@ -758,34 +1259,63 @@ export class PointerPad {
     root.append(tag);
   }
 
-  #crosshair(root) {
-    const at = this.#held?.at;
-    if (!at) {
-      return;
-    }
-    const dot = this.#window.document.createElementNS(HTML_NS, "div");
-    style(dot, {
+  // The cursor: an arrow with its tip on the point, and a ring that fills
+  // while the mouse is down.
+  #pointer(root) {
+    const document = this.#window.document;
+    const { x, y } = this.#cursor;
+    const ring = document.createElementNS(HTML_NS, "div");
+    const size = this.#holding ? 22 : 16;
+    style(ring, {
       position: "absolute",
-      left: `${at.x - 7}px`,
-      top: `${at.y - 7}px`,
-      width: "14px",
-      height: "14px",
+      left: `${x - size / 2}px`,
+      top: `${y - size / 2}px`,
+      width: `${size}px`,
+      height: `${size}px`,
       boxSizing: "border-box",
       borderRadius: "50%",
       border: `2px solid ${AREA_OUTLINE}`,
-      background: "rgba(35, 33, 54, 0.6)",
+      background: this.#holding ? HELD_FILL : "transparent",
     });
-    root.append(dot);
+    root.append(ring);
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("width", "18");
+    svg.setAttribute("height", "24");
+    svg.setAttribute("viewBox", "0 0 18 24");
+    style(svg, {
+      position: "absolute",
+      left: `${x}px`,
+      top: `${y}px`,
+      overflow: "visible",
+    });
+    const arrow = document.createElementNS(SVG_NS, "path");
+    arrow.setAttribute(
+      "d",
+      "M0 0 L0 17 L4.5 13 L7.5 20 L10.5 18.6 L7.6 12 L13 12 Z"
+    );
+    arrow.setAttribute("fill", LABEL_BACKGROUND);
+    arrow.setAttribute("stroke", "#ffffff");
+    arrow.setAttribute("stroke-width", "1.4");
+    arrow.setAttribute("stroke-linejoin", "round");
+    svg.append(arrow);
+    root.append(svg);
   }
 
   #prompt(root, text) {
     const tag = this.#window.document.createElementNS(HTML_NS, "span");
     tag.textContent = text;
+    // At the bottom, unless the cursor or what it goes over is there.
+    const band = this.#window.innerHeight - PROMPT_BAND;
+    const below =
+      this.#cursor.y > band - 24 ||
+      (this.#shown?.rects ?? []).some(rect => rect.top + rect.height > band);
     style(tag, {
       position: "absolute",
       left: "50%",
-      bottom: "16px",
+      [below ? "top" : "bottom"]: "16px",
       transform: "translateX(-50%)",
+      width: "max-content",
+      maxWidth: "90vw",
       padding: "2px 10px",
       borderRadius: "6px",
       background: LABEL_BACKGROUND,

@@ -230,17 +230,22 @@ add_task(async function test_a_slider_is_dragged_with_the_keys() {
   type("L");
   type("L");
   await TestUtils.waitForCondition(
-    async () => (await handle()).left == 12,
-    "L moves it 6px, twice"
+    async () => Math.round((await handle()).left) == 20,
+    "L moves it 10px, twice"
   );
-  type("[");
+  type("h");
   await TestUtils.waitForCondition(
-    async () => (await handle()).left == 10,
-    "[ moves it back 2px"
+    async () => Math.round((await handle()).left) == 18,
+    "h moves it back 2px"
+  );
+  type("3l");
+  await TestUtils.waitForCondition(
+    async () => Math.round((await handle()).left) == 24,
+    "a count moves it that many times"
   );
   EventUtils.synthesizeKey("KEY_Enter");
   await TestUtils.waitForCondition(
-    async () => (await handle()).released == "10",
+    async () => (await handle()).released == "24",
     "<CR> lets go where it is"
   );
   is((await handle()).down, "", "and the mouse is up");
@@ -266,7 +271,7 @@ add_task(async function test_escape_lets_go_of_a_slider_where_it_began() {
   );
   type("L");
   await TestUtils.waitForCondition(
-    async () => (await handle()).left == 6,
+    async () => Math.round((await handle()).left) == 10,
     "moved"
   );
   EventUtils.synthesizeKey("KEY_Escape");
@@ -301,10 +306,11 @@ add_task(async function test_a_point_of_a_picture_is_clicked_with_the_keys() {
   );
   ok(cell, "a cell lies over the picture");
   type(cell.text);
-  EventUtils.synthesizeKey("KEY_Enter");
+  is(await clicked(), undefined, "its label only moves the cursor there");
+  type(" ");
   await TestUtils.waitForCondition(
     async () => !!(await clicked()),
-    "<CR> clicks the middle of the cell"
+    "<Space> clicks the middle of the cell"
   );
   const [x, y] = (await clicked()).split(",").map(Number);
   // The cell is about 40 wide, the middle about 20 in from its corner.
@@ -439,8 +445,7 @@ add_task(async function test_a_capital_label_holds_what_is_not_known_to_drag() {
     "the labels give way to the places of the mouse"
   );
   is(await selected(), 0, "held, not clicked yet");
-  // <Esc> to move it by keys, and <CR> lets go where it is.
-  EventUtils.synthesizeKey("KEY_Escape");
+  // <CR> lets go where it is.
   EventUtils.synthesizeKey("KEY_Enter");
   await TestUtils.waitForCondition(
     async () => (await selected()) == 1,
@@ -464,5 +469,57 @@ add_task(async function test_a_grid_of_images_is_clicked_not_held() {
   );
   ok(frame, "in the frame");
   EventUtils.synthesizeKey("KEY_Escape");
+  BrowserTestUtils.removeTab(tab);
+});
+
+add_task(async function test_a_ruler_puts_a_slider_on_its_line() {
+  const { tab, handle } = await openSlider();
+  type("gc");
+  await TestUtils.waitForCondition(
+    async () => (await labelsShown(tab)).length == 1,
+    "the handle is labeled"
+  );
+  type((await labelsShown(tab))[0]);
+  // A letter for every stop of the slider, along the 270px it can go.
+  await TestUtils.waitForCondition(
+    async () =>
+      (await tagsShown(tab)).filter(tag => tag.text.length == 1).length == 21,
+    "a ruler of single letters is laid along the slider"
+  );
+  // The seventh stop, of 21 over 270px: 90px along.
+  type("w");
+  await TestUtils.waitForCondition(
+    async () => Math.round((await handle()).left) == 90,
+    "its letter takes the handle to its line"
+  );
+  is((await handle()).down, "yes", "still held, to be set finely");
+  EventUtils.synthesizeKey("KEY_Enter");
+  await TestUtils.waitForCondition(
+    async () => (await handle()).released == "90",
+    "and <CR> lets go there"
+  );
+  EventUtils.synthesizeKey("KEY_Escape");
+  BrowserTestUtils.removeTab(tab);
+});
+
+add_task(async function test_enter_verifies_from_the_cursor() {
+  const { tab, frame, selected } = await openChallenge();
+  type("gc");
+  await TestUtils.waitForCondition(
+    async () => (await labelsShown(tab)).length == 4,
+    "labeled"
+  );
+  type(".");
+  await TestUtils.waitForCondition(
+    async () => (await tagsShown(tab)).length > 4,
+    "the cursor's grid is drawn"
+  );
+  EventUtils.synthesizeKey("KEY_Enter");
+  await TestUtils.waitForCondition(
+    async () =>
+      await SpecialPowers.spawn(frame, [], () => content.document.body.hidden),
+    "<CR> presses the check, as it does from the labels"
+  );
+  is(await selected(), 0, "and clicks nothing on the way");
   BrowserTestUtils.removeTab(tab);
 });

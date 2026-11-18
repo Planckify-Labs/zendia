@@ -395,3 +395,50 @@ add_task(function test_a_sites_own_captcha_is_known_by_its_names() {
     Assert.ok(!ZendiaCaptcha.namesOwnCaptcha(names), names);
   }
 });
+
+add_task(function test_labels_of_one_length_from_some_letters() {
+  Assert.deepEqual(ZendiaCaptcha.labelsOf(3, "abc"), ["a", "b", "c"]);
+  const two = ZendiaCaptcha.labelsOf(5, "abc");
+  Assert.deepEqual(two, ["aa", "ab", "ac", "ba", "bb"], "two letters each");
+  Assert.ok(
+    two.every(
+      label => !two.some(other => other != label && other.startsWith(label))
+    ),
+    "no label starts another"
+  );
+  Assert.deepEqual(ZendiaCaptcha.labelsOf(0, "abc"), []);
+});
+
+add_task(function test_a_rulers_stops_go_as_far_as_the_handle_can() {
+  const handle = { left: 0, width: 30 };
+  const track = { left: 0, width: 300 };
+  const stops = ZendiaCaptcha.rulerStops({ x: 15 }, handle, track, 3);
+  Assert.deepEqual(stops, [105, 195, 285], "every 90px of the 270 left");
+  Assert.deepEqual(
+    ZendiaCaptcha.rulerStops({ x: 40 }, handle, track, 3),
+    [130, 220, 310],
+    "from the piece, which moves as far as the handle"
+  );
+  Assert.deepEqual(
+    ZendiaCaptcha.rulerStops({ x: 15 }, { left: 280, width: 30 }, track, 3),
+    [],
+    "none when the handle is at the end"
+  );
+});
+
+add_task(function test_a_count_grows_as_in_vim() {
+  Assert.equal(ZendiaCaptcha.growCount("", "3"), "3");
+  Assert.equal(ZendiaCaptcha.growCount("3", "0"), "30");
+  Assert.equal(ZendiaCaptcha.growCount("", "0"), "", "a leading 0 is no count");
+  Assert.equal(ZendiaCaptcha.growCount("99", "9"), "999");
+  Assert.equal(ZendiaCaptcha.growCount("999", "9"), "999", "never past 999");
+  Assert.equal(ZendiaCaptcha.growCount("1", "x"), "1", "only digits");
+});
+
+add_task(function test_a_sites_own_reset_and_check_buttons() {
+  const purpose = label => ZendiaCaptcha.purposeOf({ tag: "button", label });
+  Assert.equal(purpose("Reset"), "reload");
+  Assert.equal(purpose("Check"), "verify");
+  Assert.equal(purpose("Rotate left"), null);
+  Assert.ok(ZendiaCaptcha.isTokenField("lemin_answer"), "Lemin's answer");
+});

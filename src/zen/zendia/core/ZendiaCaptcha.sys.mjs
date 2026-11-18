@@ -313,6 +313,7 @@ const TOKEN_FIELDS = [
   "geetest_challenge",
   "geetest_validate",
   "geetest_seccode",
+  "lemin_answer",
 ];
 
 // The names a trap field gets: one a person never fills, for they never see
@@ -414,7 +415,7 @@ const PURPOSE_RULES = [
   ["audio", /\baudio\b|\blisten\b|headphone|\bsound\b|\bvoice\b/i],
   [
     "reload",
-    /reload|refresh|new challenge|another challenge|try another|try again|start over|restart|new (?:image|picture|puzzle|question)s?\b/i,
+    /reload|refresh|new challenge|another challenge|try another|try again|start over|restart|^reset\b|new (?:image|picture|puzzle|question)s?\b/i,
   ],
   [
     "verify",
@@ -668,6 +669,61 @@ export const ZendiaCaptcha = {
       used.add(next.value);
     }
     return labels;
+  },
+
+  /**
+   * Labels of one length for `count` targets, from `letters`: one letter
+   * each while they last, then two, and so on, so no label starts another.
+   *
+   * @param {number} count
+   * @param {string} letters
+   * @returns {string[]}
+   */
+  labelsOf(count, letters) {
+    let labels = [...letters];
+    while (labels.length < count) {
+      labels = labels.flatMap(first => [...letters].map(next => first + next));
+    }
+    return labels.slice(0, count);
+  },
+
+  /**
+   * The stops of a slider's ruler: where its piece can be put, evenly along
+   * the way the handle can still go. A slider moves its piece as far as its
+   * handle, so a stop is a place for the piece, and the handle goes as far.
+   *
+   * @param {{x: number}} piece Where the piece is now (the handle, if no
+   *   piece is known).
+   * @param {{left: number, width: number}} handle
+   * @param {{left: number, width: number}} area The challenge it slides in.
+   * @param {number} count How many stops.
+   * @returns {number[]} The x of each stop, left to right; none if the
+   *   handle has no room to go.
+   */
+  rulerStops(piece, handle, area, count) {
+    const room = area.left + area.width - (handle.left + handle.width);
+    if (!(room >= count) || count < 1) {
+      return [];
+    }
+    const step = room / count;
+    return Array.from({ length: count }, (_, i) => piece.x + step * (i + 1));
+  },
+
+  /**
+   * A count typed before a key, as vim takes one: digits, never more than
+   * `max`. A leading 0 is no count.
+   *
+   * @param {string} count The digits so far.
+   * @param {string} digit The one typed.
+   * @param {number} [max]
+   * @returns {string} The digits now.
+   */
+  growCount(count, digit, max = 999) {
+    if (!/^\d$/.test(digit) || (!count && digit == "0")) {
+      return count;
+    }
+    const grown = count + digit;
+    return Number(grown) > max ? String(max) : grown;
   },
 
   /**

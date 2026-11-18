@@ -16,6 +16,9 @@ import { LABELS } from "resource:///modules/zendia/ui/ZendiaPicker.sys.mjs";
 import {
   askFrame,
   captchaAreas,
+  frameBox,
+  fromFrame,
+  captchaIsThere,
   ownCaptchas,
   PointerPad,
   plainRect,
@@ -67,18 +70,38 @@ const PURPOSE_NAMES = {
   play: "play button",
 };
 const STAYING_PROMPT =
-  "captcha · label clicks · Label holds · Enter verify · Tab answer · ^R new · ^A audio · ^P play · . click · , drag · Esc leave";
+  "captcha · label picks · Label holds · Enter verify · Tab answer · ^R new · ^A audio · ^P play · . cursor · , drag · Esc leave";
+// How tall the band at the bottom of the window the prompt takes.
+const PROMPT_BAND = 52;
 // How long the prompt says a key found nothing to press.
 const NOTICE_MS = 1500;
 
-// The fields the CAPTCHAs of a page leave their answer in that hold one.
+// A widget's mark of a check passed: GeeTest's geetest_lock_success and
+// geetest_radar_success, Friendly Captcha's frc-success, a "verified" state.
+const SOLVED_CLASS = /(?:^|[_-])(?:success|verified|solved|passed)$/i;
+
+// The answers the CAPTCHAs of a page have left: the fields that hold one,
+// and the widgets that show they were passed. One more than when a jump
+// began means one was solved, for a CAPTCHA that leaves no field (GeeTest
+// v4 hands its answer to the page's script).
 function captchaTokens(window) {
   let count = 0;
   try {
-    for (const field of window.document.querySelectorAll(
+    const document = window.document;
+    for (const field of document.querySelectorAll(
       "input[name], textarea[name]"
     )) {
       if (field.value && ZendiaCaptcha.isTokenField(field.name)) {
+        count++;
+      }
+    }
+    for (const widget of document.querySelectorAll(
+      `:is(${ZendiaCaptcha.WIDGETS}):is([class*=success], [class*=verified], [class*=solved], [class*=passed], [data-state=verified])`
+    )) {
+      const marked =
+        widget.dataset.state == "verified" ||
+        [...widget.classList].some(name => SOLVED_CLASS.test(name));
+      if (marked && widget.checkVisibility()) {
         count++;
       }
     }
@@ -139,6 +162,9 @@ let gNextId = 0;
 
 const WIDGETS = ZendiaCaptcha.WIDGETS;
 
+// The smallest picture the cursor is offered for.
+const PICTURE_MIN = { width: 100, height: 60 };
+
 function idOf(element) {
   let id = gIds.get(element);
   if (!id) {
@@ -146,6 +172,13 @@ function idOf(element) {
     gIds.set(element, id);
   }
   return id;
+}
+
+// A rect a frame sent, which may be another site's.
+function isRectData(rect) {
+  return ["left", "top", "width", "height"].every(key =>
+    Number.isFinite(rect?.[key])
+  );
 }
 
 // What a frame sends is not to be trusted: it may be another site's.
@@ -161,14 +194,24 @@ function isControlData(item) {
   );
 }
 
+// Whether a point of this window shows the frame: nothing of the page,
+// another frame included, lies over it there.
+function frameShowsAt(window, frame, x, y) {
+  if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) {
+    // Out of the window, as a frame scrolled in part: not to be told.
+    return true;
+  }
+  const hit = ZendiaDom.deepElementFromPoint(window.document, x, y);
+  return !hit || hit === frame;
+}
+
 // The controls in the frames on screen, placed in this window. The frames
 // of those frames are asked by them.
 async function collectFrames(actor, window) {
   const found = await Promise.all(
     ZendiaControls.frames(window).map(async frame => {
-      const box = frame.getBoundingClientRect();
-      const left = box.left + frame.clientLeft;
-      const top = box.top + frame.clientTop;
+      // Scaled as the frame is drawn: a page may shrink a CAPTCHA's frame.
+      const box = frameBox(frame);
       const items = await askFrame(
         actor,
         window,
@@ -186,23 +229,27 @@ async function collectFrames(actor, window) {
           captcha:
             ZendiaCaptcha.nameOf(frame.src) !== null || item.captcha === true,
           drag: item.drag === true,
+          slider: item.slider === true,
+          track: isRectData(item.track) ? fromFrame(box, item.track) : null,
+          canvas: item.canvas === true,
           purpose: ZendiaCaptcha.PURPOSES.includes(item.purpose)
             ? item.purpose
             : null,
           frame: [frame.browsingContext.id, ...item.frame],
-          rect: plainRect(
-            item.rect.left + left,
-            item.rect.top + top,
-            item.rect.width,
-            item.rect.height
-          ),
+          rect: fromFrame(box, item.rect),
         }))
         .filter(({ rect }) => {
-          // Only what shows inside the frame.
+          // Only what shows inside the frame, and is not under something of
+          // this page: a frame cannot see that another covers it (the
+          // links of hCaptcha's checkbox, under its challenge).
           const x = rect.left + rect.width / 2;
           const y = rect.top + rect.height / 2;
           return (
-            x >= box.left && x <= box.right && y >= box.top && y <= box.bottom
+            x >= box.left &&
+            x <= box.right &&
+            y >= box.top &&
+            y <= box.bottom &&
+            frameShowsAt(window, frame, x, y)
           );
         });
     })
@@ -213,7 +260,13 @@ async function collectFrames(actor, window) {
 // Whether an element is part of a CAPTCHA the page draws: a service's
 // widget, or a CAPTCHA the site makes itself (ownCaptchas).
 function inPageCaptcha(element, own) {
-  return !!element.closest(WIDGETS) || own.some(box => box.contains(element));
+  // Up through shadow roots too: HUMAN's button is in its widget's.
+  for (let each = element; each; each = ZendiaDom.composedParent(each)) {
+    if (each.matches?.(WIDGETS)) {
+      return true;
+    }
+  }
+  return own.some(box => ZendiaDom.composedContains(box, element));
 }
 
 /**
@@ -231,7 +284,11 @@ export async function collectControls(actor, window) {
   const found = ZendiaControls.find(window).map(element => {
     const id = idOf(element);
     pressable.set(id, new WeakRef(element));
-    const { left, top, width, height } = element.getBoundingClientRect();
+    let box = element.getBoundingClientRect();
+    if (isPicture(box)) {
+      box = visibleRect(element);
+    }
+    const { left, top, width, height } = box;
     return {
       id,
       text: ZendiaControls.textOf(element),
@@ -239,12 +296,41 @@ export async function collectControls(actor, window) {
       // Part of a CAPTCHA the page draws itself, and what to drag.
       captcha: inPageCaptcha(element, own),
       drag: ZendiaControls.isDraggable(window, element),
+      slider: ZendiaControls.isSlider(element),
+      track: ZendiaControls.isSlider(element)
+        ? ZendiaControls.trackOf(element)
+        : null,
       // What it does, if it is a button of a CAPTCHA: the frame above
       // knows whether it is in one.
       purpose: purposeOf(element),
       frame: [],
     };
   });
+  // The pictures a challenge draws in a canvas (hCaptcha's pieces to drag,
+  // its points to click): nothing in them is a control, but the cursor goes
+  // over them. Only the frame above knows whether they are a CAPTCHA's, so
+  // they are said to be canvases, for a jump of the whole page to leave out.
+  const known = new Set(found.map(item => item.id));
+  for (const element of pictures(window, "canvas")) {
+    const id = idOf(element);
+    if (known.has(id)) {
+      continue;
+    }
+    pressable.set(id, new WeakRef(element));
+    const { left, top, width, height } = visibleRect(element);
+    found.push({
+      id,
+      text: "",
+      rect: { left, top, width, height },
+      captcha: inPageCaptcha(element, own),
+      drag: false,
+      slider: false,
+      track: null,
+      canvas: true,
+      purpose: null,
+      frame: [],
+    });
+  }
   gPressable.set(window, pressable);
   return [...found, ...(await collectFrames(actor, window))];
 }
@@ -287,6 +373,79 @@ function isPicture(rect) {
   return rect.width >= 150 && rect.height >= 100;
 }
 
+// The pictures of `selector` big enough to point at, shown in the window and
+// not covered: a canvas a challenge draws in, the picture of a site's own
+// CAPTCHA.
+function pictures(window, selector, root = window.document) {
+  const found = [];
+  try {
+    for (const element of root.querySelectorAll(selector)) {
+      const rect = element.getBoundingClientRect();
+      if (
+        rect.width >= PICTURE_MIN.width &&
+        rect.height >= PICTURE_MIN.height &&
+        rect.bottom > 0 &&
+        rect.right > 0 &&
+        rect.top < window.innerHeight &&
+        rect.left < window.innerWidth &&
+        element.checkVisibility() &&
+        isUncovered(window, element, rect)
+      ) {
+        found.push(element);
+      }
+    }
+  } catch {
+    // The window is already gone.
+  }
+  return found;
+}
+
+// The part of an element that shows: a picture wider than the box that
+// clips it (Lemin's, in its popup) is pointed at where it is seen.
+function visibleRect(element) {
+  const window = element.documentGlobal;
+  const rect = element.getBoundingClientRect();
+  let { left, top, right, bottom } = rect;
+  for (
+    let each = ZendiaDom.composedParent(element), level = 0;
+    each && level < 12;
+    each = ZendiaDom.composedParent(each), level++
+  ) {
+    const overflow = window?.getComputedStyle(each);
+    if (
+      !overflow ||
+      (overflow.overflowX == "visible" && overflow.overflowY == "visible")
+    ) {
+      continue;
+    }
+    const box = each.getBoundingClientRect();
+    if (overflow.overflowX != "visible") {
+      left = Math.max(left, box.left);
+      right = Math.min(right, box.right);
+    }
+    if (overflow.overflowY != "visible") {
+      top = Math.max(top, box.top);
+      bottom = Math.min(bottom, box.bottom);
+    }
+  }
+  if (right <= left || bottom <= top) {
+    return rect;
+  }
+  return plainRect(left, top, right - left, bottom - top);
+}
+
+// Whether the middle of an element is the element, or what is in it.
+function isUncovered(window, element, rect) {
+  const hit = ZendiaDom.deepElementFromPoint(
+    window.document,
+    Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1),
+    Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1)
+  );
+  return (
+    !hit || hit == element || element.contains(hit) || hit.contains(element)
+  );
+}
+
 // The controls of the page, or with `scope`:
 //   "challenge" just those of a CAPTCHA that asks for clicks,
 //   "captcha" those of any part of a CAPTCHA, a checkbox and a badge too.
@@ -295,12 +454,16 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
   const own = ownCaptchas(window);
   // What is part of a CAPTCHA stays labeled between picks, can be held and
   // dragged, and, if it is a picture, is clicked at a point of it.
-  const local = ZendiaControls.find(window).flatMap(element => {
+  const controls = ZendiaControls.find(window);
+  const local = controls.flatMap(element => {
     const inCaptcha = inPageCaptcha(element, own);
     if (scope != "all" && !inCaptcha) {
       return [];
     }
-    const rect = element.getBoundingClientRect();
+    let rect = element.getBoundingClientRect();
+    if (inCaptcha && isPicture(rect)) {
+      rect = visibleRect(element);
+    }
     let text = null;
     return [
       {
@@ -314,24 +477,63 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
         rect,
         challenge: inCaptcha,
         drag: inCaptcha && ZendiaControls.isDraggable(window, element),
+        slider: inCaptcha && ZendiaControls.isSlider(element),
+        get track() {
+          return this.slider ? ZendiaControls.trackOf(element) : null;
+        },
         picture: inCaptcha && isPicture(rect),
         purpose: inCaptcha ? purposeOf(element) : null,
         pick: options => pressElement(window, element, { ...options, actor }),
       },
     ];
   });
+  if (scope != "all") {
+    // The pictures of the CAPTCHA that nothing listens to: one a site makes
+    // itself to click on or turn, a canvas a widget draws in. Their label
+    // brings the cursor over them.
+    const seen = new Set(controls);
+    for (const root of [...own, ...window.document.querySelectorAll(WIDGETS)]) {
+      for (const element of pictures(window, "img, canvas", root)) {
+        if (
+          seen.has(element) ||
+          controls.some(each => each.contains(element))
+        ) {
+          continue;
+        }
+        seen.add(element);
+        local.push({
+          key: element,
+          text: "",
+          rect: visibleRect(element),
+          challenge: true,
+          drag: false,
+          slider: false,
+          track: null,
+          picture: true,
+          purpose: null,
+          pick: () => false,
+        });
+      }
+    }
+  }
   const remote = (await collectFrames(actor, window))
-    .filter(
-      item =>
-        scope == "all" || (scope == "challenge" ? item.challenge : item.captcha)
-    )
+    .filter(item => {
+      if (scope == "all") {
+        return !item.canvas;
+      }
+      return scope == "challenge" ? item.challenge : item.captcha;
+    })
     .map(item => ({
       key: `${item.frame.join(".")}:${item.id}`,
       text: item.text,
       rect: item.rect,
       challenge: scope == "captcha" || item.challenge,
       drag: item.drag && (item.challenge || item.captcha),
-      picture: (item.challenge || item.captcha) && isPicture(item.rect),
+      slider: item.slider && (item.challenge || item.captcha),
+      track: item.track,
+      picture:
+        (item.challenge || item.captcha) &&
+        (item.canvas || isPicture(item.rect)),
       purpose: item.challenge || item.captcha ? item.purpose : null,
       pick: ({ newTab }) =>
         askFrame(actor, window, item.frame[0], "Zendia:PressControl", {
@@ -347,7 +549,9 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
     // labeled.
     matches(pattern) {
       return items.flatMap(item => {
-        const { key, rect, challenge, drag, picture, purpose, pick } = item;
+        const { key, rect, challenge, drag, slider, picture, purpose, pick } =
+          item;
+        const track = slider ? item.track : null;
         const found = pattern ? findMatches(item.text, pattern) : [];
         if (pattern && !found.length) {
           return [];
@@ -360,6 +564,8 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
             distance: distance(rect, from),
             challenge,
             drag,
+            slider,
+            track,
             picture,
             purpose,
             pick,
@@ -643,6 +849,8 @@ class JumpSession {
   // A line the prompt shows for a moment: a key with nothing to press.
   #notice = "";
   #noticeTimer = 0;
+  // Where the labels of this drawing are, for the next not to cover them.
+  #placed = [];
   // The answers the CAPTCHAs of the page had left when the jump began: one
   // more means one was solved, and the jump has done its work.
   #tokens = 0;
@@ -726,6 +934,13 @@ class JumpSession {
       return;
     }
     if (this.#pad) {
+      // The buttons every challenge has stay a key away under the cursor:
+      // <C-r> for a new challenge, and the rest with Ctrl too.
+      if (token.startsWith("<C-") && PURPOSE_KEYS[token] && this.#staying) {
+        this.#pad.finish();
+        this.#pressPurpose(PURPOSE_KEYS[token]);
+        return;
+      }
       this.#pad.handleKey(event);
       return;
     }
@@ -797,9 +1012,20 @@ class JumpSession {
   // The control of the challenge that does `purposes` (the first of them
   // found): verify, reload, the audio, its play button, the answer field.
   async #pressPurpose(purposes) {
-    const target = purposes
-      .map(purpose => this.#shown.find(each => each.purpose == purpose))
-      .find(Boolean);
+    const find = () =>
+      purposes
+        .map(purpose => this.#shown.find(each => each.purpose == purpose))
+        .find(Boolean);
+    let target = find();
+    if (!target && this.#staying) {
+      // A button the clicks just turned on (GeeTest's OK) was not there at
+      // the last look.
+      await this.#read(true);
+      if (this.#done) {
+        return;
+      }
+      target = find();
+    }
     if (!target) {
       this.#flash(`no ${PURPOSE_NAMES[purposes[0]]} here`);
       return;
@@ -902,8 +1128,22 @@ class JumpSession {
     if (hold || (target.picture && !options.press)) {
       this.#switching = false;
       if (hold) {
+        // A piece goes onto the challenge's picture: the cursor goes over
+        // it and the piece, not the whole of a popup that fills the window.
+        const slider = !!target.slider && !board;
+        const shownPictures = this.#shown
+          .filter(each => each.picture && each.challenge && each !== target)
+          .map(each => each.rect);
         await this.#point(true, {
+          areas:
+            !slider && !board && shownPictures.length
+              ? [...shownPictures, target.rect]
+              : null,
           grab: ZendiaCaptcha.middle(target.rect),
+          grabRect: target.rect,
+          slider,
+          track: target.track ?? null,
+          piece: target.slider ? this.#pieceOf(target) : null,
           lattice: board?.places ?? null,
         });
       } else {
@@ -942,7 +1182,18 @@ class JumpSession {
   // The mouse for the keyboard over the CAPTCHAs of the page: to click
   // where nothing has a label, or, with `drag`, to press the mouse at `grab`
   // (or at a point to choose) and move it with the keys.
-  async #point(drag, { grab = null, areas = null, lattice = null } = {}) {
+  async #point(
+    drag,
+    {
+      grab = null,
+      grabRect = null,
+      slider = false,
+      track = null,
+      piece = null,
+      areas = null,
+      lattice = null,
+    } = {}
+  ) {
     this.#switching = true;
     if (!areas) {
       try {
@@ -963,14 +1214,63 @@ class JumpSession {
     }
     this.#root?.remove();
     this.#root = null;
-    this.#pad = new PointerPad(this.#actor, this.#window, {
+    // A slider's handle is held within the challenge it slides in, for its
+    // ruler to reach across the picture.
+    if (grab && slider) {
+      const around = areas.find(
+        area =>
+          grab.x >= area.left &&
+          grab.x <= area.left + area.width &&
+          grab.y >= area.top &&
+          grab.y <= area.top + area.height
+      );
+      if (around) {
+        areas = [around];
+      }
+    }
+    const actor = this.#actor;
+    const window = this.#window;
+    this.#pad = new PointerPad(actor, window, {
       areas,
       drag,
       grab,
+      grabRect,
+      slider,
+      track,
+      piece,
       lattice,
+      // Over once the challenge is gone, or passed.
+      isThere: this.#staying
+        ? async shown =>
+            captchaTokens(window) <= this.#tokens &&
+            (await captchaIsThere(actor, window, shown))
+        : null,
+      onVerify: () => this.#pressPurpose(PURPOSE_KEYS["<CR>"]),
       onFinish: () => this.#resume(),
     });
     this.#vacant = 0;
+  }
+
+  // The piece a slider moves: the one of its challenge right above the
+  // handle and about as far along, if one has a label.
+  #pieceOf(handle) {
+    const x = handle.rect.left + handle.rect.width / 2;
+    return (
+      this.#shown
+        .filter(
+          each =>
+            each !== handle &&
+            each.challenge &&
+            !each.picture &&
+            !each.purpose &&
+            each.rect.bottom <= handle.rect.top + 2 &&
+            each.rect.width <= handle.rect.width * 3 &&
+            Math.abs(each.rect.left + each.rect.width / 2 - x) <=
+              Math.max(handle.rect.width, each.rect.width) / 2
+        )
+        .map(each => each.rect)
+        .sort((a, b) => b.top - a.top)[0] ?? null
+    );
   }
 
   // The places of the board a piece sits on, found from the pieces that are
@@ -1140,6 +1440,7 @@ class JumpSession {
     const window = this.#window;
     const document = window.document;
     this.#root?.remove();
+    this.#placed = [];
     const root = document.createElementNS(HTML_NS, "div");
     root.style.cssText =
       "all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;";
@@ -1231,6 +1532,22 @@ class JumpSession {
     } else if (this.#source.isText) {
       left = rect.right;
       top = rect.top;
+    } else {
+      // Two controls with one corner (a widget and the button filling it)
+      // would show one label over the other: the later one moves along.
+      for (
+        let tries = 0;
+        tries < 4 &&
+        this.#placed.some(
+          other =>
+            Math.abs(other.left - left) < width &&
+            Math.abs(other.top - top) < 16
+        );
+        tries++
+      ) {
+        left += width + 2;
+      }
+      this.#placed.push({ left, top });
     }
     style(tag, {
       position: "absolute",
@@ -1251,10 +1568,13 @@ class JumpSession {
   #prompt(text) {
     const tag = this.#window.document.createElementNS(HTML_NS, "span");
     tag.textContent = text;
+    // At the bottom, unless what is labeled is there: then at the top.
+    const band = this.#window.innerHeight - PROMPT_BAND;
+    const below = this.#shown.some(target => target.rect.bottom > band);
     style(tag, {
       position: "absolute",
       left: "50%",
-      bottom: "16px",
+      [below ? "top" : "bottom"]: "16px",
       transform: "translateX(-50%)",
       // On one line, unless the window is too narrow for it.
       width: "max-content",
@@ -1325,13 +1645,25 @@ const labelControls = (id, options) => async context => {
     controlsSource(window, actor, { scope: captcha ? "captcha" : "all" });
   const source = await makeSource();
   if (captcha && !source.matches("").length) {
-    // Nothing to label: a picture drawn in a canvas, say. What is left is
-    // the mouse.
+    // Nothing to label: a picture drawn in a canvas, say, or a button to
+    // hold that answers no clicks. What is left is the cursor, over the
+    // CAPTCHA, or over the page if there is none to be found.
     let areas = await captchaAreas(actor, window);
-    if (!areas.length) {
+    const found = !!areas.length;
+    if (!found) {
       areas = [plainRect(0, 0, window.innerWidth, window.innerHeight)];
     }
-    actor.startCapture(new PointerPad(actor, window, { areas, drag: false }));
+    actor.startCapture(
+      new PointerPad(actor, window, {
+        areas,
+        drag: false,
+        notice: found ? "" : "no CAPTCHA found: the cursor is on the page",
+        onVerify: found
+          ? () => actions["captcha.verify"]({ actor, window })
+          : null,
+        isThere: found ? shown => captchaIsThere(actor, window, shown) : null,
+      })
+    );
     return;
   }
   actor.startCapture(

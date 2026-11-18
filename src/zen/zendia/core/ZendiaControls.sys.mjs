@@ -50,13 +50,21 @@ const DRAG_CURSORS = new Set([
 const HANDS = new Set(["pointer", ...DRAG_CURSORS]);
 const DRAG_NAME =
   /slider|handle|knob|thumb|drag|puzzle|jigsaw|press-?(?:and-?)?hold/i;
+// What a button to hold down says, and how much of its text is read.
+const HOLD_WORDS =
+  /\bpress\s*(?:&|and)\s*hold\b|\b(?:click|tap) and hold\b|\bhold (?:the|this) button\b/i;
+const HOLD_TEXT_MAX = 80;
+// The handles that slide along a track, by their names: GeeTest's
+// slider_button, Tencent's tc-slider-normal, Yidun's yidun_slider.
+const SLIDER_NAME = /slid|knob|thumb/i;
 
 // A slider's handle by its shape, as its markup and cursor can be anything:
-// a knob, flush with the end of a track that is much longer than it is thick.
-function sitsInATrack(element) {
+// a knob, flush with the end of a track that is much longer than it is
+// thick. The track, if it is one.
+function trackOf(element) {
   const knob = element.getBoundingClientRect();
   if (knob.height < 28 || knob.width < 28) {
-    return false;
+    return null;
   }
   let track = ZendiaDom.composedParent(element);
   for (let level = 0; track && level < 3; level++) {
@@ -73,11 +81,15 @@ function sitsInATrack(element) {
         other => other !== element && !element.contains(other)
       )
     ) {
-      return true;
+      return box;
     }
     track = ZendiaDom.composedParent(track);
   }
-  return false;
+  return null;
+}
+
+function sitsInATrack(element) {
+  return !!trackOf(element);
 }
 
 const MIN_SIZE = 4;
@@ -264,6 +276,47 @@ export const ZendiaControls = {
       DRAG_CURSORS.has(window.getComputedStyle(element).cursor) ||
       element.matches("[role=slider], [draggable=true]") ||
       DRAG_NAME.test(
+        `${element.getAttribute("class") ?? ""} ${element.id ?? ""}`
+      ) ||
+      // A button that says it is to be held: HUMAN's "Press & Hold".
+      HOLD_WORDS.test(
+        `${element.getAttribute("aria-label") ?? ""} ${(element.textContent ?? "").slice(0, HOLD_TEXT_MAX)}`
+      ) ||
+      sitsInATrack(element)
+    );
+  },
+
+  /**
+   * The track a slider's handle goes along: the box that is much longer
+   * than the handle and holds it at one end, or, for one known by its role
+   * or name alone, the box it sits in.
+   *
+   * @param {Element} element The handle.
+   * @returns {{left: number, top: number, width: number, height: number}|null}
+   */
+  trackOf(element) {
+    const box =
+      trackOf(element) ??
+      ZendiaDom.composedParent(element)?.getBoundingClientRect?.();
+    if (!box) {
+      return null;
+    }
+    const { left, top, width, height } = box;
+    return { left, top, width, height };
+  },
+
+  /**
+   * Whether a control is a slider's handle, which only goes along its track:
+   * by its role, its name, or a knob flush with the end of a track. A puzzle
+   * piece moved anywhere is draggable but no slider.
+   *
+   * @param {Element} element
+   * @returns {boolean}
+   */
+  isSlider(element) {
+    return (
+      element.matches("[role=slider], input[type=range]") ||
+      SLIDER_NAME.test(
         `${element.getAttribute("class") ?? ""} ${element.id ?? ""}`
       ) ||
       sitsInATrack(element)
