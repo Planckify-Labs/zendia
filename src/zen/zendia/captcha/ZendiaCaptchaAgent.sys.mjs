@@ -48,7 +48,8 @@ const SHOT_QUALITY = 0.8;
 // widget's words stay readable; never taller than this.
 const SHOT_MIN_SCALE = 2;
 const SHOT_MAX_HEIGHT = 1600;
-// The room the shot leaves around the challenge, in the page's pixels.
+// The room the shot leaves around the challenge, in the page's pixels (the
+// page side leaves the room around each part, inside the challenge).
 const SHOT_PADDING = 12;
 // How long asking the page where the challenge is may take before the whole
 // page is shot instead.
@@ -65,7 +66,11 @@ const CHALLENGE_MIN_HEIGHT = 260;
 // How long what a click opened in the page may take to come up and stop
 // moving before it is shot.
 const OPENED_SETTLE_MS = 1000;
-const OPENED_PICTURELESS_MS = 3000;
+const OPENED_PICTURELESS_MS = 6000;
+// How long the parts may wait for the last of their pictures to be drawn
+// and to hold still, and how far apart the looks for the latter are.
+const PARTS_DRAW_MS = 3000;
+const PARTS_STILL_MS = 250;
 
 // About how wide a page in the panel is, for the page's height guess.
 const PANEL_WIDTH = 380;
@@ -277,11 +282,25 @@ class ZendiaCaptchaAgentService {
     const inputs = ZendiaAgents.inputsOf?.(conversation.agent?.id);
     const sees = !inputs || inputs.includes("image");
     const picture = sees ? (shot ?? shown) : null;
-    const prompt = this.#prompt(record, picture);
-    const files = picture
-      ? [{ name: "captcha-challenge.jpg", bytes: picture.bytes }]
-      : [];
-    const echo = `CAPTCHA on this tab: ${record.text}. You complete the challenge; the assistant only looks at it.`;
+    const parts = picture?.parts?.area ? picture.parts : null;
+    const said = shot?.parts?.instruction?.text ?? null;
+    const prompt = this.#prompt(record, picture, parts, said);
+    let files = [];
+    if (parts) {
+      files = [{ name: "captcha-challenge-area.jpg", bytes: parts.area.bytes }];
+      // The instruction's words are in the request; its picture goes too
+      // only where it shows what words cannot: an example to match, icons
+      // to click in order.
+      if (parts.instruction?.shot && parts.instruction.pictures) {
+        files.push({
+          name: "captcha-instruction-example.jpg",
+          bytes: parts.instruction.shot.bytes,
+        });
+      }
+    } else if (picture) {
+      files = [{ name: "captcha-challenge.jpg", bytes: picture.bytes }];
+    }
+    const echo = `CAPTCHA on this tab: ${record.text}.${said ? ` It asks: "${said}"` : ""} You complete the challenge; the assistant only looks at it.`;
     for (let tries = 0; tries < SEND_TRIES; tries++) {
       const before = conversation.messages.length;
       await conversation.send(prompt, files, { echo });
@@ -320,24 +339,61 @@ class ZendiaCaptchaAgentService {
   /**
    * The challenge of a tab as the subagent photographs it: made ready
    * (waited for, opened from its checkbox, waited on until drawn), then
-   * shot, cut to the challenge where a frame of the tab says where it is.
+   * shot, cut to the challenge where a frame of the tab says where it is,
+   * and cut again into the area to act on and its instruction.
    * The tab must be in front: a background tab has nothing drawn.
    *
    * @param {Element} browser
    * @param {number} [maxWidth]
    * @returns {Promise<{data: string, bytes: Uint8Array, width: number,
-   *   height: number, cropped: boolean}|null>} The JPEG, as base64 and as
-   *   bytes, and its size; null when the tab has nothing to shoot.
+   *   height: number, cropped: boolean, parts: object|null}|null>} The
+   *   JPEG, as base64 and as bytes, and its size; with its parts where the
+   *   challenge has pictures: the area to act on, shot alone, and the
+   *   instruction, its words and its shot. Null when the tab has nothing
+   *   to shoot.
    */
   async captureChallenge(browser, maxWidth = SHOT_MAX_WIDTH) {
     await this.#prepareChallenge(browser);
-    return this.#screenshot(browser, maxWidth);
+    const shot = await this.#screenshot(browser, maxWidth);
+    if (shot?.area) {
+      shot.parts = await this.#shootParts(browser, shot.area, maxWidth).catch(
+        (e) => {
+          console.error("Zendia: CAPTCHA subagent could not cut the parts", e);
+          return null;
+        },
+      );
+    }
+    return shot;
   }
 
   // The screenshot of the challenge as a page in the chat: the picture
-  // says what the text of a finding cannot. A picture too big for a panel
-  // page is retaken smaller. The shot shown, or null.
+  // says what the text of a finding cannot. Where the challenge came apart,
+  // its instruction in words above the area to act on, shot alone: the
+  // instruction is read, not shown again. A page too big for the panel is
+  // the whole challenge again, retaken smaller. The shot shown, or null.
   async #showShot(browser, conversation, record, shot) {
+    const parts = shot?.parts;
+    if (parts?.area) {
+      const said = parts.instruction;
+      const tall = (picture) =>
+        Math.round((picture.height * PANEL_WIDTH) / picture.width);
+      try {
+        conversation.showPage(
+          pageFromArgs({
+            title: `CAPTCHA: ${record.text.slice(0, 80)}`,
+            height:
+              tall(parts.area) +
+              (said?.text ? 28 * Math.ceil(said.text.length / 40) : 0) +
+              44,
+            css: "figure { margin: 0; } img { display: block; width: 100%; border: 0.5px solid var(--color-border-tertiary); border-radius: 8px; } .ask { margin: 0 0 8px; font-weight: 600; } figcaption { margin-top: 6px; }",
+            html: `<figure>${said?.text ? `<p class="ask">${escapeHtml(said.text)}</p>` : ""}<img src="data:image/jpeg;base64,${parts.area.data}" alt="The part of the challenge to act on"><figcaption>${escapeHtml(record.text)}</figcaption></figure>`,
+          }),
+        );
+        return shot;
+      } catch {
+        // Over 512 KB: the whole challenge, smaller, below.
+      }
+    }
     for (const maxWidth of [SHOT_MAX_WIDTH, SHOT_FALLBACK_WIDTH]) {
       if (maxWidth != SHOT_MAX_WIDTH) {
         shot = await this.#screenshot(browser, maxWidth).catch(() => null);
@@ -530,7 +586,9 @@ class ZendiaCaptchaAgentService {
       { peek: true },
       (answer) => {
         result.checkbox ||= !!answer?.checkbox;
-        result.passed ||= !!answer?.passed;
+        // A managed check that failed or expired comes to nothing more:
+        // shot as it is, like a pass.
+        result.passed ||= !!answer?.passed || !!answer?.done;
         return result.passed;
       },
     );
@@ -544,6 +602,10 @@ class ZendiaCaptchaAgentService {
   async #drawn(area) {
     if (!area.frame) {
       return !!area.drawn;
+    }
+    // A frame whose box still fades in is not drawn, however ready it is.
+    if (area.arriving) {
+      return false;
     }
     const context =
       area.frameId != null ? BrowsingContext.get(area.frameId) : null;
@@ -650,21 +712,7 @@ class ZendiaCaptchaAgentService {
       // drawSnapshot reads the document's coordinates, the rect the
       // viewport's: the frame's scroll moves between them on a scrolled
       // page.
-      const scrollX = area.scrollX ?? 0;
-      const scrollY = area.scrollY ?? 0;
-      const left = Math.max(scrollX, area.left + scrollX - SHOT_PADDING);
-      const top = Math.max(scrollY, area.top + scrollY - SHOT_PADDING);
-      const right = Math.min(
-        scrollX + viewWidth,
-        area.left + scrollX + area.width + SHOT_PADDING,
-      );
-      const bottom = Math.min(
-        scrollY + viewHeight,
-        area.top + scrollY + area.height + SHOT_PADDING,
-      );
-      if (right > left && bottom > top) {
-        rect = new window.DOMRect(left, top, right - left, bottom - top);
-      }
+      rect = this.#inDocument(window, area, area, SHOT_PADDING);
     } else if (this.#lastFrame.get(browser)?.context.currentWindowGlobal) {
       // Nothing answers now, but the challenge was last seen in a sub-frame
       // (a click there replaced its widget with a puzzle the layer has no
@@ -688,20 +736,20 @@ class ZendiaCaptchaAgentService {
     say(
       `shot: rect=${rect ? `${Math.round(rect.width)}x${Math.round(rect.height)}` : "full page"} view=${Math.round(viewWidth)}x${Math.round(viewHeight)}`,
     );
-    // A small widget is drawn bigger than the screen has it, so its words
-    // stay readable to the agent; none wider than maxWidth, nor taller
-    // than SHOT_MAX_HEIGHT.
     const scale = rect
-      ? Math.min(
-          Math.max(window.devicePixelRatio, SHOT_MIN_SCALE),
-          maxWidth / rect.width,
-          SHOT_MAX_HEIGHT / rect.height,
-        )
+      ? this.#scaleFor(window, rect, maxWidth)
       : Math.min(window.devicePixelRatio, maxWidth / viewWidth);
+    const shot = await this.#encode(window, global, rect, scale);
+    return shot && { ...shot, cropped: !!rect, area };
+  }
+
+  // A part of a frame drawn as a JPEG, as base64 and as bytes, with its
+  // size. drawSnapshot reads the frame's document coordinates.
+  async #encode(window, global, rect, scale) {
     const image = await global.drawSnapshot(rect, scale, "white");
     // Handing the bitmap to the canvas empties it.
-    const { width: shotWidth, height: shotHeight } = image;
-    const canvas = new window.OffscreenCanvas(shotWidth, shotHeight);
+    const { width, height } = image;
+    const canvas = new window.OffscreenCanvas(width, height);
     canvas
       .getContext("bitmaprenderer", { alpha: false })
       .transferFromImageBitmap(image);
@@ -714,13 +762,120 @@ class ZendiaCaptchaAgentService {
     for (let i = 0; i < bytes.length; i += 0x8000) {
       binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
     }
-    return {
-      data: window.btoa(binary),
-      bytes,
-      width: shotWidth,
-      height: shotHeight,
-      cropped: !!rect,
-    };
+    return { data: window.btoa(binary), bytes, width, height };
+  }
+
+  // The scale a part is drawn at: bigger than the screen has a small one,
+  // so its words stay readable to the agent; none wider than maxWidth,
+  // nor taller than SHOT_MAX_HEIGHT.
+  #scaleFor(window, rect, maxWidth) {
+    return Math.min(
+      Math.max(window.devicePixelRatio, SHOT_MIN_SCALE),
+      maxWidth / rect.width,
+      SHOT_MAX_HEIGHT / rect.height,
+    );
+  }
+
+  // A rect of a frame's viewport, with room around, in the frame's
+  // document coordinates and inside its view; null when nothing is left.
+  #inDocument(window, rect, view, padding) {
+    const scrollX = view.scrollX ?? 0;
+    const scrollY = view.scrollY ?? 0;
+    const left = Math.max(scrollX, rect.left + scrollX - padding);
+    const top = Math.max(scrollY, rect.top + scrollY - padding);
+    const right = Math.min(
+      scrollX + view.viewWidth,
+      rect.left + scrollX + rect.width + padding,
+    );
+    const bottom = Math.min(
+      scrollY + view.viewHeight,
+      rect.top + scrollY + rect.height + padding,
+    );
+    return right > left && bottom > top
+      ? new window.DOMRect(left, top, right - left, bottom - top)
+      : null;
+  }
+
+  // The challenge in its two parts, each drawn alone: the area to act on
+  // (the grid, the puzzle) and its instruction, with the instruction's
+  // words read from its text. Asked of the frame the challenge is drawn
+  // in: a CAPTCHA's own frame, or the page that drew it. Null when the
+  // challenge has no pictures to tell them apart by (a checkbox, a check
+  // running on its own).
+  async #shootParts(browser, area, maxWidth) {
+    const window = this.#windowFor(browser);
+    const context =
+      area.frame && area.frameId != null
+        ? BrowsingContext.get(area.frameId)
+        : area.context;
+    const global = context?.currentWindowGlobal;
+    const actor = global?.getActor("ZendiaCaptchaWatch");
+    if (!window || !actor) {
+      return null;
+    }
+    const ask = (name, data) =>
+      Promise.race([
+        actor.sendQuery(name, data),
+        new Promise((resolve) => setTimeout(resolve, RECT_TIMEOUT_MS)),
+      ]).catch(() => null);
+    // The parts are shot drawn: a CAPTCHA's own frame says so of all its
+    // pictures, the example in its instruction too, which can come after
+    // the grid. A page that drew it said so with the challenge's place.
+    for (
+      const until = Date.now() + PARTS_DRAW_MS;
+      Date.now() < until;
+      await new Promise((resolve) => setTimeout(resolve, CHALLENGE_POLL_MS / 2))
+    ) {
+      const answer = await ask("Zendia:CaptchaWatch:Drawn", { any: true });
+      if (!answer || answer.drawn) {
+        break;
+      }
+    }
+    let parts = await ask("Zendia:CaptchaWatch:Parts");
+    // And holding still: two looks a moment apart find every picture in
+    // the same place, so tiles a script slides in are not shot halfway.
+    for (const until = Date.now() + PARTS_DRAW_MS; parts && Date.now() < until; ) {
+      await new Promise((resolve) => setTimeout(resolve, PARTS_STILL_MS));
+      const again = await ask("Zendia:CaptchaWatch:Parts");
+      if (!again || again.still == parts.still) {
+        parts = again ?? parts;
+        break;
+      }
+      parts = again;
+    }
+    const areaRect =
+      parts?.area && this.#inDocument(window, parts.area, parts, 0);
+    if (!areaRect) {
+      return null;
+    }
+    const shot = await this.#encode(
+      window,
+      global,
+      areaRect,
+      this.#scaleFor(window, areaRect, maxWidth),
+    );
+    let instruction = null;
+    if (parts.instruction?.text) {
+      const rect =
+        parts.instruction.rect &&
+        this.#inDocument(window, parts.instruction.rect, parts, 0);
+      instruction = {
+        text: parts.instruction.text,
+        pictures: parts.instruction.pictures ?? 0,
+        shot: rect
+          ? await this.#encode(
+              window,
+              global,
+              rect,
+              this.#scaleFor(window, rect, maxWidth),
+            )
+          : null,
+      };
+    }
+    say(
+      `parts: area=${Math.round(areaRect.width)}x${Math.round(areaRect.height)} instruction=${JSON.stringify(instruction?.text ?? null)}`,
+    );
+    return { area: shot, instruction };
   }
 
   // The tab with the challenge, in front, with its chat open beside it.
@@ -736,19 +891,29 @@ class ZendiaCaptchaAgentService {
   }
 
   // The turn the agent gets: look at the challenge, say what it asks. With
-  // the picture attached, that is where it looks first: the challenge cut
-  // from the page, sharper than a shot of the whole tab.
-  #prompt(record, picture) {
-    const look = picture?.cropped
-      ? `1. Look at the attached picture first: it is the challenge cut from the page, drawn larger than on screen. Call page_screenshot only if you cannot view the picture or it does not show the challenge (page_observe if your model cannot see images).`
-      : `1. Call page_screenshot to look at the challenge (page_observe if your model cannot see images).`;
+  // the pictures attached, that is where it looks first: the area to act
+  // on and the instruction, each cut from the page, sharper than a shot of
+  // the whole tab; or the whole challenge, where it did not come apart.
+  // The instruction's words, read from the page, go in the request.
+  #prompt(record, picture, parts, said) {
+    let look = `1. Call page_screenshot to look at the challenge (page_observe if your model cannot see images).`;
+    if (parts) {
+      look = `1. Look at the attached pictures first, each cut from the page and drawn larger than on screen: captcha-challenge-area.jpg is only the part of the challenge to act on (its images, puzzle or distorted text)${parts.instruction?.shot && parts.instruction.pictures ? `; captcha-instruction-example.jpg is the instruction's own picture (an example to match, icons to click in order)` : ""}. Call page_screenshot only if you cannot view them or they do not show the challenge (page_observe if your model cannot see images).`;
+    } else if (picture?.cropped) {
+      look = `1. Look at the attached picture first: it is the challenge cut from the page, drawn larger than on screen. Call page_screenshot only if you cannot view the picture or it does not show the challenge (page_observe if your model cannot see images).`;
+    }
     return [
       `You are the browser's CAPTCHA assistant. The watch layer found a CAPTCHA on the tab you work on: ${record.text}. Page: ${record.url}.`,
+      said
+        ? `The challenge's instruction, read from its own text: "${said}" Quote it as it is; do not guess another.`
+        : null,
       `The user has the tab in front of them and was just shown a screenshot of it in the panel. Where the challenge opens from a checkbox, it was clicked for them already, so the challenge is open and waiting. They complete it themselves: never click, fill, press or scroll the challenge, and never navigate the tab away.`,
       `Do exactly this:
 ${look}
-2. Answer in at most three short sentences: which service the challenge is from (or that the page draws it itself), what it asks the user to do (pick images, type the characters, slide a piece into place, press and hold, check a box), and where on the page it sits. If the check looks invisible, runs on its own (a progress bar, "Verifying"), or already passed, say that instead.`,
-    ].join("\n\n");
+2. Answer in at most three short sentences: which service the challenge is from (or that the page draws it itself), what it asks the user to do${said ? ", in the instruction's own words," : ""} (pick images, type the characters, slide a piece into place, press and hold, check a box),${parts ? " what the area to act on shows," : ""} and where on the page it sits. If the check looks invisible, runs on its own (a progress bar, "Verifying"), or already passed, say that instead.`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   }
 
   // The window a tab's browser is in, found as the watch finds it: the

@@ -15,6 +15,14 @@ import { ZendiaCaptcha } from "resource:///modules/zendia/core/ZendiaCaptcha.sys
 const MIN_SIDE = 20;
 // The least a side of a challenge's picture can be: smaller is an icon.
 const PICTURE_SIDE = 40;
+// How opaque a challenge is at the least once it is in: less is a fade.
+const FADED = 0.95;
+// The room left around each part of a challenge, inside it.
+const PART_ROOM = 4;
+// The most a side of a button's icon is.
+const ICON_SIDE = 64;
+// The least a side of the area a task is drawn in, found with no picture.
+const TASK_SIDE = 100;
 // A widget smaller than this is a button of a bigger card (AWS WAF's
 // Begin, HUMAN's Press & Hold): the shot takes the card around it.
 const SMALL_WIDTH = 200;
@@ -605,34 +613,125 @@ function isCaptchaFrame(window) {
   );
 }
 
-// Whether the pictures an element holds are loaded, those that are shown.
+// Whether the pictures an element holds are loaded, those that are shown:
+// its images, and the background images it is painted with (reCAPTCHA's
+// example picture, hCaptcha's tiles), which no element says the load of.
 function picturesLoaded(window, element) {
   const images = [
     ...(element.localName == "img" ? [element] : []),
     ...element.querySelectorAll("img"),
   ].filter((image) => image.checkVisibility(VISIBILITY));
-  return images.every((image) => image.complete && image.naturalWidth > 0);
+  return (
+    images.every((image) => image.complete && image.naturalWidth > 0) &&
+    backgroundsLoaded(window, element)
+  );
+}
+
+// Per document, an image per background picture's address, loading it as
+// the page does: complete once the page's own has loaded (or failed).
+const backgroundProbes = new WeakMap();
+const BACKGROUND_URLS = /url\(\s*(["']?)([^"')]+)\1\s*\)/g;
+
+function backgroundsLoaded(window, root) {
+  let probes = backgroundProbes.get(window.document);
+  if (!probes) {
+    probes = new Map();
+    backgroundProbes.set(window.document, probes);
+  }
+  const elements = [root, ...root.querySelectorAll("*")];
+  if (elements.length > MAX_EXTENT_ELEMENTS) {
+    return true;
+  }
+  for (const element of elements) {
+    const painted = window.getComputedStyle(element)?.backgroundImage;
+    if (!painted?.includes("url(")) {
+      continue;
+    }
+    const { width, height } = element.getBoundingClientRect();
+    if (width < MIN_SIDE || height < MIN_SIDE) {
+      continue;
+    }
+    if (!element.checkVisibility(VISIBILITY)) {
+      continue;
+    }
+    for (const [, , url] of painted.matchAll(BACKGROUND_URLS)) {
+      let probe = probes.get(url);
+      if (!probe) {
+        // Ready once decoded, as the page paints it, or once it failed:
+        // a picture that never comes is no wait.
+        const image = new window.Image();
+        probe = { ready: false };
+        image.src = url;
+        image.decode().then(
+          () => (probe.ready = true),
+          () => (probe.ready = true),
+        );
+        probes.set(url, probe);
+      }
+      if (!probe.ready) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Whether an element is still on its way in: a fade or a slide that ends
+// (a spinner that never does is no wait), of it, what it holds, or what
+// holds it (hCaptcha fades in the box around its frame). A challenge shot
+// mid-fade shows its pictures half drawn.
+function arriving(element) {
+  const ends = (animation) =>
+    animation.playState == "running" &&
+    Number.isFinite(animation.effect?.getComputedTiming().endTime);
+  try {
+    if (element.getAnimations({ subtree: true }).some(ends)) {
+      return true;
+    }
+    // A fade a script runs is no animation; it shows as a box not yet
+    // fully opaque.
+    let opacity = 1;
+    for (let node = element; node; node = node.parentElement) {
+      if (node != element && node.getAnimations().some(ends)) {
+        return true;
+      }
+      opacity *= Number(node.ownerGlobal?.getComputedStyle(node)?.opacity ?? 1);
+    }
+    if (opacity < FADED) {
+      return true;
+    }
+  } catch {
+    // An element that is going away.
+  }
+  return false;
 }
 
 // How many pictures big enough to be a challenge's an element shows,
-// loaded: what a puzzle that opens shows once it is past its spinner.
+// loaded: what a puzzle that opens shows once it is past its spinner. A
+// box painted with a background image (GeeTest's) is one.
 function picturesShown(window, element) {
   let count = 0;
-  for (const picture of [
-    element,
-    ...element.querySelectorAll("img, canvas, video, svg image"),
-  ]) {
-    if (!["img", "canvas", "video", "image"].includes(picture.localName)) {
+  for (const picture of [element, ...element.querySelectorAll("*")]) {
+    const tag = picture.localName;
+    const painted =
+      !["img", "canvas", "video", "image"].includes(tag) &&
+      picture.childElementCount <= 1;
+    if (!["img", "canvas", "video", "image"].includes(tag) && !painted) {
       continue;
     }
     const { width, height } = picture.getBoundingClientRect();
     if (
-      width >= PICTURE_SIDE &&
-      height >= PICTURE_SIDE &&
-      picture.checkVisibility(VISIBILITY) &&
-      (picture.localName != "img" ||
-        (picture.complete && picture.naturalWidth > 0))
+      width < PICTURE_SIDE ||
+      height < PICTURE_SIDE ||
+      !picture.checkVisibility(VISIBILITY) ||
+      (painted &&
+        !window
+          .getComputedStyle(picture)
+          ?.backgroundImage.startsWith("url("))
     ) {
+      continue;
+    }
+    if (tag != "img" || (picture.complete && picture.naturalWidth > 0)) {
       count++;
     }
   }
@@ -707,6 +806,7 @@ export function challengeRect(window) {
             : boxAround(window, element, WIDGET_LEVELS, WIDGET_GROWTH);
       }
       const isFrame = kind <= 1;
+      lastTargets.set(document, target);
       // What a page draws reaches as far as its popups; a frame is its box.
       const reach = () =>
         isFrame ? target.getBoundingClientRect() : extentOf(window, target);
@@ -744,7 +844,8 @@ export function challengeRect(window) {
         frame: isFrame,
         own: kind >= 3,
         inside: isCaptchaFrame(window),
-        drawn: isFrame || picturesLoaded(window, target),
+        drawn: isFrame || (picturesLoaded(window, target) && !arriving(target)),
+        arriving: arriving(target),
         pictures: isFrame ? null : picturesShown(window, target),
         frameId: isFrame ? (element.browsingContext?.id ?? null) : null,
       };
@@ -841,9 +942,9 @@ function isChecked(control) {
   );
 }
 
-// The checkbox frame of a service (reCAPTCHA, hCaptcha, Yandex), from
-// inside it. Never a top page: a service's own website is none. The
-// managed and invisible ones have nothing to open.
+// The checkbox frame of a service (reCAPTCHA, hCaptcha, Yandex, Turnstile),
+// from inside it. Never a top page: a service's own website is none. The
+// invisible ones have nothing to open.
 function frameCheckbox(window, peek) {
   if (window.parent == window) {
     return null;
@@ -851,12 +952,16 @@ function frameCheckbox(window, peek) {
   const document = window.document;
   const url = document.documentURI ?? "";
   const name = ZendiaCaptcha.nameOf(url);
+  const kind = ZendiaCaptcha.kindOf(url);
   if (
     !name ||
     ZendiaCaptcha.isChallenge(url) ||
-    ZendiaCaptcha.kindOf(url) != "checkbox"
+    (kind != "checkbox" && kind != "managed")
   ) {
     return null;
+  }
+  if (kind == "managed") {
+    return managedCheckbox(window, peek, name);
   }
   const control =
     document.querySelector("#recaptcha-anchor") ??
@@ -868,6 +973,63 @@ function frameCheckbox(window, peek) {
   }
   if (control.getAttribute("aria-checked") == "true") {
     return { passed: true };
+  }
+  if (peek) {
+    return { checkbox: true };
+  }
+  control.click();
+  return { opened: true, name };
+}
+
+// Every element under a root, those in shadow roots too, open or closed:
+// Turnstile draws all of its widget in a closed one.
+function* deepElements(root) {
+  for (const element of root.querySelectorAll("*")) {
+    yield element;
+    const shadow = element.openOrClosedShadowRoot;
+    if (shadow) {
+      yield* deepElements(shadow);
+    }
+  }
+}
+
+// What a managed widget's words say it is at: done and passed, done and
+// failed (nothing more comes of it), or still checking.
+const MANAGED_PASSED = /^(?:success!?|verified|you are verified)$/i;
+const MANAGED_FAILED =
+  /^(?:verification (?:failed|expired)|failed|expired|error)\b/i;
+
+// Turnstile's "Verify you are human": a checkbox in a label, shown only
+// when Cloudflare wants the click; its other states are words in the same
+// widget. A managed check that shows no checkbox is running on its own.
+function managedCheckbox(window, peek, name) {
+  const document = window.document;
+  let control = null;
+  for (const element of deepElements(document)) {
+    if (
+      element.localName == "input" &&
+      element.type == "checkbox" &&
+      !control
+    ) {
+      const holder = element.closest("label") ?? element;
+      if (clickable(window, holder)) {
+        control = holder;
+      }
+    } else if (
+      element.childElementCount == 0 &&
+      element.checkVisibility(VISIBILITY)
+    ) {
+      const words = clean(element.textContent);
+      if (MANAGED_PASSED.test(words)) {
+        return { passed: true };
+      }
+      if (MANAGED_FAILED.test(words)) {
+        return { done: true };
+      }
+    }
+  }
+  if (!control) {
+    return null;
   }
   if (peek) {
     return { checkbox: true };
@@ -942,6 +1104,423 @@ export function openChallenge(window, peek = false) {
   return frameCheckbox(window, peek) ?? pageCheckbox(window, peek);
 }
 
+// Per document, the element challengeRect last chose to shoot, for the
+// parts of it the subagent asks for next.
+const lastTargets = new WeakMap();
+
+// The words that say what to do, in an instruction no prompt rule knows:
+// "Choose all the bags", "Fit the piece to get verified".
+const INSTRUCTION_WORDS =
+  /\b(?:select|click|tap|pick|choose|drag|slide|move|type|enter|rotate|turn|fit|match|identify|find|solve|complete|press|hold|draw|connect|count|listen)\b/i;
+// What a challenge says that is not its instruction.
+const NOT_INSTRUCTION =
+  /^(?:powered by|privacy|terms|help|feedback|report|reload|refresh|verify|skip|next|submit|confirm|ok|done|apply|select language|english)\b|©/i;
+// The most an instruction says, and how much of a challenge it may cover.
+const INSTRUCTION_MAX = 300;
+const INSTRUCTION_SHARE = 0.45;
+
+// The pictures of a challenge, where a script cannot read what they show:
+// images, canvases, videos, big SVGs, and boxes painted with a background
+// image (hCaptcha's tiles). Each with the part of it that is seen, for a
+// tile is often a whole picture shifted inside a box that cuts it.
+function picturesOf(window, root) {
+  const pictures = [];
+  for (const element of [root, ...root.querySelectorAll("*")]) {
+    if (pictures.length > MAX_EXTENT_ELEMENTS) {
+      break;
+    }
+    const rect = element.getBoundingClientRect();
+    if (rect.width < PICTURE_SIDE || rect.height < PICTURE_SIDE) {
+      continue;
+    }
+    const tag = element.localName;
+    const picture =
+      tag == "img" ||
+      tag == "canvas" ||
+      tag == "video" ||
+      tag == "svg" ||
+      (element.childElementCount <= 1 &&
+        window.getComputedStyle(element)?.backgroundImage.startsWith("url("));
+    // An icon of a button (reload, audio, help) is no picture of the task;
+    // a tile that is a button is.
+    const icon =
+      rect.width < ICON_SIDE &&
+      rect.height < ICON_SIDE &&
+      element.closest("button, [role=button], a[href]");
+    if (!picture || icon || !element.checkVisibility(VISIBILITY)) {
+      continue;
+    }
+    const seen = visibleRect(window, element, rect, { viewport: false });
+    if (seen && seen.width >= PICTURE_SIDE && seen.height >= PICTURE_SIDE) {
+      pictures.push({ element, rect: seen });
+    }
+  }
+  return pictures;
+}
+
+// An instruction's words as one line: "Select all images with" and
+// "cars" on lines of their own join as one sentence, the next sentence
+// after a stop.
+function instructionText(element) {
+  const lines = String(element.innerText ?? element.textContent ?? "")
+    .split(/\n+/)
+    .map((line) => clean(line))
+    // A button's "+" or "×" in it says nothing.
+    .filter((line) => /[\p{L}\p{N}]/u.test(line));
+  let text = "";
+  for (const line of lines) {
+    if (!text) {
+      text = line;
+    } else if (/^[A-Z\u00C0-\u00DE]/.test(line) && !/[.!?:]$/.test(text)) {
+      text += `. ${line}`;
+    } else {
+      text += ` ${line}`;
+    }
+  }
+  return text.slice(0, INSTRUCTION_MAX);
+}
+
+/**
+ * The instruction of a challenge, inside its root: the element whose
+ * words say what to do. A prompt a rule knows first ("Select all images
+ * with"), then words that say to do something ("Choose all the bags"),
+ * then a field's placeholder ("Enter text from image"), then the first
+ * words the challenge shows. Taken with the block they are in (the blue
+ * header with its example picture), while that block stays a small part
+ * of the challenge and holds no more than two of its pictures.
+ *
+ * @param {Window} window
+ * @param {Element} root
+ * @param {Element[]} pictures
+ * @returns {{element: Element|null, text: string}|null}
+ */
+function instructionOf(window, root, pictures) {
+  const texts = [];
+  for (const element of root.querySelectorAll("*")) {
+    if (
+      element.closest("button, a, select, option, script, style, noscript") ||
+      !element.checkVisibility(VISIBILITY)
+    ) {
+      continue;
+    }
+    const own = clean(
+      [...element.childNodes]
+        .filter((node) => node.nodeType == 3)
+        .map((node) => node.data)
+        .join(" "),
+    );
+    if (own.length >= 3 && !NOT_INSTRUCTION.test(own)) {
+      texts.push({ element, own });
+    }
+  }
+  const kindOf = ({ element, own }) =>
+    ZendiaCaptcha.promptKind(own) ?? ZendiaCaptcha.promptKind(element.textContent);
+  let found =
+    texts.find((text) => kindOf(text) && kindOf(text) != "checkbox") ??
+    texts.find(({ own }) => INSTRUCTION_WORDS.test(own));
+  if (!found) {
+    for (const field of root.querySelectorAll(
+      "input[placeholder], textarea[placeholder], input[aria-label]",
+    )) {
+      const label =
+        field.getAttribute("placeholder") || field.getAttribute("aria-label");
+      if (INSTRUCTION_WORDS.test(label) && field.checkVisibility(VISIBILITY)) {
+        return { element: null, text: clean(label).slice(0, INSTRUCTION_MAX) };
+      }
+    }
+  }
+  found ??= texts.find(({ element }) => !ZendiaCaptcha.promptKind(element.textContent));
+  if (!found) {
+    return null;
+  }
+  // How much of the challenge the instruction may cover: of all it shows,
+  // popups included, for the root may be the checkbox they open from.
+  const rootHeight = extentOf(window, root).height || window.innerHeight;
+  const held = (element) =>
+    pictures.filter((picture) => element.contains(picture)).length;
+  // The biggest picture is the challenge's own: an instruction never holds
+  // it, whatever example pictures it shows. Unless it is the only one: an
+  // example, with the task drawn in no picture yet.
+  const biggest =
+    pictures.length > 1
+      ? pictures
+          .map((picture) => {
+            const { width, height } = picture.getBoundingClientRect();
+            return { picture, size: width * height };
+          })
+          .sort((a, b) => b.size - a.size)[0]?.picture
+      : null;
+  let block = found.element;
+  for (
+    let node = block.parentElement;
+    node && node != root && root.contains(node);
+    node = node.parentElement
+  ) {
+    const { height } = node.getBoundingClientRect();
+    if (
+      clean(node.textContent).length > INSTRUCTION_MAX ||
+      height > rootHeight * INSTRUCTION_SHARE ||
+      held(node) > 2 ||
+      (biggest && node.contains(biggest)) ||
+      node.querySelector("[role=slider], input:not([type=hidden]), textarea")
+    ) {
+      break;
+    }
+    block = node;
+  }
+  return { element: block, text: instructionText(block) };
+}
+
+// The biggest part of a challenge that is not its instruction, nor holds
+// it, nor is nearly all of the challenge: where its task is drawn, when no
+// picture says so.
+function taskAreaOf(window, root, instruction) {
+  const whole = extentOf(window, root);
+  let best = null;
+  for (const element of root.querySelectorAll("*")) {
+    if (
+      element.contains(instruction) ||
+      instruction.contains(element) ||
+      element.closest("button, a, form > input")
+    ) {
+      continue;
+    }
+    const rect = element.getBoundingClientRect();
+    const size = rect.width * rect.height;
+    if (
+      rect.width < TASK_SIDE ||
+      rect.height < TASK_SIDE ||
+      size > whole.width * whole.height * MOSTLY_VIEW ||
+      size <= (best?.size ?? 0) ||
+      !element.checkVisibility(VISIBILITY)
+    ) {
+      continue;
+    }
+    best = { element, rect, size };
+  }
+  return best && { element: best.element, rect: best.rect };
+}
+
+/**
+ * A challenge in two parts, for a picture of each and the words of one:
+ * its instruction (what it asks, read from its text) and the area to act
+ * on (the pictures: the grid, the puzzle, the distorted text; a slider
+ * with its track). Read in a CAPTCHA's own frame from its whole document,
+ * in a page from what challengeRect last chose there. Rects are in this
+ * window's viewport, cut to it.
+ *
+ * @param {Window} window
+ * @returns {{area: {left: number, top: number, width: number, height: number},
+ *   instruction: {text: string, rect: object|null, pictures: number}|null,
+ *   viewWidth: number, viewHeight: number, scrollX: number,
+ *   scrollY: number}|null} Null when nothing in it is a picture.
+ */
+export function challengeParts(window) {
+  const document = window.document;
+  const last = lastTargets.get(document);
+  let root = null;
+  if (last?.isConnected) {
+    root = last;
+  } else if (isCaptchaFrame(window)) {
+    root = document.body;
+  }
+  if (!root) {
+    return null;
+  }
+  const pictures = picturesOf(window, root);
+  const instruction = instructionOf(
+    window,
+    root,
+    pictures.map(({ element }) => element),
+  );
+  const inInstruction = (element) =>
+    !!instruction?.element?.contains(element);
+  const area = pictures.filter(({ element }) => !inInstruction(element));
+  if (!area.length && instruction?.element) {
+    // Nothing a script can tell for a picture (a challenge drawn in a way
+    // no element shows, or still loading its pictures): the biggest part
+    // of the challenge apart from its instruction is where they go.
+    const fallback = taskAreaOf(window, root, instruction.element);
+    if (fallback) {
+      area.push(fallback);
+    }
+  }
+  if (!area.length) {
+    return null;
+  }
+  // Which of the area's parts are pictures, before a slider's track joins.
+  const picturesOnly = new Set(area.map(({ element }) => element));
+  // A slider is shot with its track, which is no picture.
+  for (const control of root.querySelectorAll(
+    "[role=slider], [class*=slider], [class*=track], [class*=handle]",
+  )) {
+    const rect = control.getBoundingClientRect();
+    if (
+      !inInstruction(control) &&
+      rect.width >= MIN_SIDE &&
+      rect.height >= MIN_SIDE &&
+      rect.width <= BOX_MAX_WIDTH &&
+      control.checkVisibility(VISIBILITY)
+    ) {
+      area.push({ element: control, rect });
+    }
+  }
+  // Neither part reaches past the challenge: in a page, what it draws (its
+  // popups included); in its own frame, the frame's view. A slider's strip
+  // wider than its popup would bring the page behind in.
+  const view = {
+    left: 0,
+    top: 0,
+    right: window.innerWidth,
+    bottom: window.innerHeight,
+  };
+  let bounds = view;
+  if (root != document.body) {
+    const drawn = extentOf(window, root);
+    bounds = {
+      left: Math.max(view.left, drawn.left),
+      top: Math.max(view.top, drawn.top),
+      right: Math.min(view.right, drawn.right),
+      bottom: Math.min(view.bottom, drawn.bottom),
+    };
+  }
+  const union = (rects) => {
+    const left = Math.max(bounds.left, Math.min(...rects.map((r) => r.left)));
+    const top = Math.max(bounds.top, Math.min(...rects.map((r) => r.top)));
+    const right = Math.min(
+      bounds.right,
+      Math.max(...rects.map((r) => r.left + r.width)),
+    );
+    const bottom = Math.min(
+      bounds.bottom,
+      Math.max(...rects.map((r) => r.top + r.height)),
+    );
+    return right > left && bottom > top
+      ? { left, top, width: right - left, height: bottom - top }
+      : null;
+  };
+  let areaRect = union(area.map(({ rect }) => rect));
+  if (!areaRect) {
+    return null;
+  }
+  // The area stops where the instruction starts: a picture under the
+  // header (GeeTest's), or a box drawn behind both (hCaptcha's), would
+  // take the instruction in again. An instruction between the picture and
+  // its slider (DataDome's "Slide right…") splits the area: the side with
+  // more of the pictures is kept, whichever way the two sit.
+  const told = instruction?.element?.getBoundingClientRect();
+  if (
+    told &&
+    told.right > areaRect.left &&
+    told.left < areaRect.left + areaRect.width &&
+    told.bottom > areaRect.top &&
+    told.top < areaRect.top + areaRect.height
+  ) {
+    const right = areaRect.left + areaRect.width;
+    const bottom = areaRect.top + areaRect.height;
+    // The ways to cut the instruction off: what is above it, below it, left
+    // of it or right of it, each as a rect of the area.
+    const cuts = [
+      { ...areaRect, height: Math.max(0, told.top - areaRect.top) },
+      {
+        ...areaRect,
+        top: Math.min(bottom, told.bottom),
+        height: Math.max(0, bottom - Math.min(bottom, told.bottom)),
+      },
+      { ...areaRect, width: Math.max(0, told.left - areaRect.left) },
+      {
+        ...areaRect,
+        left: Math.min(right, told.right),
+        width: Math.max(0, right - Math.min(right, told.right)),
+      },
+    ];
+    const picturesIn = (cut) =>
+      area.reduce((sum, { element, rect }) => {
+        if (!picturesOnly.has(element)) {
+          return sum;
+        }
+        const wide =
+          Math.min(cut.left + cut.width, rect.left + rect.width) -
+          Math.max(cut.left, rect.left);
+        const tall =
+          Math.min(cut.top + cut.height, rect.top + rect.height) -
+          Math.max(cut.top, rect.top);
+        return sum + Math.max(0, wide) * Math.max(0, tall);
+      }, 0);
+    const kept = cuts
+      .filter(({ width, height }) => width >= MIN_SIDE && height >= MIN_SIDE)
+      .sort((a, b) => picturesIn(b) - picturesIn(a))[0];
+    if (kept && picturesIn(kept) > 0) {
+      areaRect = kept;
+    }
+  }
+  // A little room around each part, inside the challenge still, and for
+  // the area never into the instruction it was cut from.
+  const pad = (rect, keepOut = null) => {
+    let room =
+      rect &&
+      union([
+        {
+          left: rect.left - PART_ROOM,
+          top: rect.top - PART_ROOM,
+          width: rect.width + 2 * PART_ROOM,
+          height: rect.height + 2 * PART_ROOM,
+        },
+      ]);
+    if (room && keepOut) {
+      let { left, top } = room;
+      let right = left + room.width;
+      let bottom = top + room.height;
+      const overlaps = () =>
+        keepOut.right > left &&
+        keepOut.left < right &&
+        keepOut.bottom > top &&
+        keepOut.top < bottom;
+      if (overlaps() && keepOut.bottom <= rect.top + 1) {
+        top = Math.max(top, keepOut.bottom);
+      }
+      if (overlaps() && keepOut.top >= rect.top + rect.height - 1) {
+        bottom = Math.min(bottom, keepOut.top);
+      }
+      if (overlaps() && keepOut.right <= rect.left + 1) {
+        left = Math.max(left, keepOut.right);
+      }
+      if (overlaps() && keepOut.left >= rect.left + rect.width - 1) {
+        right = Math.min(right, keepOut.left);
+      }
+      room = { left, top, width: right - left, height: bottom - top };
+    }
+    return room;
+  };
+  let said = null;
+  if (instruction?.text) {
+    const element = instruction.element;
+    said = {
+      text: instruction.text,
+      rect: element ? pad(union([element.getBoundingClientRect()])) : null,
+      pictures: element
+        ? pictures.filter((picture) => element.contains(picture.element))
+            .length
+        : 0,
+    };
+  }
+  return {
+    area: pad(areaRect, told ?? null),
+    // Where every picture is, for telling a challenge that holds still
+    // from one whose tiles a script is still moving in.
+    still: pictures
+      .map(({ rect }) =>
+        [rect.left, rect.top, rect.width, rect.height].map(Math.round).join(),
+      )
+      .join("|"),
+    instruction: said,
+    viewWidth: window.innerWidth,
+    viewHeight: window.innerHeight,
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+  };
+}
+
 /**
  * Whether a CAPTCHA's frame is drawn, seen from inside it: the document is
  * complete and every picture shown in it loaded — the frame is in the page
@@ -963,12 +1542,19 @@ export function challengeDrawn(window, any = false) {
     return null;
   }
   const body = document.body;
-  if (document.readyState != "complete" || !body) {
+  if (
+    document.readyState != "complete" ||
+    !body ||
+    arriving(document.documentElement)
+  ) {
     return { drawn: false };
   }
   const images = [...(document.images ?? [])].filter((image) =>
     image.checkVisibility(VISIBILITY),
   );
+  if (!backgroundsLoaded(window, body)) {
+    return { drawn: false };
+  }
   if (images.length) {
     return {
       drawn: images.every((image) => image.complete && image.naturalWidth > 0),
@@ -1060,6 +1646,9 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
     }
     if (message.name == "Zendia:CaptchaWatch:Open") {
       return openChallenge(this.contentWindow, message.data?.peek === true);
+    }
+    if (message.name == "Zendia:CaptchaWatch:Parts") {
+      return challengeParts(this.contentWindow);
     }
     if (message.name == "Zendia:CaptchaWatch:Drawn") {
       return challengeDrawn(this.contentWindow, message.data?.any === true);
