@@ -131,6 +131,8 @@ class ZendiaCaptchaWatchService {
   // The signature last announced for a tab, so the same finding is not
   // announced again as frames report and re-report.
   #announced = new WeakMap();
+  // Who hears of a tab's new finding: the CAPTCHA subagent.
+  #listeners = new Set();
 
   init() {
     if (this.#initialized || !Services.prefs.getBoolPref(PREF_WATCH, true)) {
@@ -185,6 +187,18 @@ class ZendiaCaptchaWatchService {
    */
   lastFor(browser) {
     return this.#last.get(browser) ?? null;
+  }
+
+  /**
+   * Called with the browser and the tab's merged finding when the finding
+   * is new, after the log line and the doorhanger.
+   *
+   * @param {(browser: Element, record: object) => void} listener
+   * @returns {() => void} Removes it.
+   */
+  onDetect(listener) {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
   }
 
   /**
@@ -270,6 +284,13 @@ class ZendiaCaptchaWatchService {
     this.#announced.set(browser, signature);
     console.log(`Zendia: CAPTCHA watch: ${record.text} [${record.url}]`);
     this.#notify(browser, record.text);
+    for (const listener of this.#listeners) {
+      try {
+        listener(browser, record);
+      } catch (e) {
+        console.error("Zendia: CAPTCHA watch listener failed", e);
+      }
+    }
     return record;
   }
 

@@ -217,18 +217,26 @@ export class ZendiaAgentConversation {
    * @param {{name: string, path?: string, bytes?: Uint8Array}[]} [files]
    *   What the user attached: a file on disk, or the bytes of one that is
    *   not (a pasted picture).
+   * @param {object} [options]
+   * @param {string} [options.echo] What the panel shows of the request, as
+   *   a note, instead of its text: how a request that is not the user's own
+   *   (the CAPTCHA subagent's) announces itself.
    */
-  async send(text, files = []) {
+  async send(text, files = [], { echo } = {}) {
     text = text.trim();
     if ((!text && !files.length) || this.running) {
       return;
     }
     const driver = ZENDIA_DRIVERS[this.agent.id];
-    this.#push({
-      type: "user",
-      text: text || "See the attached files.",
-      ...(files.length ? { files: files.map(file => file.name) } : {}),
-    });
+    this.#push(
+      echo != null
+        ? { type: "note", text: echo }
+        : {
+            type: "user",
+            text: text || "See the attached files.",
+            ...(files.length ? { files: files.map(file => file.name) } : {})
+          }
+    );
     this.startedAt = Date.now();
     this.unseen = false;
     const first = !this.resume;
@@ -419,6 +427,17 @@ export class ZendiaAgentConversation {
     this.changed();
   }
 
+  /**
+   * A page for the panel from outside a turn, drawn like a ui_show result:
+   * the CAPTCHA subagent's screenshot of a challenge.
+   *
+   * @param {object} page What pageFromArgs returned.
+   * @returns {string} Its id.
+   */
+  showPage(page) {
+    return this.#onUi(page);
+  }
+
   // A table or page from the ui tools. One with the id of an earlier one
   // takes its place; a page takes the place of its own draft.
   #onUi(ui) {
@@ -525,6 +544,8 @@ class ZendiaAgentService {
   /** @type {WeakMap<Element, ZendiaAgentConversation>} */
   #conversations = new WeakMap();
   #connected = new Map();
+  // Who hears that a tab got a conversation: the CAPTCHA subagent.
+  #listeners = new Set();
 
   /** Set by Zendia. */
   zendia = null;
@@ -959,6 +980,18 @@ class ZendiaAgentService {
   }
 
   /**
+   * Called with the browser and its conversation when one is started for a
+   * tab: the CAPTCHA subagent hears of it.
+   *
+   * @param {(browser: Element, conversation: ZendiaAgentConversation) => void} listener
+   * @returns {() => void} Removes it.
+   */
+  onConversation(listener) {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  /**
    * The tab's conversation, started with the default agent if it has none.
    *
    * @param {Element} browser
@@ -977,6 +1010,13 @@ class ZendiaAgentService {
       if (!conversation) {
         conversation = new ZendiaAgentConversation(this, browser, agent);
         this.#conversations.set(browser, conversation);
+        for (const listener of this.#listeners) {
+          try {
+            listener(browser, conversation);
+          } catch (e) {
+            console.error("Zendia: agent listener failed", e);
+          }
+        }
       }
     }
     return conversation;

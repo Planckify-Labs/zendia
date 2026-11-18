@@ -71,6 +71,148 @@ export function scanPage(window) {
   return detections;
 }
 
+/**
+ * The part of the page the challenge is in, for the subagent's shot of it:
+ * the frame that asks for clicks, else the service's frame, else the widget
+ * the page drew, the first of them with a size. Scrolled into view first,
+ * for the shot and the user. The rect is of this frame's own viewport; the
+ * subagent snapshots from this frame's global, so a challenge in a
+ * sub-frame needs no coordinates moved.
+ *
+ * @param {Window} window
+ * @returns {{left: number, top: number, width: number, height: number,
+ *   viewWidth: number, viewHeight: number, scrollX: number, scrollY: number,
+ *   challenge: boolean, frame: boolean}|null}
+ *   Where it is in this frame's viewport, with the viewport's size and
+ *   scroll (the shot is taken in the document's coordinates), whether it is
+ *   the part that asks for clicks and whether it is a frame (not a page
+ *   widget); or null when the page has none.
+ */
+export function challengeRect(window) {
+  const document = window.document;
+  const frames = [
+    ...document.querySelectorAll("iframe[src], frame[src]"),
+  ].filter((frame) => ZendiaCaptcha.nameOf(frame.src));
+  let widget = null;
+  try {
+    widget = document.querySelector(ZendiaCaptcha.WIDGETS);
+  } catch {
+    // A selector this page's engine does not know.
+  }
+  const candidates = [
+    ...new Set([
+      frames.find((frame) => ZendiaCaptcha.isChallenge(frame.src)),
+      frames[0],
+      widget,
+    ]),
+  ].filter(Boolean);
+  for (const element of candidates) {
+    element.scrollIntoView({
+      block: "center",
+      inline: "nearest",
+      behavior: "instant",
+    });
+    const rect = element.getBoundingClientRect();
+    // A hidden one is none: no size, or parked out of the viewport the way
+    // a collapsed challenge frame is.
+    if (
+      !rect.width ||
+      !rect.height ||
+      rect.bottom <= 0 ||
+      rect.right <= 0 ||
+      rect.top >= window.innerHeight ||
+      rect.left >= window.innerWidth
+    ) {
+      continue;
+    }
+    return {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      viewWidth: window.innerWidth,
+      viewHeight: window.innerHeight,
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      challenge:
+        element == frames.find((frame) => ZendiaCaptcha.isChallenge(frame.src)),
+      frame: frames.includes(element),
+    };
+  }
+  return null;
+}
+
+/**
+ * Open the challenge, from inside its own checkbox widget: the click on
+ * "I'm not a robot" the user would have to make, made for them, so the
+ * subagent's shot and their finish start at the challenge. Only the
+ * widget frames answer; a challenge already open, a checkbox already
+ * checked and the invisible kinds are left alone.
+ *
+ * @param {Window} window
+ * @param {boolean} [peek] Only say whether the checkbox is checked; never
+ *   click.
+ * @returns {{opened: boolean, name: string}|{passed: boolean}|null}
+ */
+export function openChallenge(window, peek = false) {
+  const document = window.document;
+  const url = document.documentURI ?? "";
+  const name = ZendiaCaptcha.nameOf(url);
+  if (!name || ZendiaCaptcha.isChallenge(url)) {
+    return null;
+  }
+  // The services whose widget is a checkbox to click (reCAPTCHA, hCaptcha,
+  // Yandex). The managed and invisible ones have nothing to open.
+  if (ZendiaCaptcha.kindOf(url) != "checkbox") {
+    return null;
+  }
+  const control =
+    document.querySelector("#recaptcha-anchor") ??
+    document.querySelector("#checkbox") ??
+    document.querySelector("[role='checkbox']") ??
+    document.querySelector("input[type='checkbox']");
+  if (!control) {
+    return null;
+  }
+  if (control.getAttribute("aria-checked") == "true") {
+    return { passed: true };
+  }
+  if (peek) {
+    return null;
+  }
+  control.click();
+  return { opened: true, name };
+}
+
+/**
+ * Whether the challenge is drawn, seen from inside its own frame: the
+ * document is complete and every picture in it loaded — the frame is in
+ * the page with its final size long before the grid it shows is. Only a
+ * challenge frame answers.
+ *
+ * @param {Window} window
+ * @returns {{drawn: boolean}|null}
+ */
+export function challengeDrawn(window) {
+  const document = window.document;
+  if (!ZendiaCaptcha.isChallenge(document.documentURI ?? "")) {
+    return null;
+  }
+  const images = [...(document.images ?? [])];
+  if (images.length) {
+    return {
+      drawn: images.every((image) => image.complete && image.naturalWidth > 0),
+    };
+  }
+  // Canvas- and markup-drawn challenges: content is there once the
+  // document is.
+  const body = document.body;
+  const content =
+    body?.querySelector("canvas, button, [role='button'], input, table") ||
+    body?.textContent.trim();
+  return { drawn: document.readyState == "complete" && !!content };
+}
+
 // How long the page has to stop adding frames and scripts before it is read
 // again: a CAPTCHA's script draws its frames after the page is shown, and a
 // challenge often only opens on a click.
@@ -111,12 +253,23 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
     }
   }
 
-  // The service asks for a look at pages that were open before it started.
+  // The service asks for a look at pages that were open before it started,
+  // and the subagent for where the challenge is, or to open it.
   receiveMessage(message) {
     if (message.name == "Zendia:CaptchaWatch:Scan") {
       this.#scan();
       this.#watch();
     }
+    if (message.name == "Zendia:CaptchaWatch:Rect") {
+      return challengeRect(this.contentWindow);
+    }
+    if (message.name == "Zendia:CaptchaWatch:Open") {
+      return openChallenge(this.contentWindow, message.data?.peek === true);
+    }
+    if (message.name == "Zendia:CaptchaWatch:Drawn") {
+      return challengeDrawn(this.contentWindow);
+    }
+    return undefined;
   }
 
   didDestroy() {

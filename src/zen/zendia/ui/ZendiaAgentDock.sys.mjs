@@ -27,6 +27,10 @@ ChromeUtils.defineESModuleGetters(lazy, {
   ATTACH_MAX_BYTES: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   ATTACH_MAX_FILES: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   ZendiaAgents: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
+  ZendiaCaptchaAgent:
+    "resource:///modules/zendia/captcha/ZendiaCaptchaAgent.sys.mjs",
+  ZendiaCaptchaWatch:
+    "resource:///modules/zendia/captcha/ZendiaCaptchaWatch.sys.mjs",
   ZendiaDockFrame: "resource:///modules/zendia/ui/ZendiaDockFrame.sys.mjs",
   agentColor: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   inputKindOf: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
@@ -127,6 +131,8 @@ export class ZendiaAgentDock {
   #chipAgent = "";
   #sendButton;
   #instructionsButton;
+  // The header's CAPTCHA summary button.
+  #captchaButton;
   #mic;
   // Speech to text, by a chat site's own (ZendiaWebChatDictation).
   #dictation;
@@ -270,6 +276,13 @@ export class ZendiaAgentDock {
           this.#conversation?.browser ?? this.#window.gBrowser.selectedBrowser
         )
     );
+    this.#captchaButton = iconButton(
+      "captcha",
+      header,
+      "Summarize the CAPTCHA found on this tab"
+    );
+    this.#captchaButton.hidden = true;
+    this.#captchaButton.addEventListener("click", () => this.#runCaptcha());
     iconButton("web-chat", header, "Web chat (<leader>aw)").addEventListener(
       "click",
       () => this.#onSwitch?.()
@@ -938,6 +951,22 @@ export class ZendiaAgentDock {
       this.#bind(lazy.ZendiaAgents.conversationFor(browser));
       this.#syncPill();
     }
+    this.#syncCaptchaButton(browser);
+  }
+
+  // The header's CAPTCHA button: the subagent summarizes the watch's
+  // finding on the tab now, as it does on its own after the agent's work.
+  #runCaptcha() {
+    const browser =
+      this.#conversation?.browser ?? this.#window.gBrowser.selectedBrowser;
+    lazy.ZendiaCaptchaAgent.runNow(browser).catch(e =>
+      console.error("Zendia: the CAPTCHA button failed", e)
+    );
+  }
+
+  // The button shows while the watch has a finding on the dock's tab.
+  #syncCaptchaButton(browser) {
+    this.#captchaButton.hidden = !lazy.ZendiaCaptchaWatch.lastFor(browser);
   }
 
   #onKey(event) {
@@ -1959,6 +1988,7 @@ export class ZendiaAgentDock {
       conversation?.browser ?? this.#window.gBrowser.selectedBrowser;
     this.#tabChip.textContent =
       browser.contentTitle || browser.currentURI?.spec || "";
+    this.#syncCaptchaButton(browser);
     this.#input.disabled = !conversation;
     let placeholder = "";
     let hint = `Enter send · Shift+Enter new line · Tab switch agent · Esc ${this.#frame.layout == "split" ? "back to the page" : "close"}`;

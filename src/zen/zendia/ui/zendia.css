@@ -1155,6 +1155,10 @@
     background-image: url("chrome://browser/skin/zen-icons/selectable/globe.svg");
   }
 
+  &.captcha {
+    background-image: url("chrome://browser/skin/zen-icons/security.svg");
+  }
+
   &.to-agent {
     background-image: url("chrome://browser/skin/zen-icons/sparkles.svg");
   }
