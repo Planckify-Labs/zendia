@@ -297,6 +297,19 @@ const SCRIPTS = [
   },
 ];
 
+// The services' names as a page's own words may give them away, for the
+// code that has to take them out of a text (the CAPTCHA subagent's sterile
+// task). The names that are also ordinary words of what a challenge asks
+// ("HUMAN", whose widget says "Press & Hold") are left out: taking those
+// out of the ask would cost the solver more than the name tells.
+const AMBIGUOUS_NAMES = new Set(["HUMAN"]);
+
+const NAMES = Object.freeze(
+  [...new Set([...CAPTCHAS, ...SCRIPTS].map(({ name }) => name))].filter(
+    name => !AMBIGUOUS_NAMES.has(name)
+  )
+);
+
 // The field a solved CAPTCHA leaves in the form for the server to check:
 // the one sign of it that stays on the page. A suffix names one of several
 // on a page.
@@ -451,6 +464,7 @@ function loaderOf(url) {
 
 export const ZendiaCaptcha = {
   KINDS,
+  NAMES,
   WIDGETS,
   NOT_OPENED,
   PROMPT_WORDS,

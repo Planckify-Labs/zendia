@@ -302,6 +302,14 @@ export class ZendiaAgentConversation {
     // is empty this session until it was read from the file.
     await this.#service.loadRememberedModels(this.agent.id);
     const options = this.#service.optionsFor(this.agent.id);
+    // An isolated turn is not the tab's: it was told nothing of the page,
+    // and the log does not tie it to one either.
+    const tab = isolated
+      ? { url: null, title: null }
+      : {
+          url: this.#browser.currentURI?.spec,
+          title: this.#browser.contentTitle,
+        };
     log.write("turn", {
       turn: ++this.#turns,
       agent: this.agent.id,
@@ -311,8 +319,7 @@ export class ZendiaAgentConversation {
       context: options.context || null,
       executable: this.agent.path,
       resume: isolated ? null : this.resume,
-      url: this.#browser.currentURI?.spec,
-      title: this.#browser.contentTitle,
+      ...tab,
       request: text,
     });
     const path = await ZendiaAgentDetect.childPath();

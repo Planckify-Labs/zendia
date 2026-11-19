@@ -19,10 +19,29 @@
 // put the image a tool handed it back into a page it writes; the same
 // picture is attached to the turn, cut to the challenge, and page_screenshot
 // is the agent's way to look again.
+//
+// The turn that works the challenge is sealed off from where it came from.
+// The boundary (ZendiaCaptchaBoundary) keeps the tab, the finding and the
+// shot in a vault under a handle, and hands the turn a sterile task
+// instead: the same pictures under neutral names, the same ask with no
+// service in it, and no address, page text or kind of check anywhere. What
+// comes back is how it ended, never what it was. The user's own view — the
+// panel's line, the picture in the chat — names the challenge as it always
+// did; only the subagent works blind. zendia.captcha.agent.isolate turns
+// the boundary off; where a task cannot be sealed, nothing is sent at all,
+// and the challenge stays the user's.
 
 import { ZendiaAgents } from "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs";
 import { pageFromArgs } from "resource:///modules/zendia/agent/ZendiaAgentUi.sys.mjs";
+import { getCaptchaBoundary } from "resource:///modules/zendia/captcha/ZendiaCaptchaBoundary.sys.mjs";
 import { ZendiaCaptchaWatch } from "resource:///modules/zendia/captcha/ZendiaCaptchaWatch.sys.mjs";
+import {
+  STERILE_FILE_NAMES,
+  sterileSaid,
+  sterileSolvePrompt,
+  sterileStatusPrompt,
+} from "resource:///modules/zendia/captcha/ZendiaSterileChallenge.sys.mjs";
+import { ZendiaCaptcha } from "resource:///modules/zendia/core/ZendiaCaptcha.sys.mjs";
 import { ZendiaKeys } from "resource:///modules/zendia/core/ZendiaKeys.sys.mjs";
 
 // The module scope has no timers of its own this early in the startup.
@@ -36,6 +55,9 @@ export const PREF_AGENT = "zendia.captcha.agent";
 export const PREF_LABELS = "zendia.captcha.agent.labels";
 // zendia.captcha.agent.debug: say each step of a delivery on stdout.
 export const PREF_DEBUG = "zendia.captcha.agent.debug";
+// zendia.captcha.agent.isolate: whether the subagent is handed a sterile
+// task, with the page and its service left behind in the vault.
+export const PREF_ISOLATE = "zendia.captcha.agent.isolate";
 
 function say(text) {
   if (Services.prefs.getBoolPref(PREF_DEBUG, false)) {
@@ -190,6 +212,13 @@ Recipes:
 - Press and hold: type the button's tag, wait while it fills, then \`Space\` when it is done.
 - A checkbox: type its tag.`;
 }
+
+// What a later look hands the subagent when the boundary is on: the same
+// bytes under a neutral name, and the same ask with no service's name in it.
+const STERILE_LOOK = Object.freeze({
+  names: STERILE_FILE_NAMES,
+  serviceNames: ZendiaCaptcha.NAMES,
+});
 
 // What is up on the user's screen, by what #labelChallenge labeled.
 const LABELED_NOW = {
@@ -388,6 +417,8 @@ class ZendiaCaptchaAgentService {
     // task, and only says so.
     const inputs = ZendiaAgents.inputsOf?.(conversation.agent?.id);
     const sees = !inputs || inputs.includes("image");
+    const isolate = Services.prefs.getBoolPref(PREF_ISOLATE, true);
+    const sterile = isolate ? STERILE_LOOK : null;
     for (
       let attempt = 0;
       attempt < SOLVE_ATTEMPTS && browser.isConnected;
@@ -403,6 +434,27 @@ class ZendiaCaptchaAgentService {
       const picture = sees ? shot : null;
       const parts = picture?.parts?.area ? picture.parts : null;
       const said = shot?.parts?.instruction?.text ?? null;
+      // The picture in the chat, the first time only; after that the labels
+      // on the user's screen update live. This is the user's own view of the
+      // challenge, where it is named: only the subagent works blind.
+      if (attempt == 0) {
+        await this.#showShot(browser, conversation, record, shot);
+      }
+      // With the boundary on, this pass is a dispatch of its own: what the
+      // subagent gets is the sterile task, and nothing else is to be had.
+      const dispatch = isolate
+        ? this.#dispatch(browser, record, shot, sees)
+        : null;
+      // Fail safe, not fail open: with no sterile task there is nothing to
+      // send, and the page is never sent in its place. The user keeps the
+      // challenge and the picture of it in the chat, which is where they
+      // were anyway.
+      if (isolate && !dispatch) {
+        this.#endCapture(browser);
+        return;
+      }
+      const handle = dispatch?.handle ?? null;
+      const task = dispatch?.task ?? null;
       // The subagent works the challenge itself when it is under the keys:
       // its controls are labeled ("captcha") or the cursor is on it
       // ("cursor"), there is an area to act on, and it is there to act on.
@@ -417,6 +469,9 @@ class ZendiaCaptchaAgentService {
       // button (force) or the user stopped by hand.
       if (!canAct && attempt > 0) {
         this.#endCapture(browser);
+        // Nothing left to act on is the work done, as far as the boundary
+        // ever hears of it.
+        this.#settle(handle, "ok");
         if (
           !force &&
           !conversation.stoppedByUser &&
@@ -426,26 +481,7 @@ class ZendiaCaptchaAgentService {
         }
         return;
       }
-      // The picture in the chat, the first time only; after that the labels
-      // on the user's screen update live.
-      if (attempt == 0) {
-        await this.#showShot(browser, conversation, record, shot);
-      }
-      let files = [];
-      if (parts) {
-        files = [{ name: "challenge-area.jpg", bytes: parts.area.bytes }];
-        // The instruction's words are in the request; its picture goes too
-        // only where it shows what words cannot: an example to match, icons
-        // to click in order.
-        if (parts.instruction?.shot && parts.instruction.pictures) {
-          files.push({
-            name: "challenge-instruction-example.jpg",
-            bytes: parts.instruction.shot.bytes,
-          });
-        }
-      } else if (picture) {
-        files = [{ name: "challenge.jpg", bytes: picture.bytes }];
-      }
+      const files = this.#filesFor(task, parts, picture);
       // Whether this turn actually moved the challenge: a key or text that
       // took. A turn that only looked and gave up (no field to type in, an
       // audio it cannot do) made no progress, and is not sent back in.
@@ -462,23 +498,26 @@ class ZendiaCaptchaAgentService {
               progressed ||= result.ok;
               return result;
             },
-            look: () => this.#relook(browser),
+            look: () => this.#relook(browser, sterile),
           }
         : null;
-      const prompt = act
-        ? this.#solvePrompt(said, shot.labeled)
-        : this.#statusPrompt(
-            files[0]?.name ?? null,
-            said,
-            shot?.state ?? null,
-            sees
-          );
-      const echo =
-        attempt > 0
-          ? "Still working on it…"
-          : said
-            ? `Challenge: "${said}"`
-            : "A verification challenge needs your attention.";
+      const prompt = this.#promptFor({
+        task,
+        act,
+        said,
+        shot,
+        pictureName: files[0]?.name ?? null,
+        sees,
+      });
+      // What the panel says of the request. This is the user's own view of
+      // their own screen, so it says what the challenge is; only the
+      // subagent works blind.
+      let echo = "Still working on it…";
+      if (attempt == 0) {
+        echo = said
+          ? `Challenge: "${said}"`
+          : "A verification challenge needs your attention.";
+      }
       let ran = false;
       try {
         ran = await this.#sendSolve(
@@ -498,11 +537,113 @@ class ZendiaCaptchaAgentService {
       }
       // Go round again only to carry on work that is actually moving: not
       // after a one-off status turn, a turn that never ran, a turn that made
-      // no progress (it gave up), or one the user stopped by hand.
-      if (!ran || !act || !progressed || conversation.stoppedByUser) {
+      // no progress (it gave up), or one the user stopped by hand. Whichever
+      // way this pass ends, its dispatch is settled here and nowhere else.
+      if (!ran) {
+        this.#settle(handle, "fail");
         return;
       }
+      if (!act || !progressed) {
+        // A status turn, or one that gave up: the challenge is the user's
+        // now, and the boundary hears that and no more.
+        this.#settle(handle, "escalate");
+        return;
+      }
+      if (conversation.stoppedByUser) {
+        this.#settle(handle, "fail");
+        return;
+      }
+      this.#settle(handle, "ok");
       await new Promise(resolve => setTimeout(resolve, RETRY_GAP_MS));
+    }
+  }
+
+  // One dispatch: the tab, the finding and the shot go into the vault under
+  // a handle of their own, and what comes back out is the sterile task the
+  // subagent works — a task, not a challenge, with no page, service or
+  // address on it. A fresh handle each pass, so a spent or expired one is
+  // never used twice and two passes over one challenge cannot be tied to
+  // each other. Null when no sterile task could be made: that is the end of
+  // the work, never a reason to hand the page over instead.
+  #dispatch(browser, record, shot, sees) {
+    const boundary = getCaptchaBoundary();
+    let handle = null;
+    let task = null;
+    try {
+      handle = boundary.open({ browser, record, shot });
+      task = boundary.task(handle, {
+        serviceNames: STERILE_LOOK.serviceNames,
+        sees,
+      });
+    } catch (e) {
+      say(`isolation unavailable: ${e}`);
+    }
+    if (!task) {
+      this.#settle(handle, "escalate");
+      return null;
+    }
+    say(`task ${task.id}: ${task.capability} (${task.signature})`);
+    return { handle, task };
+  }
+
+  // The pictures a turn is given: the sterile task's, or the challenge's own
+  // under their own names where the boundary is off.
+  #filesFor(task, parts, picture) {
+    if (task) {
+      return task.files;
+    }
+    if (parts) {
+      const files = [{ name: "challenge-area.jpg", bytes: parts.area.bytes }];
+      // The instruction's words are in the request; its picture goes too
+      // only where it shows what words cannot: an example to match, icons
+      // to click in order.
+      if (parts.instruction?.shot && parts.instruction.pictures) {
+        files.push({
+          name: "challenge-instruction-example.jpg",
+          bytes: parts.instruction.shot.bytes,
+        });
+      }
+      return files;
+    }
+    return picture ? [{ name: "challenge.jpg", bytes: picture.bytes }] : [];
+  }
+
+  // The turn a pass sends: the sterile one where the boundary is on and the
+  // agent's own where it is off; the solve turn where there is work to do
+  // (act), and the one-line status turn where there is not.
+  #promptFor({ task, act, said, shot, pictureName, sees }) {
+    if (task) {
+      return act
+        ? sterileSolvePrompt({
+            said: task.said,
+            nowLine: LABELED_NOW[shot.labeled] ?? LABELED_NOW.captcha,
+            keysReference: keysReference(null),
+            fileNames: STERILE_FILE_NAMES,
+          })
+        : sterileStatusPrompt({
+            pictureName,
+            said: task.said,
+            state: task.state,
+            sees,
+          });
+    }
+    return act
+      ? this.#solvePrompt(said, shot.labeled)
+      : this.#statusPrompt(pictureName, said, shot?.state ?? null, sees);
+  }
+
+  // How a dispatch ended, said to the boundary and to nothing else: the
+  // handle is spent with it, so the tab and the finding behind it cannot be
+  // opened again by a later turn. Without a handle (the boundary is off)
+  // there is nothing to settle.
+  #settle(handle, status) {
+    if (!handle) {
+      return;
+    }
+    try {
+      getCaptchaBoundary().resolve(handle, status);
+    } catch (e) {
+      say(`could not settle the task: ${e}`);
     }
   }
 
@@ -621,7 +762,7 @@ class ZendiaCaptchaAgentService {
   // the labels the live session keeps on it, and what it asks now, so a
   // changed challenge is read from the latest picture, not the first. It is
   // not labeled again: that would start a second session over the keys'.
-  async #relook(browser, maxWidth = SHOT_MAX_WIDTH) {
+  async #relook(browser, sterile = null, maxWidth = SHOT_MAX_WIDTH) {
     if (!browser.isConnected) {
       return null;
     }
@@ -644,10 +785,11 @@ class ZendiaCaptchaAgentService {
     if (!bytes) {
       return null;
     }
+    const said = parts?.instruction?.text ?? null;
     return {
-      name: "challenge-area.jpg",
+      name: sterile ? sterile.names.area : "challenge-area.jpg",
       bytes,
-      said: parts?.instruction?.text ?? null,
+      said: sterile ? sterileSaid(said, sterile.serviceNames) || null : said,
     };
   }
 

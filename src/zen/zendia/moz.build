@@ -32,9 +32,13 @@ EXTRA_JS_MODULES.zendia.actors += [
 
 EXTRA_JS_MODULES.zendia.captcha += [
     "captcha/ZendiaCaptchaAgent.sys.mjs",
+    "captcha/ZendiaCaptchaBoundary.sys.mjs",
     "captcha/ZendiaCaptchaWatch.sys.mjs",
     "captcha/ZendiaCaptchaWatchChild.sys.mjs",
     "captcha/ZendiaCaptchaWatchParent.sys.mjs",
+    "captcha/ZendiaChallengeAdapters.sys.mjs",
+    "captcha/ZendiaChallengeVault.sys.mjs",
+    "captcha/ZendiaSterileChallenge.sys.mjs",
 ]
 
 EXTRA_JS_MODULES.zendia.config += [

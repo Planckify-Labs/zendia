@@ -1834,7 +1834,7 @@ export class ZendiaPictureToolbox {
         {
           name: "look_again",
           description:
-            "Takes a fresh picture of what you are working on, to see what changed and what it asks now. Returns it as challenge-area.jpg.",
+            "Takes a fresh picture of what you are working on, to see what changed and what it asks now.",
           inputSchema: {
             type: "object",
             properties: {},
