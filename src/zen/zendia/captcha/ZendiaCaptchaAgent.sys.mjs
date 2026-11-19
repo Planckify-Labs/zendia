@@ -393,6 +393,12 @@ class ZendiaCaptchaAgentService {
       attempt < SOLVE_ATTEMPTS && browser.isConnected;
       attempt++
     ) {
+      // A new chat started over this one: the work here ends with it, and
+      // nothing is sent to the old chat.
+      if (!this.#current(browser, conversation)) {
+        this.#endCapture(browser);
+        return;
+      }
       const shot = await this.captureChallenge(browser).catch(() => null);
       const picture = sees ? shot : null;
       const parts = picture?.parts?.area ? picture.parts : null;
@@ -411,7 +417,11 @@ class ZendiaCaptchaAgentService {
       // button (force) or the user stopped by hand.
       if (!canAct && attempt > 0) {
         this.#endCapture(browser);
-        if (!force && !conversation.stoppedByUser) {
+        if (
+          !force &&
+          !conversation.stoppedByUser &&
+          this.#current(browser, conversation)
+        ) {
           this.#handBack(conversation);
         }
         return;
@@ -497,8 +507,13 @@ class ZendiaCaptchaAgentService {
   }
 
   // Send one turn, giving way to a user turn that preempts it; whether it ran.
+  // Each is a session of its own (isolated): it resumes nothing, and what
+  // it did is not resumed by the next.
   async #sendSolve(conversation, browser, prompt, files, echo, act) {
     for (let tries = 0; tries < SEND_TRIES; tries++) {
+      if (!this.#current(browser, conversation)) {
+        return false;
+      }
       const before = conversation.messages.length;
       await conversation.send(prompt, files, { echo, isolated: true, act });
       if (conversation.messages.length > before) {
@@ -656,6 +671,9 @@ class ZendiaCaptchaAgentService {
   // the delivery finishes; a new challenge the carried-on work meets is found
   // and worked as any other.
   #handBack(conversation) {
+    if (conversation.discarded) {
+      return;
+    }
     conversation
       .send(
         "The step that was holding up the page is done and the page is ready now. Pick the task you were asked to do back up and carry it through to the end; if anything still needs the user, tell them.",
@@ -663,6 +681,16 @@ class ZendiaCaptchaAgentService {
         { echo: "Carrying on with the task…", isolated: false }
       )
       .catch(e => say(`hand back failed: ${e}`));
+  }
+
+  // Whether the conversation is still the tab's: a new chat (the panel's
+  // new chat button) discards it, and the subagent sends it nothing more.
+  #current(browser, conversation) {
+    return (
+      !!conversation &&
+      !conversation.discarded &&
+      ZendiaAgents.conversationFor(browser) === conversation
+    );
   }
 
   // Once the agent is done with the tab: a turn of the user's or one of

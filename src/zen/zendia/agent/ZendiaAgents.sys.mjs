@@ -107,6 +107,11 @@ export class ZendiaAgentConversation {
   run = null;
   /** The agent's id of this conversation, to resume it. */
   resume = null;
+  /**
+   * Whether the user started a new chat over this one: it is no longer any
+   * tab's, sends nothing more, and resumes nothing.
+   */
+  discarded = false;
   startedAt = 0;
   /** Whether a finished turn has not been looked at yet. */
   unseen = false;
@@ -244,7 +249,7 @@ export class ZendiaAgentConversation {
         : {
             type: "user",
             text: text || "See the attached files.",
-            ...(files.length ? { files: files.map(file => file.name) } : {})
+            ...(files.length ? { files: files.map(file => file.name) } : {}),
           }
     );
     this.startedAt = Date.now();
@@ -315,11 +320,11 @@ export class ZendiaAgentConversation {
       !driver.ensureConnected ||
       (await this.#service.ensureConnected(this.agent));
     this.#starting = false;
-    if (!connected) {
+    const unstarted = this.#unstartable(connected);
+    if (unstarted) {
       ZendiaAgentServer.close(token);
-      const error = `Could not add zendia to ${this.agent.name}'s MCP servers`;
-      log.write("done", { error, ms: Date.now() - this.startedAt });
-      this.#push({ type: "error", text: error });
+      log.write("done", { error: unstarted, ms: Date.now() - this.startedAt });
+      this.#push({ type: "error", text: unstarted });
       return;
     }
     this.run = new ZendiaAgentRun({
@@ -408,6 +413,17 @@ export class ZendiaAgentConversation {
   stop() {
     this.#userStopped = true;
     this.run?.stop();
+  }
+
+  // Why a turn that got ready cannot start, or null: a new chat was started
+  // over this one while it got ready, or the agent could not be connected.
+  #unstartable(connected) {
+    if (this.discarded) {
+      return "Discarded: a new chat was started";
+    }
+    return connected
+      ? null
+      : `Could not add zendia to ${this.agent.name}'s MCP servers`;
   }
 
   // Whether the user stopped the last turn by hand, so work that drives this
@@ -1088,7 +1104,13 @@ class ZendiaAgentService {
    */
   reset(browser) {
     const conversation = this.#conversations.get(browser);
-    conversation?.stop();
+    if (conversation) {
+      // Gone for good: a turn still winding down cannot bring it back to a
+      // tab (retarget), and nothing sent to it later resumes its session.
+      conversation.discarded = true;
+      conversation.resume = null;
+      conversation.stop();
+    }
     this.#conversations.delete(browser);
     for (const tab of conversation?.tabs ?? []) {
       if (this.#conversations.get(tab) == conversation) {
@@ -1102,7 +1124,7 @@ class ZendiaAgentService {
   // the tabs it worked on before, and comes to the new one unless that tab
   // has a conversation of its own.
   retarget(conversation, browser) {
-    if (browser == conversation.browser) {
+    if (browser == conversation.browser || conversation.discarded) {
       return;
     }
     const driving = conversation.running;

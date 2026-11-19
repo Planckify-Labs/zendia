@@ -614,8 +614,15 @@ export class ZendiaAgentDock {
    */
   reset(browser) {
     lazy.ZendiaAgents.reset(browser);
+    // The tab in front may have had the chat too (the agent moved on from
+    // it to another tab), or one of its own: either way the new chat is the
+    // one of the tab the user is looking at.
+    const selected = this.#window.gBrowser.selectedBrowser;
+    if (selected != browser) {
+      lazy.ZendiaAgents.reset(selected);
+    }
     this.#bind(null);
-    this.open(browser);
+    this.open(selected);
   }
 
   /**
