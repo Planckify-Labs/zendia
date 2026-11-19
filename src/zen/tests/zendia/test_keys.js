@@ -161,6 +161,43 @@ add_task(function test_token_to_event_fields() {
   Assert.equal(ZendiaKeys.tokenToEvent("<nope>"), null);
 });
 
+add_task(function test_token_to_event_rejects_garbage() {
+  // A malformed bracket must be null, never a junk event with an empty key
+  // that a capture would try to act on. The subagent's tokens come from
+  // parse(), so these should never reach tokenToEvent, but a stray one must
+  // do nothing rather than finish a capture or press an empty key.
+  for (const garbage of ["<>", "<C->", "<S->", "<C-A->", "< >", "<-a>"]) {
+    Assert.equal(
+      ZendiaKeys.tokenToEvent(garbage),
+      null,
+      `${garbage} is not a key`
+    );
+  }
+  // A modifier with a real single key is still a key.
+  Assert.ok(ZendiaKeys.tokenToEvent("<C-->"), "<C--> is Ctrl and -");
+});
+
+add_task(function test_token_to_event_shifted_letter_inverts() {
+  // The "<S-x>" form (a letter with a bare Shift) is the uppercase character,
+  // exactly as its canonical "X": both must build the same event, so a key
+  // pressed from either reads back as "X".
+  const shifted = ZendiaKeys.tokenToEvent("<S-x>");
+  Assert.ok(shifted, "<S-x> builds an event");
+  Assert.equal(shifted.key, "X", "the key is the uppercase character");
+  Assert.equal(shifted.code, "KeyX");
+  Assert.ok(shifted.shiftKey && !shifted.ctrlKey);
+  Assert.equal(
+    ZendiaKeys.fromEvent(shifted),
+    "X",
+    "<S-x> reads back as the canonical H-style uppercase token"
+  );
+  Assert.deepEqual(
+    ZendiaKeys.tokenToEvent("<S-x>"),
+    ZendiaKeys.tokenToEvent("X"),
+    "<S-x> and X build the same event"
+  );
+});
+
 add_task(function test_from_event_named_and_ignored() {
   Assert.equal(ZendiaKeys.fromEvent(event("Escape")), "<Esc>");
   Assert.equal(ZendiaKeys.fromEvent(event("Enter")), "<CR>");

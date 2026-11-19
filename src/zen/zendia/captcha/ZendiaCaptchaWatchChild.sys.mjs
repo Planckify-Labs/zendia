@@ -1653,6 +1653,18 @@ export function challengeParts(window) {
       .sort((a, b) => picturesIn(b) - picturesIn(a))[0];
     if (kept && picturesIn(kept) > 0) {
       areaRect = kept;
+      // The slider's handle may sit on the far side of the instruction that
+      // split the area (DataDome's and Friendly Captcha's "Slide right…"
+      // between the puzzle and its track): take it back in, or there is
+      // nothing to grab. picturesIn counts only the pictures, so the cut
+      // keeps the puzzle and leaves the handle out. The instruction shown
+      // again between the two is harmless — it is read from the text anyway.
+      const sliders = area
+        .filter(({ element }) => !picturesOnly.has(element))
+        .map(({ rect }) => rect);
+      if (sliders.length) {
+        areaRect = union([areaRect, ...sliders]) ?? areaRect;
+      }
     }
   }
   // A little room around each part, inside the challenge still, and for

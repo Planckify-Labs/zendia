@@ -93,6 +93,9 @@ const WATCH_MS = 900;
 const GONE_LOOKS = 3;
 
 const MOUSE_TYPES = new Set(["mousemove", "mousedown", "mouseup"]);
+// A drag's stages to the touch event each also sends, so a slider or piece
+// that only answers touch or pointer input (GeeTest's) is driven too.
+const TOUCH_STAGES = { start: "touchstart", move: "touchmove", end: "touchend" };
 
 export function plainRect(left, top, width, height) {
   return {
@@ -543,7 +546,7 @@ export async function captchaIsThere(actor, window, areas) {
  *   first, or null if one did not answer.
  */
 export async function pointerAt(actor, window, data) {
-  const { type, x, y, buttons, frame } = data ?? {};
+  const { type, x, y, buttons, frame, touch } = data ?? {};
   if (
     !MOUSE_TYPES.has(type) ||
     !Number.isFinite(x) ||
@@ -579,6 +582,7 @@ export async function pointerAt(actor, window, data) {
       y: (y - box.top) / box.scaleY,
       buttons: buttons ?? 0,
       frame: frame ? frame.slice(1) : undefined,
+      touch,
     });
     return Array.isArray(reply) &&
       reply.every(each => Number.isSafeInteger(each))
@@ -593,6 +597,19 @@ export async function pointerAt(actor, window, data) {
       ? { buttons: buttons ?? 0 }
       : { button: 0, buttons: buttons ?? 0, clickCount: 1 }
   );
+  // A drag's gesture is sent as touch too, next to the mouse, for a control
+  // that listens only for touch or pointer events. Clicks and hovers, which
+  // pass no stage, stay mouse only so a tap never double-fires a click.
+  const touchType = TOUCH_STAGES[touch];
+  if (touchType) {
+    try {
+      window.synthesizeTouchEvent(touchType, [
+        { offsetX: x, offsetY: y, identifier: 0 },
+      ]);
+    } catch {
+      // No touch support here; the mouse event still went.
+    }
+  }
   return [];
 }
 
@@ -946,13 +963,14 @@ export class PointerPad {
     this.#draw();
   }
 
-  async #send(type, point, buttons) {
+  async #send(type, point, buttons, touch = null) {
     return pointerAt(this.#actor, this.#window, {
       type,
       x: point.x,
       y: point.y,
       buttons,
       frame: this.#held?.chain,
+      touch,
     });
   }
 
@@ -995,7 +1013,7 @@ export class PointerPad {
     }
     const at = { ...this.#cursor };
     await this.#send("mousemove", at, 0);
-    const chain = await this.#send("mousedown", at, 1);
+    const chain = await this.#send("mousedown", at, 1, "start");
     this.#held = { chain: chain ?? undefined, start: at, walked: at };
     this.#refocus();
     this.#draw();
@@ -1007,7 +1025,7 @@ export class PointerPad {
     }
     const from = this.#held.walked;
     for (const next of ZendiaCaptcha.path(from, point, PATH_STEP)) {
-      await this.#send("mousemove", next, 1);
+      await this.#send("mousemove", next, 1, "move");
       await new Promise(resolve =>
         this.#window.setTimeout(resolve, MOVE_PAUSE_MS)
       );
@@ -1026,7 +1044,7 @@ export class PointerPad {
       }
       const at = { ...this.#cursor };
       await this.#dragTo(at);
-      await this.#send("mouseup", at, 0);
+      await this.#send("mouseup", at, 0, "end");
       this.#held = null;
       this.#refocus();
       this.#draw();
@@ -1113,6 +1131,7 @@ export class PointerPad {
         y: this.#cursor.y,
         buttons: 0,
         frame: held.chain,
+        touch: "end",
       }).catch(() => {});
     }
     try {

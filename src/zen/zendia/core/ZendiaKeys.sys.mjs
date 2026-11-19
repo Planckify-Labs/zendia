@@ -104,6 +104,25 @@ function isFunctionKey(name) {
   return /^F([1-9]|1[0-9]|2[0-4])$/.test(name);
 }
 
+// A KeyboardEvent-style getModifierState for a synthetic token event. It is
+// shared, reading `this`, rather than a fresh closure per event: two events
+// built from the same token are then structurally equal, and no closure is
+// allocated per key fed.
+function tokenEventModifierState(state) {
+  switch (state) {
+    case "Shift":
+      return !!this.shiftKey;
+    case "Control":
+      return !!this.ctrlKey;
+    case "Alt":
+      return !!this.altKey;
+    case "Meta":
+      return !!this.metaKey;
+    default:
+      return false;
+  }
+}
+
 /**
  * Build the canonical token for a key and a set of modifiers.
  *
@@ -320,12 +339,17 @@ export const ZendiaKeys = {
         modifiers.add(modifier);
       }
       const mapped = CANONICAL_TO_KEY[keyPart];
-      // A bracketed name that is neither a known key nor a function key nor a
-      // single character is not a key at all.
+      // A bracketed body is a key only if it is a known name ("CR"), a
+      // function key ("F5"), or a single character carrying a modifier
+      // ("C-d", "C--"). Anything else is not a key and must be null, never a
+      // junk event with an empty key ("<>", "<C->") or a bare bracketed
+      // character ("<a>", which is parsed as "<", "a", ">", not a key), both
+      // of which a capture would otherwise try to act on. parseBracketed
+      // rejects the same shapes.
       if (
         mapped === undefined &&
-        keyPart.length > 1 &&
-        !isFunctionKey(keyPart)
+        !isFunctionKey(keyPart) &&
+        !(keyPart.length == 1 && modifiers.size)
       ) {
         return null;
       }
@@ -340,10 +364,14 @@ export const ZendiaKeys = {
       const lower = key.toLowerCase();
       if (/[a-z]/.test(lower)) {
         // A chorded letter is the physical key in lower case, with Shift
-        // spelled out; fromEvent reads event.code for it.
+        // spelled out; fromEvent reads event.code for it. A bare Shift on a
+        // letter is the uppercase character, as a real keyboard sends it, so
+        // the "<S-x>" form inverts to the same event as its canonical "X".
         code = `Key${lower.toUpperCase()}`;
         if (chorded) {
           key = lower;
+        } else if (modifiers.has("S")) {
+          key = lower.toUpperCase();
         }
       } else if (/[0-9]/.test(key)) {
         code = `Digit${key}`;
@@ -361,20 +389,7 @@ export const ZendiaKeys = {
       metaKey,
       shiftKey,
       isComposing: false,
-      getModifierState(state) {
-        switch (state) {
-          case "Shift":
-            return shiftKey;
-          case "Control":
-            return ctrlKey;
-          case "Alt":
-            return altKey;
-          case "Meta":
-            return metaKey;
-          default:
-            return false;
-        }
-      },
+      getModifierState: tokenEventModifierState,
     };
   },
 

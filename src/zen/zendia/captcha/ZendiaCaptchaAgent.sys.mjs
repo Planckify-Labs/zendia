@@ -180,7 +180,7 @@ Recipes:
 - Pick images: type the tag on each matching tile, then \`Enter\`.
 - Type characters: \`Tab\`, type them, \`Esc\`, \`Enter\`.
 - Audio: \`Ctrl+A\`, \`Ctrl+P\` to listen, \`Tab\`, type what is said, \`Esc\`, \`Enter\`.
-- Slide a piece to a gap: type the handle's tag; a ruler of one-letter tags lies over the piece's row; type the letter under the gap, nudge with \`h\`/\`l\` (\`H\`/\`L\` for more) until the piece fits, then \`Space\`.
+- Slide a piece to a gap: type the handle's tag (the arrow or bright knob at the track's start) to grab it — the mouse is now held down. The handle does not have to be beside the picture; its track can sit below it. Then LOOK AGAIN: only now does a ruler of one-letter tags appear across the piece's row, one tag per stop. The ruler only gets the piece CLOSE, not exact: type the tag nearest the gap to drag the piece there, look again, and nudge one step at a time with \`h\`/\`l\` (\`H\`/\`L\` for bigger steps, a count like \`3l\` to repeat), looking again after each nudge, until the piece sits squarely inside the gap; then \`Space\` to drop it. Never guess a ruler tag before you have looked and seen it, and never let go until the piece lines up — a drop even a little off fails.
 - Rotate: type the rotate button's tag until the picture is upright, then \`Enter\`.
 - Click points or icons in order: \`.\`, then for each in turn a grid tag near it, \`h\`\`j\`\`k\`\`l\` onto it, \`Space\`; then \`Enter\`.
 - Press and hold: type the button's tag, wait while it fills, then \`Space\` when it is done.
@@ -402,9 +402,14 @@ class ZendiaCaptchaAgentService {
         (shot?.labeled == "captcha" || shot?.labeled == "cursor") &&
         ["open", "settled", "clicked"].includes(shot?.state);
       // A later pass that finds nothing to act on: the challenge is solved
-      // and gone, so there is nothing left to do or say.
+      // and gone, so there is nothing left to do or say. The agent that was
+      // working the tab is sent back to its task, unless this was the test
+      // button (force) or the user stopped by hand.
       if (!canAct && attempt > 0) {
         this.#endCapture(browser);
+        if (!force && !conversation.stoppedByUser) {
+          this.#handBack(conversation);
+        }
         return;
       }
       // The picture in the chat, the first time only; after that the labels
@@ -538,15 +543,25 @@ class ZendiaCaptchaAgentService {
       await new Promise(resolve => setTimeout(resolve, KEY_GAP_MS));
     }
     await new Promise(resolve => setTimeout(resolve, KEY_SETTLE_MS));
-    return took
-      ? {
-          ok: true,
-          detail: `Pressed ${ZendiaKeys.format(tokens)}. Look again to see what changed.`,
-        }
-      : {
-          ok: false,
-          detail: "The keys did nothing: the task is over, or its labels are not up.",
-        };
+    if (!took) {
+      return {
+        ok: false,
+        detail:
+          "The keys did nothing: the task is over, or its labels are not up.",
+      };
+    }
+    // When some keys were taken and others not, the labels changed partway
+    // (a pick redrew the challenge), so the later keys — often the verify
+    // key — never landed. Say so, so the subagent looks again and re-presses
+    // rather than believing it submitted.
+    const partial =
+      took < tokens.length
+        ? ` Only the first ${took} of ${tokens.length} registered; the rest did nothing, so the challenge changed before them and they did not land — look again and press them again if still needed.`
+        : "";
+    return {
+      ok: true,
+      detail: `Pressed ${ZendiaKeys.format(tokens)}.${partial} Look again to see what changed.`,
+    };
   }
 
   // Type text into the challenge's answer field, for a task solved by reading
@@ -625,6 +640,23 @@ class ZendiaCaptchaAgentService {
     } catch {
       // The tab is gone; nothing to clear.
     }
+  }
+
+  // Once the subagent has cleared the challenge, the agent is sent back to
+  // the work the user asked for: a normal turn that resumes its session (the
+  // isolated solve turns left the resume id alone), so a page that stopped
+  // on a challenge does not strand the task. It is told nothing of what the
+  // subagent did, only that the way is clear. Fired off, not waited on, so
+  // the delivery finishes; a new challenge the carried-on work meets is found
+  // and worked as any other.
+  #handBack(conversation) {
+    conversation
+      .send(
+        "The step that was holding up the page is done and the page is ready now. Pick the task you were asked to do back up and carry it through to the end; if anything still needs the user, tell them.",
+        [],
+        { echo: "Carrying on with the task…", isolated: false }
+      )
+      .catch(e => say(`hand back failed: ${e}`));
   }
 
   // Once the agent is done with the tab: a turn of the user's or one of
@@ -1389,8 +1421,8 @@ class ZendiaCaptchaAgentService {
       `Pass type_keys a list of keys in order: a tile's letters typed together like "ac", a move like "h", "H" or ".", or a named key exactly as above ("Enter", "Tab", "Ctrl+R", "Ctrl+A", "Ctrl+P", "Space"). Pass type_text the characters to put in an answer field.
 Work it on your own, and do not stop until it is finished:
 1. First see the task: call picture_view on challenge-area.jpg (or open the file you were given). Only after you have truly tried and got no image may you say you cannot see it, in one short line, and stop.
-2. Read what it asks and the labels off the picture, and make the move for its kind: pick images (type each matching tile's letters, then verify); slide a piece to a gap; rotate; click points in order; press and hold; a checkbox — all with type_keys. If it shows characters to copy, read them and put them in with type_text, then verify.
-3. Call look_again: it returns a fresh picture and what the task asks now. Read it again from that, not from memory, and make the next move. When one is complete, submit with the verify key; if it then shows another, solve that one too.
+2. Read what it asks and the labels off the picture, and make the move for its kind: pick images (type each matching tile's letters, then verify); slide a piece to a gap; rotate; click points in order; press and hold; a checkbox — all with type_keys. If it shows characters to copy, read them and put them in with type_text, then verify. A slider or drag puzzle takes two looks: first type the handle's tag alone to grab it (its track may be below the picture, not beside it), then call look_again — only then does a ruler of tags appear across the row. The ruler only gets the piece CLOSE, not exact: type the tag nearest the gap, then look_again and nudge one step at a time with \`h\`/\`l\` (\`H\`/\`L\` for bigger steps), looking again after each nudge, until the piece's shape sits squarely inside the gap. Only then \`Space\`. Never drop right after the ruler jump without first looking and correcting the fit with nudges; the exact fit is what passes, and the ruler alone rarely lands it. Do not guess the ruler before you have looked.
+3. After each press the labels change, and new ones often appear — a ruler across a slider's row once you grab, the next button or field, the tiles of the next step. So call look_again after every move: it returns a fresh picture with the labels that are on screen now, and what it asks now. Read the labels off that latest picture and choose your next key from what you see there, never from a label you remember or guess — if you expected a new label and do not see it yet, look_again once more before pressing. When one task is complete, submit with the verify key; if another appears, solve that one too.
 4. Keep looking and acting until the task is finished (it is gone, or it says it passed). If a picture is too blurred or it keeps refusing, get a fresh one with the new-task key and carry on.
 Do not press \`Esc\` to leave — that drops your control; use it only to cancel a drag under the cursor. If type_text reports there is no field it can fill, or the task needs listening to audio, that part cannot be done: say so in one short line and stop. Do not name or guess what this is or where it is from, do not explain it, and do not write steps for the user — just do it yourself. When it is finished, or you are truly stuck, answer in one short line that says only that.`,
     ]

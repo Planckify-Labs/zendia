@@ -14,6 +14,15 @@ function type(keys) {
   }
 }
 
+// Press a token in the live capture the way the isolated CAPTCHA subagent
+// does: through the top browsing context's ZendiaKeys actor, with no
+// keyboard. Resolves to whether the capture took it.
+function feedToken(browser, token) {
+  return browser.browsingContext.currentWindowGlobal
+    .getActor("ZendiaKeys")
+    .sendQuery("Zendia:FeedToken", { token });
+}
+
 // The labels on the page, not the prompt that says what the jump is.
 const labelsShown = tab =>
   SpecialPowers.spawn(tab.linkedBrowser, [], () =>
@@ -543,6 +552,62 @@ add_task(async function test_gc_says_what_it_labeled() {
     "its controls alone"
   );
   EventUtils.synthesizeKey("KEY_Escape");
+  BrowserTestUtils.removeTab(tab);
+});
+
+// The subagent's own path: tokens fed into the live capture without a
+// keyboard must pick a tile and press Verify, exactly as the synthesized
+// keys above do, and a malformed token must do nothing.
+add_task(async function test_fed_tokens_drive_the_challenge() {
+  const { Zendia } = ChromeUtils.importESModule(
+    "resource:///modules/zendia/Zendia.sys.mjs"
+  );
+  const { tab, frame, selected } = await openChallenge();
+  const browser = tab.linkedBrowser;
+  is(
+    await Zendia.run("jump.captcha", { orPage: true }, { browser }),
+    "captcha",
+    "the CAPTCHA is labeled for the keys"
+  );
+  await TestUtils.waitForCondition(
+    async () => (await labelsShown(tab)).length == 4,
+    "its controls are labeled"
+  );
+
+  // A malformed token is not a key: the capture refuses it and nothing moves.
+  is(await feedToken(browser, "<>"), false, "a malformed token is refused");
+  is(await feedToken(browser, "<C->"), false, "an empty chord is refused");
+  is(await selected(), 0, "and nothing is picked");
+
+  // Feeding an image's label letters picks it, as the subagent reads them off
+  // the shot and types them.
+  const labels = await labelsShown(tab);
+  for (const char of labels[0]) {
+    ok(await feedToken(browser, char), "a label letter is taken");
+  }
+  await TestUtils.waitForCondition(
+    async () => (await selected()) == 1,
+    "a fed label picks a tile"
+  );
+  is((await labelsShown(tab)).length, 4, "the labels stay for the next pick");
+
+  // <CR> presses Verify through the challenge's purpose keys, hiding it.
+  ok(await feedToken(browser, "<CR>"), "Enter is taken");
+  await TestUtils.waitForCondition(
+    async () =>
+      await SpecialPowers.spawn(frame, [], () => content.document.body.hidden),
+    "a fed <CR> verifies the challenge"
+  );
+  await TestUtils.waitForCondition(
+    async () => !(await labelsShown(tab)).length,
+    "the labels go once the challenge does"
+  );
+  // With the capture over, the subagent hears that its keys do nothing.
+  is(
+    await feedToken(browser, "a"),
+    false,
+    "a key fed after the capture ends is not taken"
+  );
   BrowserTestUtils.removeTab(tab);
 });
 
