@@ -851,6 +851,9 @@ class JumpSession {
   #noticeTimer = 0;
   // Where the labels of this drawing are, for the next not to cover them.
   #placed = [];
+  // Each label drawn, with the rect of what it names: a shot of part of the
+  // page grows to take in the labels of what it shows.
+  #tagged = [];
   // The answers the CAPTCHAs of the page had left when the jump began: one
   // more means one was solved, and the jump has done its work.
   #tokens = 0;
@@ -894,6 +897,34 @@ class JumpSession {
 
   get done() {
     return this.#done;
+  }
+
+  /**
+   * The labels on screen now, each with what it names, in this window's
+   * viewport, for a shot to check they are there and take them in. Null
+   * while the cursor has the keys: its own tags lie inside what it is over.
+   *
+   * @returns {{tag: object, target: object}[]|null}
+   */
+  get labelRects() {
+    if (this.#pad && !this.#done) {
+      return null;
+    }
+    if (this.#done || !this.#root?.isConnected) {
+      return [];
+    }
+    const plain = ({ left, top, width, height }) => ({
+      left,
+      top,
+      width,
+      height,
+    });
+    return this.#tagged
+      .filter(({ tag }) => tag.isConnected)
+      .map(({ tag, target }) => ({
+        tag: plain(tag.getBoundingClientRect()),
+        target: plain(target),
+      }));
   }
 
   // Settles when the jump is over, however it ended.
@@ -1441,6 +1472,7 @@ class JumpSession {
     const document = window.document;
     this.#root?.remove();
     this.#placed = [];
+    this.#tagged = [];
     const root = document.createElementNS(HTML_NS, "div");
     root.style.cssText =
       "all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;";
@@ -1483,7 +1515,9 @@ class JumpSession {
         root.append(box);
       }
       if (label) {
-        root.append(this.#tag(label, target));
+        const tag = this.#tag(label, target);
+        this.#tagged.push({ tag, target: rect });
+        root.append(tag);
       }
     });
     if (!this.#hints) {

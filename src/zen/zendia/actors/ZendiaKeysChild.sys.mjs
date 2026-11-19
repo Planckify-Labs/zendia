@@ -177,6 +177,14 @@ export class ZendiaKeysChild extends JSWindowActorChild {
         this.#capture?.finish?.();
         this.#capture = null;
         break;
+      // Where the labels of the capture are, for the CAPTCHA subagent's
+      // shot: none when no capture is up, null when it cannot say (the
+      // cursor's, whose tags lie inside what it is over).
+      case "Zendia:CaptureLabels":
+        if (!this.#capture || this.#capture.done) {
+          return [];
+        }
+        return this.#capture.labelRects ?? null;
       case "Zendia:LeaveField":
         this.#leaveField();
         break;

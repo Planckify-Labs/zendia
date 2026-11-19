@@ -75,6 +75,10 @@ const OPENED_PICTURELESS_MS = 6000;
 // How long the jump labels have to be painted before the shot: the action
 // that draws them returns with them in the page, this covers the paint.
 const LABELS_SETTLE_MS = 150;
+// How long the labels may take to be up again before a shot, and how many
+// times a challenge is labeled before it is shot without them.
+const LABELS_WAIT_MS = 1500;
+const LABEL_TRIES = 2;
 // How long the parts may wait for the last of their pictures to be drawn
 // and to hold still, and how far apart the looks for the latter are.
 const PARTS_DRAW_MS = 5000;
@@ -532,7 +536,9 @@ class ZendiaCaptchaAgentService {
       try {
         consumed = await Promise.race([
           actor.sendQuery("Zendia:FeedToken", { token }),
-          new Promise(resolve => setTimeout(() => resolve(false), RECT_TIMEOUT_MS)),
+          new Promise(resolve =>
+            setTimeout(() => resolve(false), RECT_TIMEOUT_MS)
+          ),
         ]);
       } catch {
         consumed = false;
@@ -930,21 +936,41 @@ class ZendiaCaptchaAgentService {
     if (!zendia || !browser.isConnected) {
       return false;
     }
-    let labeled;
-    try {
-      labeled = await zendia.run("jump.captcha", { orPage: true }, { browser });
-    } catch (e) {
-      say(`labels failed: ${e}`);
-      return false;
+    let labeled = false;
+    // Labeled once more if the first try threw or drew no labels: a frame
+    // that navigated as it was asked, a challenge redrawn in between.
+    for (let tries = 0; tries < LABEL_TRIES && browser.isConnected; tries++) {
+      try {
+        labeled = await zendia.run(
+          "jump.captcha",
+          { orPage: true },
+          { browser }
+        );
+      } catch (e) {
+        console.error("Zendia: CAPTCHA subagent could not label", e);
+        say(`labels failed: ${e}`);
+        labeled = false;
+        await new Promise(resolve => setTimeout(resolve, LABELS_SETTLE_MS));
+        continue;
+      }
+      // A page that answers nothing labeled the CAPTCHA, as before it said.
+      labeled = ["captcha", "cursor", "page"].includes(labeled)
+        ? labeled
+        : "captcha";
+      // The labels are in the page once the action returns; this covers
+      // the paint before the shot, and says they are there.
+      await new Promise(resolve => setTimeout(resolve, LABELS_SETTLE_MS));
+      const tags = await this.#awaitLabels(browser);
+      if (labeled == "cursor" || tags === null || tags.length) {
+        break;
+      }
+      say(`labeled ${labeled}, but no labels are on screen`);
+      labeled = false;
+      // The jump that drew nothing is ended, not left to draw over the
+      // next one later.
+      this.#endCapture(browser);
     }
-    // A page that answers nothing labeled the CAPTCHA, as before it said.
-    labeled = ["captcha", "cursor", "page"].includes(labeled)
-      ? labeled
-      : "captcha";
     say(`labeled: ${labeled}`);
-    // The labels are in the page once the action returns; this covers the
-    // paint before the shot.
-    await new Promise(resolve => setTimeout(resolve, LABELS_SETTLE_MS));
     return browser.isConnected && labeled;
   }
 
@@ -1120,7 +1146,8 @@ class ZendiaCaptchaAgentService {
         SHOT_PADDING
       );
       if (moved) {
-        rect = moved.rect;
+        const tags = await this.#awaitLabels(browser);
+        rect = this.#takeInLabels(window, moved.rect, moved, tags);
         ({ viewWidth, viewHeight } = moved);
       } else {
         // A frame on the way up did not answer: the labels are in the top
@@ -1284,8 +1311,89 @@ class ZendiaCaptchaAgentService {
         rect: moved,
         viewWidth: view.viewWidth,
         viewHeight: view.viewHeight,
+        scrollX: view.scrollX ?? 0,
+        scrollY: view.scrollY ?? 0,
       }
     );
+  }
+
+  // Where the jump labels are on the user's screen now, each with the rect
+  // of what it names, in the top page's viewport: null when the cursor has
+  // the keys (its tags lie inside what it is over) or the page cannot say,
+  // none when no labels are up.
+  async #labelsOnScreen(browser) {
+    try {
+      const answer = await Promise.race([
+        browser.browsingContext?.currentWindowGlobal
+          ?.getActor("ZendiaKeys")
+          .sendQuery("Zendia:CaptureLabels"),
+        new Promise(resolve =>
+          setTimeout(() => resolve(null), RECT_TIMEOUT_MS)
+        ),
+      ]);
+      return Array.isArray(answer) ? answer : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // The labels, once they are up: a jump that stays reads its challenge
+  // again as it changes, and a read that found it between two drawings
+  // leaves no labels until the next. Waited for a while; none, if they
+  // never came back.
+  async #awaitLabels(browser, wait = LABELS_WAIT_MS) {
+    const until = Date.now() + wait;
+    for (;;) {
+      const tags = await this.#labelsOnScreen(browser);
+      if (tags === null || tags.length || Date.now() >= until) {
+        return tags;
+      }
+      await new Promise(resolve => setTimeout(resolve, LABELS_SETTLE_MS));
+    }
+  }
+
+  // A rect of the top page's document grown to take in the labels of what
+  // it shows: a label sits at the corner of what it names, and a picture
+  // bigger than the part shot (hCaptcha's canvas, under its instruction
+  // too) has its label outside that part. Only the labels of what the rect
+  // shows; kept inside the view.
+  #takeInLabels(window, rect, view, tags) {
+    if (!rect || !tags?.length) {
+      return rect;
+    }
+    const scrollX = view.scrollX ?? 0;
+    const scrollY = view.scrollY ?? 0;
+    let left = rect.left - scrollX;
+    let top = rect.top - scrollY;
+    let right = left + rect.width;
+    let bottom = top + rect.height;
+    const meets = box =>
+      box.left < right &&
+      box.left + box.width > left &&
+      box.top < bottom &&
+      box.top + box.height > top;
+    const shown = tags.filter(({ target }) => target && meets(target));
+    // A little room around each label, for its shadow and a rounding of
+    // the crop.
+    const room = 3;
+    for (const { tag } of shown) {
+      left = Math.min(left, tag.left - room);
+      top = Math.min(top, tag.top - room);
+      right = Math.max(right, tag.left + tag.width + room);
+      bottom = Math.max(bottom, tag.top + tag.height + room);
+    }
+    left = Math.max(0, left);
+    top = Math.max(0, top);
+    right = Math.min(view.viewWidth ?? right, right);
+    bottom = Math.min(view.viewHeight ?? bottom, bottom);
+    return right > left && bottom > top
+      ? new window.DOMRect(
+          left + scrollX,
+          top + scrollY,
+          right - left,
+          bottom - top
+        )
+      : rect;
   }
 
   // The challenge in its two parts, each drawn alone: the area to act on
@@ -1357,7 +1465,14 @@ class ZendiaCaptchaAgentService {
         0
       );
       if (moved) {
-        areaRect = moved.rect;
+        // The labels may have gone between two readings of the challenge
+        // while its pictures were waited for: they are waited back, and
+        // the part grows to take in the labels of what it shows.
+        const tags = await this.#awaitLabels(browser);
+        if (tags && !tags.length) {
+          say("parts: no labels on screen for the shot");
+        }
+        areaRect = this.#takeInLabels(window, moved.rect, moved, tags);
         areaGlobal = browser.browsingContext?.currentWindowGlobal ?? global;
       }
     }
@@ -1415,7 +1530,9 @@ class ZendiaCaptchaAgentService {
   #solvePrompt(said, labeled) {
     const nowLine = LABELED_NOW[labeled] ?? LABELED_NOW.captcha;
     return [
-      said ? `At the start it asks: "${said}" — but the picture is the truth, and it can change.` : null,
+      said
+        ? `At the start it asks: "${said}" — but the picture is the truth, and it can change.`
+        : null,
       `A picture of the task is on the user's screen with small key labels on it, and you do it yourself. ${nowLine}`,
       `These are the keys, exactly as they work; use no others:\n${keysReference(null)}`,
       `Pass type_keys a list of keys in order: a tile's letters typed together like "ac", a move like "h", "H" or ".", or a named key exactly as above ("Enter", "Tab", "Ctrl+R", "Ctrl+A", "Ctrl+P", "Space"). Pass type_text the characters to put in an answer field.

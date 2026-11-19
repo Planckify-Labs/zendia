@@ -342,7 +342,10 @@ export const ZendiaControls = {
           // A frame hidden with `visibility` (GeeTest's chat widget sits
           // over its slider so) takes no mouse input: the page under it does.
           frame.checkVisibility({ visibilityProperty: true }) &&
-          frame.ownerGlobal.getComputedStyle(frame).pointerEvents != "none" &&
+          // ownerGlobal is chrome-only: a content process has no such
+          // property, so the frame's own document's window is asked.
+          (frame.documentGlobal ?? window).getComputedStyle(frame)
+            .pointerEvents != "none" &&
           isInWindow(window, frame.getBoundingClientRect())
       )
     );
