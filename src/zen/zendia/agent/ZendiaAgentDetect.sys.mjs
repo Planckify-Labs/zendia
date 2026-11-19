@@ -456,6 +456,23 @@ function cachePath() {
   );
 }
 
+/**
+ * What a binary looks like on disk right now. A version is only the version
+ * of the build it was read from, and an upgrade in place keeps the path, so
+ * this is what tells one build from the next.
+ *
+ * @param {string} path
+ * @returns {Promise<string|null>} Null when there is nothing there.
+ */
+export async function stampOf(path) {
+  try {
+    const { lastModified, size } = await IOUtils.stat(path);
+    return `${lastModified}:${size}`;
+  } catch {
+    return null;
+  }
+}
+
 async function isExecutable(path) {
   try {
     const info = await IOUtils.stat(path);
@@ -753,10 +770,17 @@ class ZendiaAgentDetector {
         ZENDIA_AGENTS.map(async agent => {
           const entry = cached[agent.id];
           const found = entry?.path && (await isExecutable(entry.path));
+          const stamp = found ? await stampOf(entry.path) : null;
+          // The path is still there, but is it still the same build? An
+          // upgrade in place moves the stamp, and the version it had is
+          // not the version it has: that one is read again behind the
+          // answer. A cache from before the stamp has none, and is read
+          // again once for the same reason.
+          const sameBuild = !!stamp && stamp === entry.stamp;
           return {
             ...forThisSystem(agent),
             path: found ? entry.path : null,
-            version: found ? (entry.version ?? null) : null,
+            version: sameBuild ? (entry.version ?? null) : null,
           };
         })
       );
@@ -816,7 +840,13 @@ class ZendiaAgentDetector {
     const agents = {};
     for (const agent of list) {
       if (agent.path) {
-        agents[agent.id] = { path: agent.path, version: agent.version };
+        agents[agent.id] = {
+          path: agent.path,
+          version: agent.version,
+          // The build the version was read from, so the next session can
+          // tell an upgrade in place from the binary it already knows.
+          stamp: await stampOf(agent.path),
+        };
       }
     }
     try {

@@ -949,6 +949,50 @@ export const ZENDIA_DRIVERS = {
  * @param {string} path
  * @param {object} data
  */
+/**
+ * Whether a config already holds what we would write: every value of
+ * `wanted` is there in `found`, which may hold more of its own.
+ *
+ * The agents migrate the files they are handed — kiro adds its permission
+ * rules and an upgrade fingerprint to the agent it is given — and writing
+ * one again that is already right makes it migrate again and keep another
+ * numbered backup of it, every run. What it added is its own, and is left
+ * alone as long as what we asked for is still in there.
+ *
+ * @param {*} found What is on disk.
+ * @param {*} wanted What the driver asked for.
+ * @returns {boolean}
+ */
+export function holdsJSON(found, wanted) {
+  if (Array.isArray(wanted)) {
+    return (
+      Array.isArray(found) &&
+      found.length === wanted.length &&
+      wanted.every((value, i) => holdsJSON(found[i], value))
+    );
+  }
+  if (wanted && typeof wanted == "object") {
+    return (
+      !!found &&
+      typeof found == "object" &&
+      !Array.isArray(found) &&
+      Object.entries(wanted).every(([key, value]) =>
+        holdsJSON(found[key], value)
+      )
+    );
+  }
+  return found === wanted;
+}
+
+// What a config on disk says, or null when there is nothing to read.
+async function readJSON(path) {
+  try {
+    return await IOUtils.readJSON(path);
+  } catch {
+    return null;
+  }
+}
+
 async function writePrivateJSON(path, data) {
   await IOUtils.makeDirectory(PathUtils.parent(path), {
     permissions: 0o700,
@@ -1012,6 +1056,16 @@ export class ZendiaAgentRun {
     try {
       await IOUtils.makeDirectory(this.turn.dir, { permissions: 0o700 });
       for (const file of files) {
+        // A config of this run's own (claude's, with the token in it) is
+        // always written and always removed again. A standing one is left
+        // as it is when it already holds what this run needs, so the agent
+        // does not migrate and back it up again on every turn.
+        if (
+          !file.temporary &&
+          holdsJSON(await readJSON(file.path), file.data)
+        ) {
+          continue;
+        }
         await writePrivateJSON(file.path, file.data);
         if (file.temporary) {
           this.#temporary.push(file.path);

@@ -14,6 +14,8 @@ const {
   parseWindowsPath,
   pathEnvironment,
   runForOutput,
+  stampOf,
+  ZendiaAgentDetect,
 } = ChromeUtils.importESModule(
   "resource:///modules/zendia/agent/ZendiaAgentDetect.sys.mjs"
 );
@@ -21,6 +23,7 @@ const {
   ZENDIA_DRIVERS,
   ZendiaAgentRun,
   guessInputs,
+  holdsJSON,
   orderEfforts,
   STDIO_PROXY,
   TOKEN_ENV,
@@ -2051,4 +2054,135 @@ add_task(async function test_picture_toolbox_acts_when_it_may() {
   // A wrong name still returns the only picture rather than an error.
   const guessed = await box.callTool("picture_view", { name: "wrong.jpg" });
   Assert.equal(guessed.image.data, "CQk=", "the sole picture is returned anyway");
+});
+
+// What kiro leaves behind after it has migrated the agent it was given:
+// our own keys, with its permission rules and an upgrade fingerprint of its
+// own added. Taken from a profile where it had done it fifty times.
+const KIRO_MIGRATED = {
+  name: "zendia",
+  description: "Works in the browser through zendia only",
+  tools: ["@zendia"],
+  allowedTools: ["@zendia"],
+  includeMcpJson: true,
+  permissions: {
+    rules: [
+      { capability: "mcp", match: ["zendia/*"], effect: "allow" },
+      { capability: "fs_read", match: ["./**"], effect: "allow" },
+    ],
+  },
+  kiroUpgrade: { revision: 3, fingerprint: "sha256:a096", source: "sha256:17" },
+};
+
+add_task(function test_a_config_an_agent_migrated_still_holds_what_we_asked() {
+  const { files } = ZENDIA_DRIVERS.kiro.launch(TURN);
+  const [mcp, agent] = files;
+  ok(
+    holdsJSON(KIRO_MIGRATED, agent.data),
+    "kiro's own additions are its own: what we asked for is still in there, " +
+      "so the file is left alone and kiro does not migrate it again"
+  );
+  ok(!holdsJSON(null, agent.data), "nothing on disk is not what we asked for");
+  ok(
+    !holdsJSON(
+      { ...KIRO_MIGRATED, allowedTools: ["@zendia", "@shell"] },
+      agent.data
+    ),
+    "a tool we did not allow is a config to write again"
+  );
+  ok(
+    !holdsJSON({ ...KIRO_MIGRATED, includeMcpJson: false }, agent.data),
+    "a value of ours that was changed is a config to write again"
+  );
+  ok(holdsJSON(mcp.data, mcp.data), "the same config holds itself");
+  ok(
+    !holdsJSON(
+      {
+        mcpServers: {
+          zendia: {
+            ...mcp.data.mcpServers.zendia,
+            url: "http://127.0.0.1:1/mcp",
+          },
+        },
+      },
+      mcp.data
+    ),
+    "a stale address — the browser's port of a run before — is written again"
+  );
+});
+
+add_task(function test_what_a_config_holds_is_read_to_the_leaves() {
+  ok(holdsJSON({ a: 1, b: 2 }, { a: 1 }), "more of its own is fine");
+  ok(!holdsJSON({ a: 1 }, { a: 1, b: 2 }), "less than we asked for is not");
+  ok(!holdsJSON({ a: { b: 1 } }, { a: { b: 2 } }), "a deep value counts");
+  ok(
+    holdsJSON({ a: { b: 1, c: 2 } }, { a: { b: 1 } }),
+    "and so does a deep extra"
+  );
+  ok(!holdsJSON({ a: ["x"] }, { a: ["x", "y"] }), "a list is all of it");
+  ok(!holdsJSON({ a: "1" }, { a: 1 }), "a string is not a number");
+  ok(!holdsJSON([1, 2], { 0: 1, 1: 2 }), "a list is not an object");
+  ok(holdsJSON(null, null), "nothing is nothing");
+});
+
+add_task(async function test_a_version_is_only_the_builds_it_was_read_from() {
+  const path = PathUtils.join(
+    PathUtils.tempDir,
+    `zendia-stamp-${Date.now()}.bin`
+  );
+  Assert.equal(await stampOf(path), null, "nothing there has no stamp");
+  await IOUtils.writeUTF8(path, "one");
+  const first = await stampOf(path);
+  ok(!!first, "a binary on disk has one");
+  Assert.equal(await stampOf(path), first, "the same binary keeps it");
+  await IOUtils.writeUTF8(path, "a longer build than before");
+  Assert.notEqual(
+    await stampOf(path),
+    first,
+    "an upgrade in place keeps the path and moves the stamp, which is what " +
+      "tells the cache its version belongs to a build that is gone"
+  );
+  await IOUtils.remove(path);
+  Assert.equal(await stampOf(path), null);
+});
+
+// The cache is read once per session, so this is the one task that may read
+// it: it plants both cases at once, a build that is still the build the
+// version was read from and one that has been replaced since.
+add_task(async function test_the_cache_keeps_a_version_only_for_its_build() {
+  const dir = PathUtils.join(do_get_profile().path, "zendia", "agent");
+  await IOUtils.makeDirectory(dir, {
+    createAncestors: true,
+    ignoreExisting: true,
+  });
+  const binary = async name => {
+    const path = PathUtils.join(dir, name);
+    await IOUtils.writeUTF8(path, "#!/bin/sh\necho 9.9.9\n");
+    await IOUtils.setPermissions(path, 0o755);
+    return path;
+  };
+  const same = await binary("agent-same");
+  const upgraded = await binary("agent-upgraded");
+  await IOUtils.writeJSON(PathUtils.join(dir, "detect-cache.json"), {
+    agents: {
+      cursor: { path: same, version: "1.1.1", stamp: await stampOf(same) },
+      kiro: { path: upgraded, version: "2.2.2", stamp: "0:0" },
+    },
+  });
+
+  const found = await ZendiaAgentDetect.detect();
+  const of = id => found.find(agent => agent.id == id);
+  Assert.equal(
+    of("cursor").version,
+    "1.1.1",
+    "the binary is the one the version was read from, so it still stands"
+  );
+  Assert.equal(of("cursor").path, same, "and it is still where it was");
+  Assert.equal(
+    of("kiro").version,
+    null,
+    "an upgrade in place keeps the path and moves the stamp: the version it " +
+      "had is not the version it has, and is read again rather than told"
+  );
+  Assert.equal(of("kiro").path, upgraded, "the path it found is still good");
 });
