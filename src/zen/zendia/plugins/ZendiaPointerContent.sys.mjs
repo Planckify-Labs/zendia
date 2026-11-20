@@ -95,7 +95,11 @@ const GONE_LOOKS = 3;
 const MOUSE_TYPES = new Set(["mousemove", "mousedown", "mouseup"]);
 // A drag's stages to the touch event each also sends, so a slider or piece
 // that only answers touch or pointer input (GeeTest's) is driven too.
-const TOUCH_STAGES = { start: "touchstart", move: "touchmove", end: "touchend" };
+const TOUCH_STAGES = {
+  start: "touchstart",
+  move: "touchmove",
+  end: "touchend",
+};
 
 export function plainRect(left, top, width, height) {
   return {
@@ -546,7 +550,7 @@ export async function captchaIsThere(actor, window, areas) {
  *   first, or null if one did not answer.
  */
 export async function pointerAt(actor, window, data) {
-  const { type, x, y, buttons, frame, touch } = data ?? {};
+  const { type, x, y, buttons, frame, touch, agent } = data ?? {};
   if (
     !MOUSE_TYPES.has(type) ||
     !Number.isFinite(x) ||
@@ -583,20 +587,28 @@ export async function pointerAt(actor, window, data) {
       buttons: buttons ?? 0,
       frame: frame ? frame.slice(1) : undefined,
       touch,
+      agent: !!agent,
     });
     return Array.isArray(reply) &&
       reply.every(each => Number.isSafeInteger(each))
       ? [id, ...reply]
       : null;
   }
-  window.synthesizeMouseEvent(
-    type,
-    x,
-    y,
-    type == "mousemove"
-      ? { buttons: buttons ?? 0 }
-      : { button: 0, buttons: buttons ?? 0, clickCount: 1 }
-  );
+  // An agent's press never takes the user's focus or window.
+  const mouse = () =>
+    window.synthesizeMouseEvent(
+      type,
+      x,
+      y,
+      type == "mousemove"
+        ? { buttons: buttons ?? 0 }
+        : { button: 0, buttons: buttons ?? 0, clickCount: 1 }
+    );
+  if (agent) {
+    ZendiaDom.agentMouse(window, mouse);
+  } else {
+    mouse();
+  }
   // A drag's gesture is sent as touch too, next to the mouse, for a control
   // that listens only for touch or pointer events. Clicks and hovers, which
   // pass no stage, stay mouse only so a tap never double-fires a click.
@@ -627,6 +639,98 @@ function meets(a, b) {
     a.top < b.top + b.height &&
     b.top < a.top + a.height
   );
+}
+
+// A #rrggbb color with an alpha, for the ghost's and a pad's soft fills.
+// Anything else (a color that is already rgba) comes back as it is.
+function fade(hex, alpha) {
+  const value = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex ?? "");
+  if (!value) {
+    return hex;
+  }
+  const [r, g, b] = value.slice(1).map(part => parseInt(part, 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// The arrow the pad and the ghost share, its tip at {0, 0}.
+function arrowCursor(document, fill) {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("width", "18");
+  svg.setAttribute("height", "24");
+  svg.setAttribute("viewBox", "0 0 18 24");
+  style(svg, { overflow: "visible" });
+  const arrow = document.createElementNS(SVG_NS, "path");
+  arrow.setAttribute(
+    "d",
+    "M0 0 L0 17 L4.5 13 L7.5 20 L10.5 18.6 L7.6 12 L13 12 Z"
+  );
+  arrow.setAttribute("fill", fill);
+  arrow.setAttribute("stroke", "#ffffff");
+  arrow.setAttribute("stroke-width", "1.4");
+  arrow.setAttribute("stroke-linejoin", "round");
+  svg.append(arrow);
+  return svg;
+}
+
+// How long an agent's press is marked on the page.
+const GHOST_MS = 800;
+
+/**
+ * A moment's marker where an agent pressed the page: the arrow the pointer
+ * pad draws, in the driving agent's own brand color, with a ring that grows
+ * and fades. Drawn only, and gone in a blink: the OS pointer never moves
+ * for it, so the user sees what an agent did without sharing their cursor.
+ *
+ * @param {Window} window
+ * @param {object} options
+ * @param {number} options.x In viewport CSS pixels.
+ * @param {number} options.y In viewport CSS pixels.
+ * @param {string} [options.color] The driving agent's color, from
+ *   agentColor(); the pad's own amber without one.
+ */
+export function flashPointer(window, { x, y, color } = {}) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return;
+  }
+  try {
+    const document = window.document;
+    const tone = color ?? AREA_OUTLINE;
+    const root = document.createElementNS(HTML_NS, "div");
+    root.style.cssText =
+      "all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;";
+    const ring = document.createElementNS(HTML_NS, "div");
+    style(ring, {
+      position: "absolute",
+      left: `${x - 10}px`,
+      top: `${y - 10}px`,
+      width: "20px",
+      height: "20px",
+      boxSizing: "border-box",
+      borderRadius: "50%",
+      border: `2px solid ${tone}`,
+      background: fade(tone, 0.35),
+      transition: `transform ${GHOST_MS}ms ease-out, opacity ${GHOST_MS}ms ease-out`,
+    });
+    root.append(ring);
+    const arrow = arrowCursor(document, tone);
+    style(arrow, {
+      position: "absolute",
+      left: `${x}px`,
+      top: `${y}px`,
+      transition: `opacity ${GHOST_MS}ms ease-out`,
+    });
+    root.append(arrow);
+    document.documentElement.append(root);
+    // In the next frame, so the ring grows from the point rather than
+    // appearing grown.
+    window.requestAnimationFrame(() => {
+      style(ring, { transform: "scale(2.2)", opacity: "0" });
+      style(arrow, { opacity: "0" });
+    });
+    window.setTimeout(() => root.remove(), GHOST_MS + 100);
+  } catch {
+    // The window is already gone.
+  }
 }
 
 /**
@@ -678,6 +782,12 @@ export class PointerPad {
   #notice = "";
   // A line the prompt always starts with.
   #banner = "";
+  // The driving agent's own color, for the cursor: each agent's pad reads
+  // at a glance as its own, in its tab-glow color.
+  #color = null;
+  // Whether an agent works this pad by message (Zendia:FeedToken) rather
+  // than the user at the keys: the user's keys are never swallowed into it.
+  #agentDriven = false;
   #resolveFinished;
   #finished = new Promise(resolve => (this.#resolveFinished = resolve));
 
@@ -706,6 +816,10 @@ export class PointerPad {
    * @param {?() => void} [options.onVerify] Presses the verify button: <CR>
    *   does, when nothing is held. Without it, <CR> clicks.
    * @param {?() => void} [options.onFinish] Called when the pad is over.
+   * @param {string} [options.color] The driving agent's color, from
+   *   agentColor(); the pad's own amber without one.
+   * @param {boolean} [options.agentDriven] An agent works the pad by
+   *   message: the user's keys are left to the page and the keymap.
    */
   constructor(
     actor,
@@ -723,6 +837,8 @@ export class PointerPad {
       notice = "",
       onVerify = null,
       onFinish = null,
+      color = null,
+      agentDriven = false,
     }
   ) {
     this.#onFinish = onFinish;
@@ -733,6 +849,8 @@ export class PointerPad {
     this.#drag = drag;
     this.#isThere = isThere;
     this.#banner = notice;
+    this.#color = color;
+    this.#agentDriven = agentDriven;
     this.#cursor = grab ?? ZendiaCaptcha.middle(areas[0]);
     if (lattice?.length) {
       this.#layouts.push(this.#makeLayout("board", lattice));
@@ -757,6 +875,12 @@ export class PointerPad {
 
   get done() {
     return this.#done;
+  }
+
+  // Whether an agent works this pad by message: ZendiaKeysChild leaves the
+  // user's own keys to the page and the keymap, and <Esc> takes them back.
+  get agentDriven() {
+    return this.#agentDriven;
   }
 
   // Settles when the pad is over, however it ended.
@@ -971,12 +1095,18 @@ export class PointerPad {
       buttons,
       frame: this.#held?.chain,
       touch,
+      agent: this.#agentDriven,
     });
   }
 
   // A press in a frame moves the focus into it, where the keys that follow
-  // would not reach this pad.
+  // would not reach this pad. An agent's keys reach the pad by message
+  // (Zendia:FeedToken) and need no focus; pulling it would raise the window
+  // over the user's work.
   #refocus() {
+    if (this.#agentDriven) {
+      return;
+    }
     try {
       const focused = this.#window.document.activeElement;
       if (focused?.browsingContext) {
@@ -1132,6 +1262,7 @@ export class PointerPad {
         buttons: 0,
         frame: held.chain,
         touch: "end",
+        agent: this.#agentDriven,
       }).catch(() => {});
     }
     try {
@@ -1183,6 +1314,9 @@ export class PointerPad {
 
   #promptText(layout) {
     const parts = [];
+    if (this.#agentDriven) {
+      parts.push("agent");
+    }
     if (this.#banner) {
       parts.push(this.#banner);
     }
@@ -1283,8 +1417,11 @@ export class PointerPad {
   #pointer(root) {
     const document = this.#window.document;
     const { x, y } = this.#cursor;
+    // An agent's pad is drawn in its own color, a user's in the pad's amber.
+    const tone = this.#color ?? AREA_OUTLINE;
     const ring = document.createElementNS(HTML_NS, "div");
     const size = this.#holding ? 22 : 16;
+    const held = this.#color ? fade(this.#color, 0.45) : HELD_FILL;
     style(ring, {
       position: "absolute",
       left: `${x - size / 2}px`,
@@ -1293,30 +1430,16 @@ export class PointerPad {
       height: `${size}px`,
       boxSizing: "border-box",
       borderRadius: "50%",
-      border: `2px solid ${AREA_OUTLINE}`,
-      background: this.#holding ? HELD_FILL : "transparent",
+      border: `2px solid ${tone}`,
+      background: this.#holding ? held : "transparent",
     });
     root.append(ring);
-    const svg = document.createElementNS(SVG_NS, "svg");
-    svg.setAttribute("width", "18");
-    svg.setAttribute("height", "24");
-    svg.setAttribute("viewBox", "0 0 18 24");
+    const svg = arrowCursor(document, this.#color ?? LABEL_BACKGROUND);
     style(svg, {
       position: "absolute",
       left: `${x}px`,
       top: `${y}px`,
-      overflow: "visible",
     });
-    const arrow = document.createElementNS(SVG_NS, "path");
-    arrow.setAttribute(
-      "d",
-      "M0 0 L0 17 L4.5 13 L7.5 20 L10.5 18.6 L7.6 12 L13 12 Z"
-    );
-    arrow.setAttribute("fill", LABEL_BACKGROUND);
-    arrow.setAttribute("stroke", "#ffffff");
-    arrow.setAttribute("stroke-width", "1.4");
-    arrow.setAttribute("stroke-linejoin", "round");
-    svg.append(arrow);
     root.append(svg);
   }
 

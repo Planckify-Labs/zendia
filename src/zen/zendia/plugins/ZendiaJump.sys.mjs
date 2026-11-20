@@ -25,8 +25,12 @@ export const ZendiaJumpSpec = {
     "jump.hints": jump("Label Every Link, Button and Field"),
     // Solving a CAPTCHA with the keys alone.
     // With orPage, a page whose CAPTCHA it cannot find is labeled whole.
+    // agentDriven and color come with the CAPTCHA subagent: the labels are
+    // its own color and its keys reach them by message, not from the user.
     "jump.captcha": jump("Label the CAPTCHA to Solve it with the Keys", {
       orPage: "boolean?",
+      agentDriven: "boolean?",
+      color: "string?",
     }),
     // Its controls by what they do, whatever their labels.
     "captcha.verify": jump("Verify the CAPTCHA (Verify, Next, Skip)"),

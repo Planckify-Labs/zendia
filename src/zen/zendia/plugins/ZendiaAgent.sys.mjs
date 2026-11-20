@@ -87,7 +87,16 @@ export const ZendiaAgentSpec = {
       desc: "Act on the Page for the Agent",
       where: "content",
       module: CONTENT,
-      params: { action: "string", element: "string?", text: "string?" },
+      // agentColor: the driving agent's own color, which the click and
+      // press points are marked with (flashPointer). quiet: the user's
+      // focus is in the window's own UI, and stays there.
+      params: {
+        action: "string",
+        element: "string?",
+        text: "string?",
+        agentColor: "string?",
+        quiet: "boolean?",
+      },
       agent: false,
     },
   },

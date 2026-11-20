@@ -51,6 +51,19 @@ const FRAME_QUERIES = new Set([
 ]);
 const FRAME_ACTIONS = new Set(["jump.controls", "jump.hints", "jump.captcha"]);
 
+// When the user last pressed a key, a button or the wheel in a tab, by its
+// browser: an agent working the tab waits until the user pauses.
+const gUserInput = new WeakMap();
+
+/**
+ * @param {Element} browser
+ * @returns {number} When the user's own input last reached the tab's page
+ *   (Date.now()), 0 if it never did.
+ */
+export function lastUserInput(browser) {
+  return gUserInput.get(browser) ?? 0;
+}
+
 export class ZendiaKeysParent extends JSWindowActorParent {
   receiveMessage({ name, data }) {
     const browser = this.browsingContext.top.embedderElement;
@@ -79,6 +92,13 @@ export class ZendiaKeysParent extends JSWindowActorParent {
         break;
       case "Zendia:CaptureKey":
         this.#passKeyToTop(browser, data);
+        break;
+      case "Zendia:UserInput":
+        gUserInput.set(browser, Date.now());
+        break;
+      // The user took the keys back from an agent's labels on this tab.
+      case "Zendia:AgentCaptureDismissed":
+        Services.obs.notifyObservers(browser, "zendia-agent-capture-dismissed");
         break;
     }
     return undefined;

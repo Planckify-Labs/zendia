@@ -32,6 +32,9 @@
 - name: zendia.agent.split-fallback
   value: "float" # how a split agent panel lays out while the tab has no room for it: float or slide
 
+- name: zendia.agent.stealFocus
+  value: false # let agents (and the pages they drive) bring tabs to the front; off, agents work their tabs in the background and never touch the user's cursor, focus, window or view
+
 - name: zendia.webchat.default
   value: "" # a web chat site's id (chatgpt, claude, gemini, kimi, grok, deepseek, perplexity, copilot, or one you added); the last one used is kept here
 

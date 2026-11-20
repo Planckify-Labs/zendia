@@ -932,6 +932,14 @@ export class ZendiaAgentDock {
   }
 
   #onConversation() {
+    // The tab's chat changed under the panel: an agent working the tab took
+    // it over from an empty one.
+    const current = lazy.ZendiaAgents.conversationFor(
+      this.#window.gBrowser.selectedBrowser
+    );
+    if (current && current != this.#conversation) {
+      this.#bind(current);
+    }
     const conversation = this.#conversation;
     if (this.#open && conversation) {
       conversation.unseen = false;
@@ -1896,6 +1904,9 @@ export class ZendiaAgentDock {
         group.title,
         this.#create("span", "zendia-agent-group-chevron")
       );
+      group.body.addEventListener("scroll", () =>
+        group.body.toggleAttribute("scrolled", group.body.scrollTop > 0)
+      );
       group.fold.append(group.body);
       group.root.append(group.head, group.fold);
       this.#groups.set(run[0], group);
@@ -1906,7 +1917,14 @@ export class ZendiaAgentDock {
       // Only what arrives while the reader watches slides in.
       row.toggleAttribute("fresh", live && !known.has(row));
     }
-    this.#syncChildren(group.body, rows);
+    // The steps box keeps to its newest step while the agent works, unless
+    // the reader scrolled up to read an older one.
+    const body = group.body;
+    const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 8;
+    this.#syncChildren(body, rows);
+    if (live && atEnd) {
+      body.scrollTop = body.scrollHeight;
+    }
     if (group.live && !live) {
       group.endedAt = Date.now();
     }
@@ -2131,33 +2149,66 @@ export class ZendiaAgentDock {
           row.append(files);
         }
         break;
-      case "confirm": {
-        row.setAttribute("status", message.status);
-        row.append(
-          this.#create("span", "", `Allow the agent to ${message.text}?`)
-        );
-        if (message.status == "pending") {
-          const allow = this.#create(
-            "button",
-            "zendia-agent-button primary",
-            "Allow  y"
-          );
-          const deny = this.#create("button", "zendia-agent-button", "Deny  n");
-          allow.addEventListener("click", () => message.answer(true));
-          deny.addEventListener("click", () => message.answer(false));
-          row.append(allow, deny);
-        } else {
-          row.append(
-            this.#create("span", "zendia-agent-step-detail", message.status)
-          );
-        }
+      case "confirm":
+        this.#renderConfirm(row, message);
         break;
-      }
       default:
         row.textContent = message.text;
     }
     this.#rows.set(message, { key, row });
     return row;
+  }
+
+  // A question the agent waits on before something hard to undo: a card
+  // with what it asks and the answers, which keys give too (y, n); once
+  // answered, one quiet line of what was decided.
+  #renderConfirm(row, message) {
+    row.setAttribute("status", message.status);
+    const name = this.#conversation?.agent?.name ?? "the agent";
+    const pending = message.status == "pending";
+    if (!pending) {
+      const allowed = message.status == "allowed";
+      row.replaceChildren(
+        this.#create(
+          "span",
+          "zendia-agent-confirm-mark",
+          allowed ? "\u2713" : "\u2715"
+        ),
+        this.#create(
+          "span",
+          "zendia-agent-confirm-done",
+          `${allowed ? "Allowed" : "Declined"} \u00b7 ${message.text}`
+        )
+      );
+      return;
+    }
+    const head = this.#create("div", "zendia-agent-confirm-head");
+    head.append(
+      this.#create("span", "zendia-agent-confirm-icon"),
+      this.#create("span", "zendia-agent-confirm-label", "Permission needed")
+    );
+    const text = this.#create("div", "zendia-agent-confirm-text");
+    text.append(
+      `Allow ${name} to `,
+      this.#create("strong", "", message.text),
+      "?"
+    );
+    const button = (label, key, primary, allowed) => {
+      const element = this.#create(
+        "button",
+        `zendia-agent-button${primary ? " primary" : ""}`
+      );
+      element.append(label, this.#create("kbd", "zendia-agent-key", key));
+      element.addEventListener("mousedown", event => event.preventDefault());
+      element.addEventListener("click", () => message.answer(allowed));
+      return element;
+    };
+    const actions = this.#create("div", "zendia-agent-confirm-actions");
+    actions.append(
+      button("Deny", "N", false, false),
+      button("Allow", "Y", true, true)
+    );
+    row.replaceChildren(head, text, actions);
   }
 
   #renderEmpty(agent) {

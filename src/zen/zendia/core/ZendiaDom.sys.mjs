@@ -24,6 +24,59 @@ export const ZendiaDom = {
   agentTyping: false,
 
   /**
+   * Run an agent's synthesized mouse input so it never takes the user's
+   * focus or window. A mousedown on something that takes no focus, in the
+   * tab in front, makes Gecko focus the page's window and raise the browser
+   * window (EventStateManager -> nsFocusManager::SetFocusedWindow), and
+   * window managers that warp the pointer to a raised window move the
+   * user's OS cursor with it. While the user's focus is elsewhere (another
+   * application, or the browser's own UI), the mousedown's default is
+   * prevented after the page has heard it: the page sees the press, the
+   * click still follows, and nothing is focused or raised.
+   *
+   * @param {Window} window
+   * @param {() => *} run Dispatches the input, synchronously.
+   * @param {boolean} [shield] Whether to keep the user's focus, when the
+   *   caller knows (page_act's quiet); otherwise judged here, from a tab
+   *   that is active yet has no focus.
+   * @returns {*} What run returned.
+   */
+  agentMouse(window, run, shield = null) {
+    let guard = null;
+    try {
+      if (
+        shield ??
+        (window.browsingContext?.isActive && !window.document.hasFocus())
+      ) {
+        guard = event => {
+          if (event.isTrusted) {
+            event.preventDefault();
+          }
+        };
+        Services.els.addSystemEventListener(window, "mousedown", guard, false);
+      }
+    } catch {
+      guard = null;
+    }
+    try {
+      return run();
+    } finally {
+      if (guard) {
+        try {
+          Services.els.removeSystemEventListener(
+            window,
+            "mousedown",
+            guard,
+            false
+          );
+        } catch {
+          // The window is gone.
+        }
+      }
+    }
+  },
+
+  /**
    * Whether typing into this element edits it, which puts the page in
    * insert mode.
    *

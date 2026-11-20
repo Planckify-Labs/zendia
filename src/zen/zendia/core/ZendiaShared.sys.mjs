@@ -18,6 +18,13 @@ export const ZENDIA_SHARED_KEY = "zendia:config";
  */
 export const ZENDIA_CAPTURING_KEY = "zendia:capturing";
 
+/**
+ * zendia.agent.stealFocus: whether agents, and the pages they drive, may
+ * bring tabs to the front. Off, an agent works its tabs in the background
+ * and never changes the user's view.
+ */
+export const PREF_STEAL_FOCUS = "zendia.agent.stealFocus";
+
 function cloneable(value) {
   try {
     return JSON.parse(JSON.stringify(value ?? {}));

@@ -31,7 +31,10 @@
 // the boundary off; where a task cannot be sealed, nothing is sent at all,
 // and the challenge stays the user's.
 
-import { ZendiaAgents } from "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs";
+import {
+  agentColor,
+  ZendiaAgents,
+} from "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs";
 import { pageFromArgs } from "resource:///modules/zendia/agent/ZendiaAgentUi.sys.mjs";
 import { getCaptchaBoundary } from "resource:///modules/zendia/captcha/ZendiaCaptchaBoundary.sys.mjs";
 import { ZendiaCaptchaWatch } from "resource:///modules/zendia/captcha/ZendiaCaptchaWatch.sys.mjs";
@@ -43,6 +46,7 @@ import {
 } from "resource:///modules/zendia/captcha/ZendiaSterileChallenge.sys.mjs";
 import { ZendiaCaptcha } from "resource:///modules/zendia/core/ZendiaCaptcha.sys.mjs";
 import { ZendiaKeys } from "resource:///modules/zendia/core/ZendiaKeys.sys.mjs";
+import { PREF_STEAL_FOCUS } from "resource:///modules/zendia/core/ZendiaShared.sys.mjs";
 
 // The module scope has no timers of its own this early in the startup.
 import { clearTimeout, setTimeout } from "resource://gre/modules/Timer.sys.mjs";
@@ -249,12 +253,20 @@ class ZendiaCaptchaAgentService {
   // challenge that is closed and opened again, or hidden and shown, is not
   // summarized again on the same page.
   #delivered = new WeakMap();
+  // The tabs whose challenge the user took over from the subagent (<Esc> on
+  // its labels, or labels of their own): its work there ends, and it does
+  // not label the challenge again over them.
+  #dismissed = new WeakSet();
 
   init() {
     if (this.#initialized || !Services.prefs.getBoolPref(PREF_AGENT, true)) {
       return;
     }
     this.#initialized = true;
+    Services.obs.addObserver(
+      browser => this.#onDismissed(browser),
+      "zendia-agent-capture-dismissed"
+    );
     ZendiaCaptchaWatch.onDetect((browser, record) => {
       try {
         this.#onDetect(browser, record);
@@ -269,6 +281,23 @@ class ZendiaCaptchaAgentService {
         this.#watchForTurn(browser, conversation);
       }
     });
+  }
+
+  // The user took the challenge over: the subagent's turn stops, nothing
+  // more is labeled or pressed there, and the chat says whose it is now.
+  #onDismissed(browser) {
+    if (!this.#working.has(browser)) {
+      return;
+    }
+    this.#dismissed.add(browser);
+    this.#pending.delete(browser);
+    const conversation = ZendiaAgents.conversationFor(browser);
+    if (conversation?.running) {
+      conversation.stop();
+    }
+    conversation?.note(
+      "You took the verification challenge over; the agent left it to you."
+    );
   }
 
   // Whether the agent worked the tab: asked something, or asking now. A
@@ -397,6 +426,7 @@ class ZendiaCaptchaAgentService {
   // picture in the chat, and a solve turn sent back to it until it is gone
   // or it has had its tries. Forced (the button), the worked gate is skipped.
   async #deliver(browser, record, force = false) {
+    this.#dismissed.delete(browser);
     const conversation = ZendiaAgents.conversationFor(browser);
     if (!conversation) {
       return;
@@ -411,8 +441,12 @@ class ZendiaCaptchaAgentService {
     if (!(await this.#idle(conversation, browser))) {
       return;
     }
-    // To the front first: a background tab's browser has no size to capture.
-    this.#toFront(browser);
+    // To the front when the user is there to follow it; otherwise the
+    // challenge is worked in the background, its labels in the agent's own
+    // color, and only what cannot even be photographed there waits for the
+    // user to bring the tab forward themselves.
+    const inFront = this.#toFront(browser);
+    const color = agentColor(conversation.agent?.id);
     // Not to a model known to be blind to pictures: it cannot work a visual
     // task, and only says so.
     const inputs = ZendiaAgents.inputsOf?.(conversation.agent?.id);
@@ -424,13 +458,30 @@ class ZendiaCaptchaAgentService {
       attempt < SOLVE_ATTEMPTS && browser.isConnected;
       attempt++
     ) {
-      // A new chat started over this one: the work here ends with it, and
-      // nothing is sent to the old chat.
-      if (!this.#current(browser, conversation)) {
+      // A new chat started over this one, or the user took the challenge
+      // over: the work here ends with it, and nothing more is sent.
+      if (
+        !this.#current(browser, conversation) ||
+        this.#dismissed.has(browser)
+      ) {
         this.#endCapture(browser);
         return;
       }
-      const shot = await this.captureChallenge(browser).catch(() => null);
+      const shot = await this.captureChallenge(
+        browser,
+        SHOT_MAX_WIDTH,
+        color
+      ).catch(() => null);
+      // In a tab that was never shown, some widgets (hCaptcha's) do not
+      // even load: there is no shot, or the challenge never came. It waits
+      // for the user's own switch, never for a stolen one.
+      if ((!shot || shot.state == "timeout") && !inFront && attempt == 0) {
+        conversation.note(
+          "A verification challenge on this tab does not load while the tab is in the background. Switch to the tab yourself to load it, or let agents bring tabs forward (zendia.agent.stealFocus)."
+        );
+        this.#endCapture(browser);
+        return;
+      }
       const picture = sees ? shot : null;
       const parts = picture?.parts?.area ? picture.parts : null;
       const said = shot?.parts?.instruction?.text ?? null;
@@ -862,10 +913,11 @@ class ZendiaCaptchaAgentService {
    * (waited for, opened from its checkbox, waited on until drawn), then
    * shot, cut to the challenge where a frame of the tab says where it is,
    * and cut again into the area to act on and its instruction.
-   * The tab must be in front: a background tab has nothing drawn.
+   * A tab in the background is shot too, where it was drawn once.
    *
    * @param {Element} browser
    * @param {number} [maxWidth]
+   * @param {string} [color] The driving agent's color, for its labels.
    * @returns {Promise<{data: string, bytes: Uint8Array, width: number,
    *   height: number, cropped: boolean, parts: object|null}|null>} The
    *   JPEG, as base64 and as bytes, and its size; with its parts where the
@@ -873,7 +925,7 @@ class ZendiaCaptchaAgentService {
    *   instruction, its words and its shot. Null when the tab has nothing
    *   to shoot.
    */
-  async captureChallenge(browser, maxWidth = SHOT_MAX_WIDTH) {
+  async captureChallenge(browser, maxWidth = SHOT_MAX_WIDTH, color = null) {
     const state = await this.#prepareChallenge(browser);
     // Only a challenge that is there to act on is labeled for the keys: an
     // invisible pass or a finished check has nothing to label, and one
@@ -882,7 +934,7 @@ class ZendiaCaptchaAgentService {
     // labels the user finishes by.
     const labeled =
       ["open", "settled", "clicked"].includes(state) &&
-      (await this.#labelChallenge(browser));
+      (await this.#labelChallenge(browser, color));
     const shot = await this.#screenshot(browser, maxWidth, !!labeled);
     if (shot) {
       shot.labeled = labeled;
@@ -1098,7 +1150,7 @@ class ZendiaCaptchaAgentService {
   // the shot is taken there when this returns what was labeled: "captcha",
   // "cursor" or "page". False when the keys are not running (the jump
   // plugin off, the pref off): the shot is taken as before.
-  async #labelChallenge(browser) {
+  async #labelChallenge(browser, color = null) {
     if (!Services.prefs.getBoolPref(PREF_LABELS, true)) {
       return false;
     }
@@ -1113,7 +1165,9 @@ class ZendiaCaptchaAgentService {
       try {
         labeled = await zendia.run(
           "jump.captcha",
-          { orPage: true },
+          // The agent's own labels: its color, and driven by its tokens,
+          // so the user's keys are never swallowed into its session.
+          { orPage: true, agentDriven: true, color },
           { browser }
         );
       } catch (e) {
@@ -1323,7 +1377,7 @@ class ZendiaCaptchaAgentService {
         // A frame on the way up did not answer: the labels are in the top
         // page, so the whole view is the next best shot of them.
         ({ width: viewWidth, height: viewHeight } =
-          browser.getBoundingClientRect());
+          await this.#viewSize(browser));
       }
     } else if (area) {
       global = area.context.currentWindowGlobal;
@@ -1355,7 +1409,7 @@ class ZendiaCaptchaAgentService {
       );
     } else {
       ({ width: viewWidth, height: viewHeight } =
-        browser.getBoundingClientRect());
+        await this.#viewSize(browser));
     }
     if (!viewWidth || !viewHeight) {
       return null;
@@ -1368,6 +1422,23 @@ class ZendiaCaptchaAgentService {
       : Math.min(window.devicePixelRatio, maxWidth / viewWidth);
     const shot = await this.#encode(window, global, rect, scale);
     return shot && { ...shot, cropped: !!rect, area };
+  }
+
+  // The size of the tab's view: its browser's box, or, for a tab in the
+  // background whose browser is not laid out, its own window's, asked for.
+  async #viewSize(browser) {
+    const rect = browser.getBoundingClientRect();
+    if (rect.width && rect.height) {
+      return { width: rect.width, height: rect.height };
+    }
+    try {
+      const size = await browser.browsingContext?.currentWindowGlobal
+        ?.getActor("ZendiaKeys")
+        .sendQuery("Zendia:ViewSize");
+      return { width: size?.width ?? 0, height: size?.height ?? 0 };
+    } catch {
+      return { width: 0, height: 0 };
+    }
   }
 
   // A part of a frame drawn as a JPEG, as base64 and as bytes, with its
@@ -1680,15 +1751,27 @@ class ZendiaCaptchaAgentService {
   }
 
   // The tab with the challenge, in front, with its chat open beside it.
-  // The keys stay on the page, where the challenge takes them.
+  // The keys stay on the page, where the challenge takes them. A tab that
+  // is not in front already comes forward only when the user lets agents
+  // decide (zendia.agent.stealFocus). Returns whether the tab is in front; a
+  // challenge is worked in the background where it can be, never by
+  // stealing the user's view, cursor or window.
   #toFront(browser) {
     const window = this.#windowFor(browser);
     const tab = window?.gBrowser?.getTabForBrowser(browser);
     if (!tab) {
-      return;
+      return false;
     }
-    window.gBrowser.selectedTab = tab;
+    if (window.gBrowser.selectedTab != tab) {
+      // Another tab in front is the user's view, whether they are in this
+      // window or not: it is never switched from under them.
+      if (!Services.prefs.getBoolPref(PREF_STEAL_FOCUS, false)) {
+        return false;
+      }
+      window.gBrowser.selectedTab = tab;
+    }
     ZendiaAgents.zendia?.agentDockFor(window)?.open(browser, { focus: false });
+    return true;
   }
 
   // The turn the subagent gets when it works the challenge itself: the task's

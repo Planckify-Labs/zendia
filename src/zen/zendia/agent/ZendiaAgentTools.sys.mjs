@@ -19,6 +19,8 @@ import {
 } from "resource:///modules/zendia/agent/ZendiaAgentNetwork.sys.mjs";
 import { workToolDefinitions } from "resource:///modules/zendia/agent/ZendiaAgentWork.sys.mjs";
 import { ZendiaCaptcha } from "resource:///modules/zendia/core/ZendiaCaptcha.sys.mjs";
+import { PREF_STEAL_FOCUS } from "resource:///modules/zendia/core/ZendiaShared.sys.mjs";
+import { lastUserInput } from "resource:///modules/zendia/actors/ZendiaKeysParent.sys.mjs";
 import {
   pageFromArgs,
   tableFromArgs,
@@ -48,6 +50,10 @@ const QUERY_TIMEOUT_MS = 5000;
 const WAIT_DEFAULT_MS = 5000;
 const WAIT_MAX_MS = 15000;
 const WAIT_POLL_MS = 100;
+// An agent acts on a tab only once the user's own input there has paused
+// this long, and gives up after waiting this long: the user comes first.
+const USER_QUIET_MS = 1500;
+const USER_WAIT_MAX_MS = 8000;
 const WAIT_SETTLE_MAX_MS = 2000;
 // Requests listed at most, the newest; and how long a reload may keep
 // requesting after it has loaded before it is listed.
@@ -469,7 +475,7 @@ export function toolDefinitions(registry) {
     {
       name: "page_act",
       description:
-        "Act on a tab and return it afterwards. click, fill (replace a field's text), select (an option of a native list), press (a key such as Enter, Escape, Tab, ArrowDown) or scroll (up or down, or an element into view). element is an id from the tab's latest observation.",
+        "Act on a tab and return it afterwards. click, fill (replace a field's text), select (an option of a native list), press (a key such as Enter, Escape, Tab, ArrowDown) or scroll (up or down, or an element into view). element is an id from the tab's latest observation. tab acts on any tab without switching to it, so several tabs can be worked side by side. A tab another agent is working on, or one the user is typing in this moment, says so instead of acting.",
       inputSchema: {
         type: "object",
         properties: {
@@ -521,7 +527,7 @@ export function toolDefinitions(registry) {
     {
       name: "tab_open",
       description:
-        "Open a new tab, on an http(s) address or empty, and work on it from now on. It comes to the front unless background is true. Returns the loaded page.",
+        "Open a new tab, on an http(s) address or empty, and work on it from now on. It opens in the background: the user's view is never changed, and you work it there just the same. Returns the loaded page.",
       inputSchema: {
         type: "object",
         properties: {
@@ -534,7 +540,7 @@ export function toolDefinitions(registry) {
     {
       name: "tab_switch",
       description:
-        "Work on another open tab from now on and return it. It comes to the front for the user unless show is false.",
+        "Work on another open tab from now on and return it. It stays where it is: the user's view is never changed, and you work it in the background just the same. A tab another agent is working on cannot be taken.",
       inputSchema: {
         type: "object",
         properties: {
@@ -567,7 +573,10 @@ export function toolDefinitions(registry) {
       inputSchema: {
         type: "object",
         properties: {
-          id: { type: "string", enum: browserActions.map(action => action.id) },
+          id: {
+            type: "string",
+            enum: browserActions.map(action => action.id),
+          },
           args: { type: "object" },
           tab,
         },
@@ -762,6 +771,12 @@ export class ZendiaAgentToolbox {
    * @param {(name: string, args: object) => string} [options.onWork] The
    *   conversation's work list (work_plan, work_update); returns what the
    *   agent reads. Without it the work tools refuse.
+   * @param {string} [options.agentColor] The agent's own color
+   *   (agentColor()): the ghost cursor its clicks and presses are marked
+   *   with, so the user sees them without the OS pointer moving.
+   * @param {(browser: Element) => string|null} [options.claim] Takes a tab
+   *   for this conversation's agent to act on; returns why not when another
+   *   agent is working it now. Without it any tab may be acted on.
    */
   constructor({
     zendia,
@@ -774,6 +789,8 @@ export class ZendiaAgentToolbox {
     onUi = null,
     network = null,
     onWork = null,
+    agentColor = null,
+    claim = null,
   }) {
     this.zendia = zendia;
     this.browser = browser;
@@ -785,6 +802,8 @@ export class ZendiaAgentToolbox {
     this.onUi = onUi;
     this.network = network;
     this.onWork = onWork;
+    this.agentColor = agentColor;
+    this.claim = claim;
     this.window = browser()?.documentGlobal;
   }
 
@@ -914,6 +933,12 @@ export class ZendiaAgentToolbox {
     return next;
   }
 
+  // The tab's id for the agent, or "this tab" for one not in this window.
+  #nameOf(browser) {
+    const tab = this.window.gBrowser.getTabForBrowser(browser);
+    return tab ? tabIdOf(tab) : "this tab";
+  }
+
   #idOf(browser) {
     return tabIdOf(this.window.gBrowser.getTabForBrowser(browser));
   }
@@ -1004,6 +1029,47 @@ export class ZendiaAgentToolbox {
     return { spec: uri.spec };
   }
 
+  // Whether the agent may bring a tab to the front: only when the user lets
+  // agents decide (zendia.agent.stealFocus). Otherwise the user's view,
+  // window and cursor are left as they are, even while they look at a tab
+  // of the agent's, and the agent works its tabs in the background.
+  #mayShowFront() {
+    return Services.prefs.getBoolPref(PREF_STEAL_FOCUS, false);
+  }
+
+  // Before the agent acts on a tab: that no other agent is working it now
+  // (claim), and that the user is not using it this moment, waiting until
+  // their own input pauses. Returns an error for the agent, or how the act
+  // keeps the user's focus: quiet while the tab is in view and the user's
+  // focus is in this window's own UI (the address bar, the chat), which the
+  // act must not take.
+  async #drive(browser) {
+    const busy = this.claim?.(browser);
+    if (busy) {
+      return { error: busy };
+    }
+    const started = Date.now();
+    while (Date.now() - lastUserInput(browser) < USER_QUIET_MS) {
+      if (Date.now() - started > USER_WAIT_MAX_MS || !browser.isConnected) {
+        return {
+          error: `The user is working in ${this.#nameOf(browser)} right now, so nothing was done there. Wait a moment (page_wait) and try again, or work on another tab.`,
+        };
+      }
+      await sleep(WAIT_POLL_MS * 2);
+    }
+    // In view, not merely awake: an agent's tab in the background is kept
+    // active (ZendiaAgents), and its focus is no one else's.
+    const gBrowser = this.window.gBrowser;
+    const inView =
+      browser == gBrowser.selectedBrowser ||
+      !!gBrowser.splitViewBrowsers?.includes(browser);
+    const quiet =
+      inView &&
+      Services.focus.activeWindow == this.window &&
+      Services.focus.focusedElement != browser;
+    return { quiet };
+  }
+
   #openTab({ url = "", background = false }) {
     return this.#step(
       url ? `Open ${url} in a new tab` : "Open a new tab",
@@ -1022,13 +1088,19 @@ export class ZendiaAgentToolbox {
         });
         this.opened.add(tab);
         const id = tabIdOf(tab);
+        const front = !background && this.#mayShowFront();
         // Before it comes to the front, so the panel there finds the
         // conversation.
         this.retarget(tab.linkedBrowser);
-        if (!background) {
+        if (front) {
           gBrowser.selectedTab = tab;
         }
-        const where = background ? "in the background" : "in front";
+        let where = "in front";
+        if (!front) {
+          where = background
+            ? "in the background"
+            : "in the background (the user's view was left as it is)";
+        }
         if (!url) {
           return {
             title: `Opened ${id}`,
@@ -1051,20 +1123,27 @@ export class ZendiaAgentToolbox {
       if (error) {
         return { text: error, isError: true };
       }
-      if (!show && isUnloaded(tab)) {
+      const busy = this.claim?.(tab.linkedBrowser);
+      if (busy) {
+        return { text: busy, isError: true };
+      }
+      const front = show && this.#mayShowFront();
+      if (!front && isUnloaded(tab)) {
         return {
-          text: `${id} is unloaded; switch to it with show true to load it.`,
+          text: show
+            ? `${id} is unloaded, and bringing it forward to load it would change the user's view. Ask the user to open it, or work on another tab.`
+            : `${id} is unloaded; switch to it with show true to load it.`,
           isError: true,
         };
       }
       this.retarget(tab.linkedBrowser);
-      if (show) {
+      if (front) {
         this.window.gBrowser.selectedTab = tab;
         await this.#settleNavigation(tab.linkedBrowser);
       }
       return {
         title: `Switched to ${id} ${quote(tab.label)}`,
-        text: `You work on ${id} now.\n\n${await this.#observeText(tab.linkedBrowser)}`,
+        text: `You work on ${id} now.${show && !front ? " It stays in the background: the user's view was left as it is." : ""}\n\n${await this.#observeText(tab.linkedBrowser)}`,
       };
     });
   }
@@ -1081,6 +1160,10 @@ export class ZendiaAgentToolbox {
           text: `${id} is the last tab; closing it would close the window.`,
           isError: true,
         };
+      }
+      const busy = this.claim?.(tab.linkedBrowser);
+      if (busy) {
+        return { text: busy, isError: true };
       }
       const label = tab.label;
       if (
@@ -1595,7 +1678,21 @@ export class ZendiaAgentToolbox {
   // What the tab shows, frames of other sites included, as an image.
   async #screenshot(browser) {
     const window = this.window;
-    const { width, height } = browser.getBoundingClientRect();
+    let { width, height } = browser.getBoundingClientRect();
+    if (!width || !height) {
+      // A tab in the background has no laid-out browser; its own window
+      // says how big its view is.
+      let size = null;
+      try {
+        size = await browser.browsingContext.currentWindowGlobal
+          ?.getActor("ZendiaKeys")
+          .sendQuery("Zendia:ViewSize");
+      } catch {
+        // No actor to ask: no size.
+      }
+      width = size?.width ?? 0;
+      height = size?.height ?? 0;
+    }
     if (!width || !height) {
       return { text: "The tab has no size to capture.", isError: true };
     }
@@ -1637,6 +1734,10 @@ export class ZendiaAgentToolbox {
       .filter(Boolean)
       .join(" ");
     return this.#onTab(tab, title, async browser => {
+      const drive = await this.#drive(browser);
+      if (drive.error) {
+        return { title, text: drive.error, isError: true };
+      }
       let result;
       const before = browser.browsingContext.currentWindowGlobal;
       const inFrame = parseElementId(element);
@@ -1647,7 +1748,13 @@ export class ZendiaAgentToolbox {
           error: `${element} is no longer on the page. Observe again.`,
         };
       } else {
-        const local = { action, element: inFrame?.local ?? element, text };
+        const local = {
+          action,
+          element: inFrame?.local ?? element,
+          text,
+          agentColor: this.agentColor,
+          quiet: drive.quiet,
+        };
         try {
           result = await (actor
             ? this.#queryFrame(actor, "agent.act", local)
@@ -1704,6 +1811,10 @@ export class ZendiaAgentToolbox {
       if (check.error) {
         return { text: check.error, isError: true };
       }
+      const drive = await this.#drive(browser);
+      if (drive.error) {
+        return { text: drive.error, isError: true };
+      }
       const before = browser.currentURI?.spec;
       browser.fixupAndLoadURIString(check.spec, {
         triggeringPrincipal:
@@ -1731,6 +1842,10 @@ export class ZendiaAgentToolbox {
         // none.
         const takes = paramsText(action) || " (it takes no args)";
         return { text: `${e.message}${takes}`, isError: true };
+      }
+      const drive = await this.#drive(browser);
+      if (drive.error) {
+        return { text: drive.error, isError: true };
       }
       if (
         action.agent == "confirm" &&

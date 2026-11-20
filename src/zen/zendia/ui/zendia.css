@@ -1243,15 +1243,32 @@
     color: var(--zendia-error);
   }
 
+  /* The agent waits on the user: a card that asks, then a line of what was
+     decided. */
   &[type="confirm"] {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 8px;
-    align-items: center;
-    padding: 8px 10px;
-    border-radius: 10px;
-    background-color: color-mix(in srgb, var(--zendia-agent-confirm) 18%, transparent);
-    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-confirm) 50%, transparent);
+    padding: 12px 14px;
+    border-radius: 14px;
+    background-color: color-mix(in srgb, var(--zendia-agent-confirm) 12%, transparent);
+    box-shadow:
+      inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-agent-confirm) 55%, transparent),
+      0 6px 18px -12px color-mix(in srgb, var(--zendia-agent-confirm) 70%, transparent);
+    white-space: normal;
+    animation: zendia-agent-rise 260ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+
+    &:not([status="pending"]) {
+      flex-direction: row;
+      align-items: baseline;
+      gap: 7px;
+      padding: 2px 0;
+      background: none;
+      box-shadow: none;
+      animation: none;
+      font-size: 12px;
+      color: var(--zendia-agent-muted);
+    }
   }
 
   /* A table or page the agent shows (ZendiaAgentUiView). */
@@ -3195,8 +3212,19 @@
   min-height: 0;
   margin-inline-start: 5px;
   padding-inline-start: 11px;
-  overflow: hidden;
+  /* A long run scrolls inside its own box rather than pushing the answer
+     out of the panel. */
+  max-height: min(240px, 35vh);
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   border-inline-start: 1px solid color-mix(in srgb, var(--zendia-agent-text) 12%, transparent);
+
+  /* Scrolled down: the steps above fade out under the head, so the box
+     reads as having more. */
+  &[scrolled] {
+    mask-image: linear-gradient(to bottom, transparent, #000 18px);
+  }
 
   /* The line already sets it apart from the conversation. */
   & > .zendia-agent-message[type="tool"] {
@@ -3320,6 +3348,99 @@
     color: light-dark(#ffffff, var(--zendia-ink));
     font-weight: 600;
   }
+}
+
+.zendia-agent-confirm-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--zendia-agent-confirm) 70%, var(--zendia-agent-text));
+}
+
+/* A shield, in the card's color, that breathes while it waits. */
+.zendia-agent-confirm-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background-color: var(--zendia-agent-confirm);
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2 4 5v6c0 5.25 3.4 10.15 8 11.5 4.6-1.35 8-6.25 8-11.5V5l-8-3Zm-1 6h2v6h-2V8Zm0 8h2v2h-2v-2Z'/></svg>") center / contain no-repeat;
+  animation: zendia-agent-pulse 1.8s ease-in-out infinite;
+}
+
+.zendia-agent-confirm-text {
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+
+  & > strong {
+    font-weight: 600;
+  }
+}
+
+.zendia-agent-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+
+  & > .zendia-agent-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px 5px 14px;
+    border-radius: 9px;
+    font-size: 12px;
+    font-weight: 600;
+    transition:
+      background-color 120ms ease,
+      transform 120ms ease;
+
+    &:hover {
+      background-color: color-mix(in srgb, var(--zendia-agent-text) 8%, transparent);
+    }
+
+    &.primary:hover {
+      background-color: color-mix(in srgb, var(--zendia-accent) 88%, black);
+    }
+
+    &:active {
+      transform: scale(0.97);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--zendia-accent);
+      outline-offset: 2px;
+    }
+  }
+}
+
+/* The key that gives the same answer, as a small cap on the button. */
+.zendia-agent-key {
+  padding: 0 5px;
+  border-radius: 4px;
+  background-color: color-mix(in srgb, currentColor 16%, transparent);
+  font: 600 10px/16px ui-monospace, monospace;
+}
+
+.zendia-agent-confirm-mark {
+  flex: none;
+  font-weight: 700;
+
+  [status="allowed"] > & {
+    color: var(--zendia-success);
+  }
+
+  [status="declined"] > & {
+    color: var(--zendia-error);
+  }
+}
+
+.zendia-agent-confirm-done {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* What the attached files need and the model cannot read. */
@@ -3588,21 +3709,118 @@
   }
 }
 
-/* The tab the agent works on glows in the agent's color, over the page. */
+/* A tab an agent controls carries its logo over the site's icon, with a
+   ring in its color going out from it, like a live signal, while it works. */
+.tabbrowser-tab[zendia-agent-driving] .tab-icon-stack::after {
+  content: "";
+  grid-area: 1 / 1;
+  place-self: end;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  margin-bottom: -3px;
+  border-radius: 50%;
+  background:
+    var(--zendia-agent-icon) center / 9px no-repeat,
+    light-dark(#fff, #26252b);
+  box-shadow: 0 0 0 1.5px var(--zendia-agent-color);
+  pointer-events: none;
+  animation: zendia-agent-live 1.6s ease-out infinite;
+}
+
+@keyframes zendia-agent-live {
+  0% {
+    box-shadow:
+      0 0 0 1.5px var(--zendia-agent-color),
+      0 0 0 1.5px color-mix(in srgb, var(--zendia-agent-color) 70%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 1.5px var(--zendia-agent-color),
+      0 0 0 6px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabbrowser-tab[zendia-agent-driving] .tab-icon-stack::after {
+    animation: none;
+  }
+
+  /* A band that does not move reads as a flaw; the glow stays. */
+  .browserStack[zendia-agent-driving]::before {
+    display: none;
+  }
+}
+
+/* The tab the agent works on glows in the agent's color, over the page: a
+   soft light that fades into the page from a fine edge, and a brighter
+   band flowing around that edge while the agent works. Both follow the
+   page's rounded corners, which clip anything square. */
+@property --zendia-agent-flow {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.browserStack[zendia-agent-driving]::before,
 .browserStack[zendia-agent-driving]::after {
   content: "";
   grid-area: 1 / 1;
   z-index: 1;
   pointer-events: none;
-  border-radius: inherit;
+  /* stylelint-disable-next-line property-no-unknown */
+  corner-shape: round;
+  border-radius: calc(var(--zen-native-inner-radius) / var(--zen-squircle-value));
+
+  :root[zen-no-padding="true"] & {
+    border-radius: 0;
+  }
+}
+
+.browserStack[zendia-agent-driving]::after {
   box-shadow:
-    inset 0 0 0 2px var(--zendia-agent-color),
-    inset 0 0 28px color-mix(in srgb, var(--zendia-agent-color) 45%, transparent);
-  animation: zendia-agent-pulse 2.4s ease-in-out infinite;
+    inset 0 0 0 1px color-mix(in srgb, var(--zendia-agent-color) 55%, transparent),
+    inset 0 0 12px color-mix(in srgb, var(--zendia-agent-color) 45%, transparent),
+    inset 0 0 42px color-mix(in srgb, var(--zendia-agent-color) 20%, transparent);
+  animation: zendia-agent-breathe 3.2s ease-in-out infinite;
+}
+
+/* A ring two pixels wide (the padding left out of the mask), lit by a
+   conic band that turns. */
+.browserStack[zendia-agent-driving]::before {
+  padding: 2px;
+  background: conic-gradient(
+    from var(--zendia-agent-flow),
+    transparent 0deg,
+    color-mix(in srgb, var(--zendia-agent-color) 85%, white) 40deg,
+    var(--zendia-agent-color) 70deg,
+    transparent 120deg,
+    transparent 180deg,
+    color-mix(in srgb, var(--zendia-agent-color) 60%, transparent) 230deg,
+    transparent 280deg
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  opacity: 0.9;
+  animation: zendia-agent-flow 4.5s linear infinite;
+}
+
+@keyframes zendia-agent-flow {
+  to {
+    --zendia-agent-flow: 360deg;
+  }
+}
+
+@keyframes zendia-agent-breathe {
+  50% {
+    opacity: 0.6;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .zendia-agent-step-icon,
+  .zendia-agent-confirm-icon,
   .zendia-agent-instruction,
   .zendia-agent-switch,
   .zendia-agent-switch::before,
@@ -3621,6 +3839,7 @@
   .zendia-agent-grip::before,
   .zendia-ui-table tr[fresh],
   .zendia-ui-placeholder,
+  .browserStack[zendia-agent-driving]::before,
   .browserStack[zendia-agent-driving]::after,
   .zendia-picker,
   .zendia-picker-cursor,

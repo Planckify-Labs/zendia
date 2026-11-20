@@ -10,6 +10,10 @@
 // was observed, then that nothing covers it.
 
 import { ZendiaDom } from "resource:///modules/zendia/core/ZendiaDom.sys.mjs";
+// A page's own timers wait a second at least in a tab in the background,
+// where agents mostly work; these do not.
+import { setTimeout as unthrottled } from "resource://gre/modules/Timer.sys.mjs";
+import { flashPointer } from "resource:///modules/zendia/plugins/ZendiaPointerContent.sys.mjs";
 import {
   actions as scrollActions,
   scrollTarget,
@@ -156,7 +160,7 @@ async function treeReady(window, service) {
     if (Date.now() >= deadline) {
       return !!service.getAccessibleFor(window.document);
     }
-    await new Promise(resolve => window.setTimeout(resolve, 20));
+    await new Promise(resolve => unthrottled(resolve, 20));
   }
 }
 
@@ -1490,26 +1494,52 @@ function hitPoint(window, element) {
 }
 
 // Trusted mouse input through the page's presshell, as a user's would be.
-function click(window, element) {
+// The point is marked with a ghost of the agent's cursor, in its color:
+// the user sees what was pressed without the OS pointer ever moving.
+// While the user's focus is elsewhere, the press focuses and raises nothing
+// (ZendiaDom.agentMouse).
+function click(window, element, color = null, quiet = false) {
   const { x, y } = hitPoint(window, pressTarget(element) ?? element);
-  window.synthesizeMouseEvent("mousemove", x, y, {});
-  for (const type of ["mousedown", "mouseup"]) {
-    window.synthesizeMouseEvent(type, x, y, { button: 0, clickCount: 1 });
+  ZendiaDom.agentMouse(
+    window,
+    () => {
+      window.synthesizeMouseEvent("mousemove", x, y, {});
+      for (const type of ["mousedown", "mouseup"]) {
+        window.synthesizeMouseEvent(type, x, y, { button: 0, clickCount: 1 });
+      }
+    },
+    quiet
+  );
+  if (color) {
+    flashPointer(window, { x, y, color });
   }
 }
 
-function fill(window, element, text) {
+// quiet: the user is in this window's own UI (the address bar, say), so
+// the field is filled without taking the focus from them; a text field
+// takes the text without it.
+function fill(window, element, text, color = null, quiet = false) {
   if (!isEditable(element, roleOf(element))) {
     throw new Error(`${describe(element)} cannot be typed into`);
   }
-  click(window, element);
-  element.focus();
-  if (element.localName == "input" || element.localName == "textarea") {
-    // As the user typing it, which framework value trackers notice.
-    element.setUserInput(text);
-  } else {
-    window.getSelection().selectAllChildren(element);
-    window.document.execCommand("insertText", false, text);
+  click(window, element, color, quiet);
+  const plain = element.localName == "input" || element.localName == "textarea";
+  // The focus is the agent's own doing: the keys layer must not refuse it
+  // as a page's grab.
+  ZendiaDom.agentTyping = true;
+  try {
+    if (!(quiet && plain)) {
+      element.focus();
+    }
+    if (plain) {
+      // As the user typing it, which framework value trackers notice.
+      element.setUserInput(text);
+    } else {
+      window.getSelection().selectAllChildren(element);
+      window.document.execCommand("insertText", false, text);
+    }
+  } finally {
+    ZendiaDom.agentTyping = false;
   }
 }
 
@@ -1539,7 +1569,7 @@ function optionFor(element, choice) {
   return containing.length == 1 ? containing[0] : null;
 }
 
-function select(window, element, choice) {
+function select(window, element, choice, color = null, quiet = false) {
   if (element.localName != "select") {
     throw new Error(
       `${describe(element)} is not a native list; click it and then its option`
@@ -1549,17 +1579,30 @@ function select(window, element, choice) {
   if (!option) {
     throw new Error(`${describe(element)} has no option "${choice}"`);
   }
-  hitPoint(window, element);
-  element.focus();
-  element.value = option.value;
+  const at = hitPoint(window, element);
+  // As in fill: the agent's own focus, not a page's grab.
+  ZendiaDom.agentTyping = true;
+  try {
+    if (!quiet) {
+      element.focus();
+    }
+    element.value = option.value;
+  } finally {
+    ZendiaDom.agentTyping = false;
+  }
   element.dispatchEvent(new window.Event("input", { bubbles: true }));
   element.dispatchEvent(new window.Event("change", { bubbles: true }));
+  if (color) {
+    flashPointer(window, { x: at.x, y: at.y, color });
+  }
 }
 
 // A trusted key press through a text input processor, the way EventUtils
 // types. That needs the page focused; in a tab the user is not looking at,
 // the page gets the events untrusted, and Enter in a form field submits.
-function press(window, text) {
+// quiet: the user's focus is in this window's own UI; the processor would
+// type where the focus is, so the key goes to the element untrusted.
+function press(window, text, element = null, quiet = false) {
   const parsed = parseKey(text);
   if (!parsed) {
     throw new Error(
@@ -1569,6 +1612,9 @@ function press(window, text) {
   const { key, info, modifiers } = parsed;
   let pressed = false;
   try {
+    if (quiet) {
+      throw new Error("quiet");
+    }
     const tip = Cc["@mozilla.org/text-input-processor;1"].createInstance(
       Ci.nsITextInputProcessor
     );
@@ -1599,7 +1645,10 @@ function press(window, text) {
   if (pressed) {
     return;
   }
-  const target = window.document.activeElement ?? window.document.body;
+  // Untrusted, in a tab the user is not looking at: at the element the key
+  // was meant for, not whatever the page has focused.
+  const target =
+    element ?? window.document.activeElement ?? window.document.body;
   const init = {
     key,
     code: info.code,
@@ -1654,7 +1703,7 @@ function settle(window, element, autocomplete) {
       stopped = true;
       resolve();
     };
-    window.setTimeout(finish, autocomplete ? 200 : 50);
+    unthrottled(finish, autocomplete ? 200 : 50);
     const ready = () => {
       if (stopped) {
         return;
@@ -1728,7 +1777,10 @@ export async function act(window, args) {
   }
 }
 
-async function perform(window, { action, element: elementId, text }) {
+async function perform(
+  window,
+  { action, element: elementId, text, agentColor = null, quiet = false }
+) {
   const document = window.document;
   switch (action) {
     case "scroll": {
@@ -1754,12 +1806,22 @@ async function perform(window, { action, element: elementId, text }) {
     }
     case "press": {
       const element = elementId ? await revealElement(window, elementId) : null;
-      element?.focus();
       ZendiaDom.agentTyping = true;
       try {
-        press(window, String(text ?? "Enter"));
+        if (!quiet) {
+          element?.focus();
+        }
+        press(window, String(text ?? "Enter"), element, quiet);
       } finally {
         ZendiaDom.agentTyping = false;
+      }
+      if (element && agentColor) {
+        const rect = element.getBoundingClientRect();
+        flashPointer(window, {
+          x: rect.x + rect.width / 2,
+          y: rect.y + rect.height / 2,
+          color: agentColor,
+        });
       }
       await settle(window, element, false);
       return `Pressed ${text ?? "Enter"}${element ? ` in ${describe(element)}` : ""}`;
@@ -1770,11 +1832,11 @@ async function perform(window, { action, element: elementId, text }) {
       const element = await revealElement(window, elementId);
       const what = describe(element);
       if (action == "click") {
-        click(window, element);
+        click(window, element, agentColor, quiet);
       } else if (action == "fill") {
-        fill(window, element, String(text ?? ""));
+        fill(window, element, String(text ?? ""), agentColor, quiet);
       } else {
-        select(window, element, String(text ?? ""));
+        select(window, element, String(text ?? ""), agentColor, quiet);
       }
       const autocomplete =
         action == "fill" && element.getAttribute("role") == "combobox";

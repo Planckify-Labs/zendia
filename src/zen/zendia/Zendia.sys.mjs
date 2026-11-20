@@ -925,6 +925,10 @@ class ZendiaService {
             pageshow: {},
             copy: { capture: true },
             cut: { capture: true },
+            // The user's own presses and scrolls, which an agent working
+            // the tab waits out.
+            pointerdown: { capture: true, passive: true, createActor: false },
+            wheel: { capture: true, passive: true, createActor: false },
           },
         },
         allFrames: true,

@@ -15,6 +15,7 @@ import {
   ZENDIA_DRIVERS,
   ZendiaAgentRun,
 } from "resource:///modules/zendia/agent/ZendiaAgentHarness.sys.mjs";
+import { agentIcon } from "resource:///modules/zendia/agent/ZendiaAgentIcons.sys.mjs";
 import { ZendiaAgentInstructions } from "resource:///modules/zendia/agent/ZendiaAgentInstructions.sys.mjs";
 import { ZendiaAgentLog } from "resource:///modules/zendia/agent/ZendiaAgentLog.sys.mjs";
 import { ZendiaNetworkLog } from "resource:///modules/zendia/agent/ZendiaAgentNetwork.sys.mjs";
@@ -29,6 +30,7 @@ import {
   ZendiaPictureToolbox,
   tabIdOf,
 } from "resource:///modules/zendia/agent/ZendiaAgentTools.sys.mjs";
+import { PREF_STEAL_FOCUS } from "resource:///modules/zendia/core/ZendiaShared.sys.mjs";
 import { ZendiaTheme } from "resource:///modules/zendia/ui/ZendiaTheme.sys.mjs";
 import { clearTimeout, setTimeout } from "resource://gre/modules/Timer.sys.mjs";
 
@@ -316,6 +318,8 @@ export class ZendiaAgentConversation {
           onUi: ui => this.#onUi(ui),
           network: this.#service.recordNetwork(),
           onWork: (name, args) => this.#onWork(name, args, text),
+          agentColor: agentColor(this.agent.id),
+          claim: browser => this.#service.claim(this, browser),
         });
     const token = ZendiaAgentServer.open(toolbox);
     // The effort and window depend on the model's entry in the list, which
@@ -684,6 +688,20 @@ export class ZendiaAgentConversation {
 class ZendiaAgentService {
   /** @type {WeakMap<Element, ZendiaAgentConversation>} */
   #conversations = new WeakMap();
+  // The conversation that last acted on each tab (claim).
+  #drivers = new WeakMap();
+  // The tabs glowing for each conversation this turn: the one it works on,
+  // and every other it acted on (setDriving, claim).
+  #glowing = new WeakMap();
+  // The conversation whose glow each tab shows: only it turns it off.
+  #glowOwner = new WeakMap();
+  // While a conversation's turn runs, what hears the tabs its pages open.
+  #tabWatch = new WeakMap();
+  // The tabs kept awake for an agent while they are not in front (#awake).
+  #keptAwake = new WeakSet();
+  // The windows whose pages an agent drives may not take the user's view
+  // (#guardWindow).
+  #guarded = new WeakSet();
   #connected = new Map();
   // Who hears that a tab got a conversation: the CAPTCHA subagent.
   #listeners = new Set();
@@ -1186,36 +1204,265 @@ class ZendiaAgentService {
     return conversation;
   }
 
+  /**
+   * Take a tab for a conversation's agent to act on. One agent drives a tab
+   * at a time: while another is running a turn on it (the last to act
+   * there, or the tab's own chat working its own tab), the tab is refused,
+   * and once that turn ends it is free again.
+   *
+   * @param {ZendiaAgentConversation} conversation
+   * @param {Element} browser
+   * @returns {string|null} Why the agent may not act there, or null.
+   */
+  claim(conversation, browser) {
+    const driver = this.#drivers.get(browser);
+    const own = this.#conversations.get(browser);
+    for (const other of [driver, own]) {
+      if (
+        other &&
+        other !== conversation &&
+        other.running &&
+        !other.discarded &&
+        (other === driver || other.browser == browser)
+      ) {
+        const name = other.agent?.name ?? "another agent";
+        return `${name} is working on that tab right now, so nothing was done there. Work on another tab, or come back once ${name} is done.`;
+      }
+    }
+    this.#drivers.set(browser, conversation);
+    this.#takeTab(conversation, browser);
+    // A tab acted on by id glows too, not only the one the agent works on.
+    if (conversation.running) {
+      this.#glow(conversation, browser);
+    }
+    return null;
+  }
+
+  // A tab the agent works shows its chat in the panel, in place of an empty
+  // one the tab had (a panel opened on a new tab, say). A chat of the tab's
+  // own with anything in it stays the tab's.
+  #takeTab(conversation, browser) {
+    const own = this.#conversations.get(browser);
+    conversation.tabs.add(browser);
+    if (own === conversation) {
+      return;
+    }
+    if (
+      own &&
+      (own.running || own.messages.some(message => message.type != "note"))
+    ) {
+      return;
+    }
+    this.#conversations.set(browser, conversation);
+    if (own) {
+      // No tab's any more: the panel showing it moves to the agent's chat.
+      own.discarded = true;
+      own.changed();
+    }
+    conversation.changed();
+  }
+
   // The agent works on another tab from now on. The conversation stays on
   // the tabs it worked on before, and comes to the new one unless that tab
-  // has a conversation of its own.
+  // has a chat of its own with anything in it.
   retarget(conversation, browser) {
     if (browser == conversation.browser || conversation.discarded) {
       return;
     }
-    const driving = conversation.running;
-    this.setDriving(conversation, false);
-    if (!this.#conversations.has(browser)) {
-      this.#conversations.set(browser, conversation);
-    }
+    this.#takeTab(conversation, browser);
     conversation.moveTo(browser);
-    if (driving) {
-      this.setDriving(conversation, true);
+    // The tab it leaves keeps glowing until the turn ends: the agent still
+    // works it, and may come back to it.
+    if (conversation.running) {
+      this.#glow(conversation, browser);
     }
   }
 
-  // The glow around the tab the agent works on, drawn over the page by its
-  // browser's stack.
+  // The glow around the tabs the agent works on, drawn over each page by
+  // its browser's stack in the agent's color: on, the tab it works on; off,
+  // every tab it glowed this turn.
   setDriving(conversation, driving) {
-    const browser = conversation.browser;
-    const stack = browser.parentElement ?? browser;
-    for (const element of new Set([browser, stack])) {
-      element.toggleAttribute("zendia-agent-driving", driving);
+    if (driving) {
+      this.#glow(conversation, conversation.browser);
+      this.#watchTabs(conversation);
+      return;
     }
-    stack.style.setProperty(
-      "--zendia-agent-color",
-      agentColor(conversation.agent.id)
+    this.#unwatchTabs(conversation);
+    const glowing = this.#glowing.get(conversation);
+    this.#glowing.delete(conversation);
+    for (const browser of new Set([conversation.browser, ...(glowing ?? [])])) {
+      const owner = this.#glowOwner.get(browser);
+      if (!owner || owner === conversation) {
+        this.#glowOwner.delete(browser);
+        this.#paint(browser, false);
+      }
+    }
+  }
+
+  #glow(conversation, browser) {
+    let glowing = this.#glowing.get(conversation);
+    if (!glowing) {
+      glowing = new Set();
+      this.#glowing.set(conversation, glowing);
+    }
+    glowing.add(browser);
+    this.#glowOwner.set(browser, conversation);
+    this.#paint(browser, true, conversation.agent);
+  }
+
+  // A tab the agent works stays awake while the user is on another one, as
+  // the one in front is: a hidden page gets no animation frames, waits a
+  // second at least on each timer, and reads as hidden, and single-page
+  // apps that step on (a form's Submit) only after a frame or once shown
+  // stood still under the agent's clicks. Zen's own keep-awake flag
+  // (zenModeActive, Glance's for the tab behind it) keeps the docshell
+  // active and rendering, the tab switcher from putting it to sleep and
+  // the unloader from discarding it. Once the agent is done, the tab sleeps
+  // again unless it is in view.
+  #awake(browser, on) {
+    const gBrowser = browser.documentGlobal?.gBrowser;
+    if (!gBrowser) {
+      return;
+    }
+    try {
+      if (on) {
+        if (browser.zenModeActive) {
+          return;
+        }
+        this.#keptAwake.add(browser);
+        browser.zenModeActive = true;
+        browser.docShellIsActive = true;
+      } else if (this.#keptAwake.has(browser)) {
+        this.#keptAwake.delete(browser);
+        browser.zenModeActive = false;
+        browser.docShellIsActive = gBrowser.shouldActivateDocShell(browser);
+      }
+    } catch (e) {
+      // A browser without a docshell (unloaded, closing) has nothing to keep.
+      console.error("Zendia: could not keep the agent's tab awake", e);
+    }
+  }
+
+  // A tab opened from a page the agent drives (a link with a target, a
+  // window.open) is the agent's work too: it shows the agent's chat and
+  // glows, before the agent even turns to it.
+  #watchTabs(conversation) {
+    // On the window: Zen keeps tabs in its workspaces, outside the tab
+    // container, and TabOpen bubbles up from wherever the tab is.
+    const container = conversation.browser?.documentGlobal;
+    if (!container?.gBrowser) {
+      return;
+    }
+    try {
+      this.#guardWindow(container);
+    } catch (e) {
+      console.error("Zendia: could not guard the window for agents", e);
+    }
+    if (this.#tabWatch.has(conversation)) {
+      return;
+    }
+    const listener = event => {
+      const tab = event.target;
+      const opener = tab.openerTab?.linkedBrowser;
+      if (
+        !opener ||
+        !conversation.running ||
+        conversation.discarded ||
+        !this.#glowing.get(conversation)?.has(opener)
+      ) {
+        return;
+      }
+      this.#takeTab(conversation, tab.linkedBrowser);
+      this.#glow(conversation, tab.linkedBrowser);
+    };
+    container.addEventListener("TabOpen", listener);
+    this.#tabWatch.set(conversation, { container, listener });
+  }
+
+  // What a page the agent drives does never takes the user's view: the
+  // agent's clicks count as the user's input to the page, so the page may
+  // then call window.focus(), on which Zen switches to its tab (across
+  // workspaces) and focuses the window (Tabbrowser's on_framefocusrequested),
+  // or open a pop-up, which comes to the front (Tabbrowser's addTab). While
+  // an agent drives a tab
+  // that is not the one the user is looking at, in the window they are in,
+  // its focus requests are dropped and its pop-ups open in the background,
+  // where the agent goes on with them (#watchTabs). The user's own tabs, and
+  // zendia.agent.stealFocus, keep the browser's usual ways.
+  #guardWindow(window) {
+    if (this.#guarded.has(window)) {
+      return;
+    }
+    this.#guarded.add(window);
+    const driven = browser =>
+      !!browser?.hasAttribute?.("zendia-agent-driving") &&
+      !Services.prefs.getBoolPref(PREF_STEAL_FOCUS, false);
+    window.addEventListener(
+      "framefocusrequested",
+      event => {
+        const browser = event.target;
+        if (!driven(browser)) {
+          return;
+        }
+        const inFront =
+          browser == window.gBrowser.selectedBrowser &&
+          Services.focus.activeWindow == window;
+        if (!inFront) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      },
+      true
     );
+    // A page's window.open, or a link with a target, opens its tab through
+    // gBrowser.addTab with the page's browser as opener, in front unless
+    // told otherwise; from a page an agent drives it goes behind instead.
+    try {
+      const gBrowser = window.gBrowser;
+      const addTab = gBrowser.addTab;
+      gBrowser.addTab = function (uri, options = {}) {
+        if (options?.inBackground === false && driven(options.openerBrowser)) {
+          options = { ...options, inBackground: true };
+        }
+        return addTab.call(this, uri, options);
+      };
+    } catch (e) {
+      // Pop-ups then open as the browser would; the agent works on.
+      console.error("Zendia: could not keep agents' pop-ups behind", e);
+    }
+  }
+
+  #unwatchTabs(conversation) {
+    const watch = this.#tabWatch.get(conversation);
+    this.#tabWatch.delete(conversation);
+    watch?.container.removeEventListener("TabOpen", watch.listener);
+  }
+
+  // The glow over the page, and on the tab in the tab strip a badge of the
+  // agent's logo over the site's icon, there while the agent controls the
+  // tab (zendia.css).
+  #paint(browser, driving, agent = null) {
+    const stack = browser.parentElement ?? browser;
+    const tab = browser.documentGlobal?.gBrowser?.getTabForBrowser(browser);
+    for (const element of new Set([browser, stack, tab])) {
+      element?.toggleAttribute("zendia-agent-driving", driving);
+    }
+    this.#awake(browser, driving);
+    if (!driving) {
+      tab?.removeAttribute("zendia-agent-name");
+      return;
+    }
+    const color = agentColor(agent?.id);
+    stack.style.setProperty("--zendia-agent-color", color);
+    if (tab) {
+      const icon = agentIcon(agent?.id);
+      tab.style.setProperty("--zendia-agent-color", color);
+      tab.style.setProperty(
+        "--zendia-agent-icon",
+        icon ? `url("${icon}")` : "none"
+      );
+      tab.setAttribute("zendia-agent-name", agent?.name ?? "");
+    }
   }
 }
 

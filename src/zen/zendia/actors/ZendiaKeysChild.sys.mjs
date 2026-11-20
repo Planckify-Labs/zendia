@@ -26,6 +26,9 @@ const POINTER_MODULE =
 // rather than a focus fight.
 const MAX_REFUSED_FOCUS = 3;
 
+// How often the user's own input in a page is reported to the parent.
+const USER_INPUT_THROTTLE_MS = 300;
+
 // Content actions that work on the field the keys went to, so they stay in
 // its frame; the others act on the page.
 function actsOnFocusedField(id) {
@@ -55,8 +58,14 @@ export class ZendiaKeysChild extends JSWindowActorChild {
   #explicitInsert = false;
   #refusedFocus = 0;
   #lastInput = null;
-  // The jump session that takes the keys, until it is done.
+  // The jump session that takes the user's keys, until it is done.
   #capture = null;
+  // The jump session an agent works by message (Zendia:FeedToken), never
+  // by the user's keys: the CAPTCHA subagent's labels.
+  #agentCapture = null;
+  // When the user's own input was last reported to the parent, which an
+  // agent working this tab waits out (Zendia:UserInput).
+  #userInputSent = 0;
   // Whether a page field has focus. The parent needs it to take reserved
   // browser shortcuts, like Ctrl+W, only while the user is typing.
   #inField = false;
@@ -110,7 +119,12 @@ export class ZendiaKeysChild extends JSWindowActorChild {
     }
     switch (event.type) {
       case "keydown":
+        this.#noteUserInput(event);
         this.#onKeyDown(event);
+        break;
+      case "pointerdown":
+      case "wheel":
+        this.#noteUserInput(event);
         break;
       case "focusin":
       case "focusout":
@@ -172,22 +186,30 @@ export class ZendiaKeysChild extends JSWindowActorChild {
       // that works a challenge on its own types its labels this way.
       case "Zendia:FeedToken":
         return this.#feedToken(message.data?.token);
-      // That capture, ended: its labels come off when the turn is over.
+      // The agent's capture, ended: its labels come off when the turn is
+      // over. The user's own is not the agent's to end.
       case "Zendia:EndCapture":
-        this.#capture?.finish?.();
-        this.#capture = null;
+        this.#agentCapture?.finish?.();
+        this.#agentCapture = null;
         break;
       // Where the labels of the capture are, for the CAPTCHA subagent's
       // shot: none when no capture is up, null when it cannot say (the
       // cursor's, whose tags lie inside what it is over).
       case "Zendia:CaptureLabels":
-        if (!this.#capture || this.#capture.done) {
+        if (!this.#agentCapture || this.#agentCapture.done) {
           return [];
         }
-        return this.#capture.labelRects ?? null;
+        return this.#agentCapture.labelRects ?? null;
       case "Zendia:LeaveField":
         this.#leaveField();
         break;
+      // How big the view of this window is, for a shot of a tab whose
+      // browser is not laid out (one in the background).
+      case "Zendia:ViewSize":
+        return {
+          width: this.contentWindow?.innerWidth ?? 0,
+          height: this.contentWindow?.innerHeight ?? 0,
+        };
       // A frame sent its key's action up: the keys that follow come to the
       // page, not to the frame that had the focus.
       case "Zendia:TakeFocus":
@@ -211,14 +233,42 @@ export class ZendiaKeysChild extends JSWindowActorChild {
 
   /**
    * Send the keys that follow to a session, like a jump's, until it is done.
+   * An agent's session (agentDriven) takes only the agent's tokens, by
+   * message, and has a slot of its own: the user's keys never reach it, and
+   * the user's own session, when they start one, ends it.
    *
-   * @param {{handleKey: (event: KeyboardEvent) => void, done: boolean}} session
+   * @param {{handleKey: (event: KeyboardEvent) => void, done: boolean,
+   *   agentDriven?: boolean, finish?: () => void,
+   *   finished?: Promise}} session
+   * @returns {boolean} False when an agent's session was refused: the
+   *   user's own labels are up, and the agent waits its turn.
    */
   startCapture(session) {
+    if (session.agentDriven) {
+      if (this.#capture && !this.#capture.done) {
+        session.finish?.();
+        return false;
+      }
+      if (this.#agentCapture && this.#agentCapture !== session) {
+        this.#agentCapture.finish?.();
+      }
+      this.#agentCapture = session.done ? null : session;
+      session.finished?.then(() => {
+        if (this.#agentCapture === session) {
+          this.#agentCapture = null;
+        }
+      });
+      return true;
+    }
     // A session with nothing to pick is over before it starts.
     this.#capture = session.done ? null : session;
     if (!this.#capture) {
-      return;
+      return true;
+    }
+    // The user takes over from the agent: its labels come off, and the
+    // parent hears the user took the keys back.
+    if (this.#agentCapture) {
+      this.#dismissAgentCapture();
     }
     // The frames of the page pass their keys to it while it lasts: a
     // CAPTCHA moves the focus into its challenge when it opens, and the
@@ -232,6 +282,40 @@ export class ZendiaKeysChild extends JSWindowActorChild {
         this.#announceCapture(false);
       }
     });
+    return true;
+  }
+
+  // The user took the keys back from the agent's labels (<Esc>, or labels
+  // of their own): they come off, and the CAPTCHA subagent stops working
+  // this tab rather than label it again over the user.
+  #dismissAgentCapture() {
+    const capture = this.#agentCapture;
+    this.#agentCapture = null;
+    capture?.finish?.();
+    try {
+      this.sendAsyncMessage("Zendia:AgentCaptureDismissed");
+    } catch {
+      // The page is gone.
+    }
+  }
+
+  // The user's own key, press or wheel in this page, as against an agent's
+  // synthesized input (isSynthesized), throttled: an agent working this tab
+  // waits until the user pauses.
+  #noteUserInput(event) {
+    if (event.isSynthesized) {
+      return;
+    }
+    const now = Date.now();
+    if (now - this.#userInputSent < USER_INPUT_THROTTLE_MS) {
+      return;
+    }
+    this.#userInputSent = now;
+    try {
+      this.sendAsyncMessage("Zendia:UserInput");
+    } catch {
+      // The page is gone.
+    }
   }
 
   #announceCapture(on) {
@@ -387,6 +471,9 @@ export class ZendiaKeysChild extends JSWindowActorChild {
     return (
       preventAutofocus &&
       this.#refusedFocus < MAX_REFUSED_FOCUS &&
+      // An agent's own focus is deliberate, not a page's grab: refusing it
+      // would fight the agent's fills and presses.
+      !ZendiaDom.agentTyping &&
       !this.contentWindow?.navigator.userActivation.hasBeenActive
     );
   }
@@ -401,6 +488,9 @@ export class ZendiaKeysChild extends JSWindowActorChild {
     // A jump can end on its own, when the challenge it stayed in is gone.
     if (this.#capture?.done) {
       this.#capture = null;
+    }
+    if (this.#agentCapture?.done) {
+      this.#agentCapture = null;
     }
     const editing = () =>
       ZendiaDom.isEditable(ZendiaDom.deepActiveElement(this.document));
@@ -427,6 +517,15 @@ export class ZendiaKeysChild extends JSWindowActorChild {
       }
       return;
     }
+    // The agent's labels never take the user's keys: they go their usual
+    // way below, and <Esc> also takes the tab back from the agent.
+    if (
+      this.#agentCapture &&
+      !this.#capture &&
+      ZendiaKeys.fromEvent(event) == "<Esc>"
+    ) {
+      this.#dismissAgentCapture();
+    }
     // A CAPTCHA's jump stays while its answer is typed in a field.
     if (this.#capture && !(this.#capture.yieldsToFields && editing())) {
       this.#swallow(event);
@@ -447,24 +546,27 @@ export class ZendiaKeysChild extends JSWindowActorChild {
     }
   }
 
-  // Press a token in the active capture, as a keyboard would, for the agent
-  // that works a challenge on its own. Returns whether a capture took it:
-  // false when there is none (its labels are gone), so the caller knows the
-  // key did nothing.
+  // Press a token in the agent's capture, as a keyboard would, for the
+  // agent that works a challenge on its own. Returns whether it took it:
+  // false when there is none (its labels are gone, or the user took the
+  // keys back), so the caller knows the key did nothing. Only the agent's
+  // own capture hears it, and a key it passes on goes nowhere: an agent's
+  // key never reaches the user's labels or the keymap.
   #feedToken(token) {
     const event =
       typeof token == "string" ? ZendiaKeys.tokenToEvent(token) : null;
     if (!event) {
       return false;
     }
-    if (this.#capture?.done) {
-      this.#capture = null;
-    }
-    const engine = this.#ensureEngine();
-    if (!this.#capture || !engine) {
+    const capture = this.#agentCapture;
+    if (!capture || capture.done) {
+      this.#agentCapture = null;
       return false;
     }
-    this.#giveToCapture(event, engine);
+    capture.handleKey(event);
+    if (capture.done && this.#agentCapture === capture) {
+      this.#agentCapture = null;
+    }
     return true;
   }
 

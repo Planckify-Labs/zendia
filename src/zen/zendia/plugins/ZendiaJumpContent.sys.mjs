@@ -342,7 +342,7 @@ export async function collectControls(actor, window) {
  *   focus rather than a press. Null if its frame did not answer.
  */
 export async function pressControl(actor, window, target) {
-  const { frame, id, newTab } = target ?? {};
+  const { frame, id, newTab, agent } = target ?? {};
   if (
     !Array.isArray(frame) ||
     !frame.every(each => Number.isSafeInteger(each)) ||
@@ -355,11 +355,16 @@ export async function pressControl(actor, window, target) {
       frame: frame.slice(1),
       id,
       newTab: !!newTab,
+      agent: !!agent,
     });
   }
   const element = gPressable.get(window)?.get(id)?.deref();
   if (element?.isConnected) {
-    return pressElement(window, element, { newTab: !!newTab, actor });
+    return pressElement(window, element, {
+      newTab: !!newTab,
+      actor,
+      agent: !!agent,
+    });
   }
   return false;
 }
@@ -532,11 +537,12 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
         (item.challenge || item.captcha) &&
         (item.canvas || isPicture(item.rect)),
       purpose: item.challenge || item.captcha ? item.purpose : null,
-      pick: ({ newTab }) =>
+      pick: ({ newTab, agent }) =>
         askFrame(actor, window, item.frame[0], "Zendia:PressControl", {
           frame: item.frame.slice(1),
           id: item.id,
           newTab,
+          agent: !!agent,
         }),
     }));
   const items = [...local, ...remote];
@@ -776,8 +782,14 @@ function moveCaret(window, actor, node, offset, extend = true) {
   reveal(window);
 }
 
-// Whether it was a field, which takes the focus rather than a press.
-function pressElement(window, element, { newTab, actor = null }) {
+// Whether it was a field, which takes the focus rather than a press. agent:
+// an agent's label pick, which never takes the user's focus or window
+// (ZendiaDom.agentMouse).
+function pressElement(
+  window,
+  element,
+  { newTab, actor = null, agent = false }
+) {
   if (ZendiaDom.isEditable(element)) {
     // The keys asked for it: it is insert mode, not focus a page stole.
     actor?.setMode("i");
@@ -790,13 +802,20 @@ function pressElement(window, element, { newTab, actor = null }) {
   // The mouse input a user's would be, for the handlers that listen to
   // mousedown rather than click.
   const modifiers = newTab ? Ci.nsIDOMWindowUtils.MODIFIER_CONTROL : 0;
-  window.synthesizeMouseEvent("mousemove", x, y, {});
-  for (const type of ["mousedown", "mouseup"]) {
-    window.synthesizeMouseEvent(type, x, y, {
-      button: 0,
-      clickCount: 1,
-      modifiers,
-    });
+  const mouse = () => {
+    window.synthesizeMouseEvent("mousemove", x, y, {});
+    for (const type of ["mousedown", "mouseup"]) {
+      window.synthesizeMouseEvent(type, x, y, {
+        button: 0,
+        clickCount: 1,
+        modifiers,
+      });
+    }
+  };
+  if (agent) {
+    ZendiaDom.agentMouse(window, mouse);
+  } else {
+    mouse();
   }
   return false;
 }
@@ -854,6 +873,12 @@ class JumpSession {
   // The answers the CAPTCHAs of the page had left when the jump began: one
   // more means one was solved, and the jump has done its work.
   #tokens = 0;
+  // The driving agent's own color, for its marks: each agent's jump reads
+  // at a glance as its own, in its tab-glow color.
+  #color = null;
+  // Whether an agent works this jump by message (Zendia:FeedToken) rather
+  // than the user at the keys: the user's keys are never swallowed into it.
+  #agentDriven = false;
   #resolveFinished;
   #finished = new Promise(resolve => (this.#resolveFinished = resolve));
 
@@ -866,6 +891,8 @@ class JumpSession {
       challengeSource = null,
       staying = false,
       actor = null,
+      color = null,
+      agentDriven = false,
     } = {}
   ) {
     this.#window = window;
@@ -874,6 +901,8 @@ class JumpSession {
     this.#hints = hints;
     this.#challengeSource = challengeSource;
     this.#actor = actor;
+    this.#color = color;
+    this.#agentDriven = agentDriven;
     this.#staying = staying && hints;
     if (this.#staying) {
       this.#makeSource = challengeSource ?? makeSource;
@@ -894,6 +923,12 @@ class JumpSession {
 
   get done() {
     return this.#done;
+  }
+
+  // Whether an agent works this jump by message: ZendiaKeysChild leaves the
+  // user's own keys to the page and the keymap, and <Esc> takes them back.
+  get agentDriven() {
+    return this.#agentDriven;
   }
 
   /**
@@ -1122,7 +1157,7 @@ class JumpSession {
       return;
     }
     this.finish();
-    target?.pick(options);
+    target?.pick({ ...options, agent: this.#agentDriven });
   }
 
   // A pick that leaves the labels up for the next one: a CAPTCHA asks for
@@ -1182,7 +1217,11 @@ class JumpSession {
     }
     let field = false;
     try {
-      field = (await target.pick({ newTab: !!options.newTab })) === true;
+      field =
+        (await target.pick({
+          newTab: !!options.newTab,
+          agent: this.#agentDriven,
+        })) === true;
     } catch {
       // The frame is gone: the next read finds it so.
     }
@@ -1263,6 +1302,8 @@ class JumpSession {
       drag,
       grab,
       grabRect,
+      color: this.#color,
+      agentDriven: this.#agentDriven,
       slider,
       track,
       piece,
@@ -1350,6 +1391,11 @@ class JumpSession {
 
   #refocus() {
     const window = this.#window;
+    // An agent's keys reach it by message (Zendia:FeedToken) and need no
+    // focus; pulling it would raise the window over the user's work.
+    if (this.#agentDriven) {
+      return;
+    }
     try {
       const focused = window.document.activeElement;
       if (focused?.browsingContext) {
@@ -1599,6 +1645,20 @@ class JumpSession {
   #prompt(text) {
     const tag = this.#window.document.createElementNS(HTML_NS, "span");
     tag.textContent = text;
+    // An agent's prompt carries a dot of its own color: whose labels these
+    // are shows at a glance, while the band itself stays readable.
+    if (this.#color) {
+      const dot = this.#window.document.createElementNS(HTML_NS, "span");
+      style(dot, {
+        display: "inline-block",
+        width: "9px",
+        height: "9px",
+        borderRadius: "50%",
+        background: this.#color,
+        marginRight: "7px",
+      });
+      tag.prepend(dot);
+    }
     // At the bottom, unless what is labeled is there: then at the top.
     const band = this.#window.innerHeight - PROMPT_BAND;
     const below = this.#shown.some(target => target.rect.bottom > band);
@@ -1616,6 +1676,7 @@ class JumpSession {
       color: LABEL_TEXT,
       font: "700 13px/20px ui-monospace, monospace",
       boxShadow: "0 2px 8px rgba(0, 0, 0, 0.4)",
+      ...(this.#color ? { display: "inline-flex", alignItems: "center" } : {}),
     });
     return tag;
   }
@@ -1672,8 +1733,11 @@ const labelControls =
         data: { id, args },
       });
     }
+    const { agentDriven = false, color = null } = args;
+    // The user's keys come to the page; an agent's come by message, and
+    // its labels never take the focus.
     const focused = window.document.activeElement;
-    if (focused?.browsingContext) {
+    if (focused?.browsingContext && !agentDriven) {
       focused.blur();
       window.focus();
     }
@@ -1688,28 +1752,40 @@ const labelControls =
       let areas = await captchaAreas(actor, window);
       const found = !!areas.length;
       if (!found && args.orPage) {
-        return actions["jump.hints"](context);
+        return actions["jump.hints"](context, { agentDriven, color });
       }
       if (!found) {
         areas = [plainRect(0, 0, window.innerWidth, window.innerHeight)];
       }
-      actor.startCapture(
+      const started = actor.startCapture(
         new PointerPad(actor, window, {
           areas,
           drag: false,
           notice: found ? "" : "no CAPTCHA found: the cursor is on the page",
           onVerify: found
-            ? () => actions["captcha.verify"]({ actor, window })
+            ? () =>
+                actions["captcha.verify"]({
+                  actor,
+                  window,
+                  agent: agentDriven,
+                })
             : null,
           isThere: found ? shown => captchaIsThere(actor, window, shown) : null,
+          color,
+          agentDriven,
         })
       );
+      if (started === false) {
+        return false;
+      }
       return found ? "cursor" : "page";
     }
-    actor.startCapture(
+    const started = actor.startCapture(
       new JumpSession(window, makeSource, source, {
         ...rest,
         actor,
+        color,
+        agentDriven,
         staying: !!captcha,
         challengeSource:
           stayInChallenges || captcha
@@ -1720,6 +1796,9 @@ const labelControls =
             : null,
       })
     );
+    if (started === false) {
+      return false;
+    }
     return captcha ? "captcha" : "page";
   };
 
@@ -1736,7 +1815,7 @@ const labelWords =
 // page has the keys after it, as the press moved them into the frame.
 const pressCaptcha =
   (...purposes) =>
-  async ({ actor, window }) => {
+  async ({ actor, window, agent = false }) => {
     const targets = (
       await controlsSource(window, actor, { scope: "captcha" })
     ).matches("");
@@ -1746,8 +1825,9 @@ const pressCaptcha =
     if (!target) {
       return false;
     }
-    const field = (await target.pick({ newTab: false })) === true;
-    if (!field) {
+    const field = (await target.pick({ newTab: false, agent })) === true;
+    // An agent's press needs no focus; pulling it would raise the window.
+    if (!field && !agent) {
       const focused = window.document.activeElement;
       if (focused?.browsingContext) {
         focused.blur();
