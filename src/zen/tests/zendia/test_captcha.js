@@ -489,3 +489,26 @@ add_task(function test_a_widgets_success_mark() {
   );
   Assert.ok(!ZendiaCaptcha.marksSolved(), "nothing is no mark");
 });
+
+add_task(function test_a_filled_answer_field_is_not_always_a_pass() {
+  const token = "03AFcWeA" + "x".repeat(400);
+  Assert.equal(ZendiaCaptcha.tokenState(token), "solved", "an answer");
+  Assert.equal(
+    ZendiaCaptcha.tokenState("XXXX.DUMMY.TOKEN.XXXX"),
+    "solved",
+    "a test key's answer"
+  );
+  for (const value of ["", "  ", "null", "undefined", "false", "0"]) {
+    Assert.equal(ZendiaCaptcha.tokenState(value), null, `${value} is none`);
+  }
+  // Friendly Captcha writes where its widget is at until there is an answer.
+  for (const value of [".EXPIRED", ".ERROR", ".HEADLESS_ERROR", ".RESET"]) {
+    Assert.equal(ZendiaCaptcha.tokenState(value), "failed", value);
+  }
+  for (const value of [".FETCHING", ".UNFINISHED", ".SOLVING"]) {
+    Assert.equal(ZendiaCaptcha.tokenState(value), "checking", value);
+  }
+  for (const value of [".UNSTARTED", ".UNACTIVATED"]) {
+    Assert.equal(ZendiaCaptcha.tokenState(value), null, `${value} is none`);
+  }
+});

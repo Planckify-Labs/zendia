@@ -19,6 +19,7 @@
 // as it happens, and so is the CAPTCHA going away.
 
 import { ZendiaCaptcha } from "resource:///modules/zendia/core/ZendiaCaptcha.sys.mjs";
+import { clearTimeout, setTimeout } from "resource://gre/modules/Timer.sys.mjs";
 
 const PARENT_URI =
   "resource:///modules/zendia/captcha/ZendiaCaptchaWatchParent.sys.mjs";
@@ -36,6 +37,12 @@ export const PREF_NOTIFY = "zendia.captcha.watch.notify";
 const MAX_DETECTIONS = 50;
 const MAX_URL = 2048;
 const MAX_TEXT = 256;
+
+// How long a frame that went is waited for to come back before the tab is
+// read without it: a service reloads its checkbox frame when its answer
+// expires (reCAPTCHA does), and the new one reports within a second or so.
+// Read at once, the tab would say no CAPTCHA for that second.
+const REPLACE_WAIT_MS = 2000;
 
 // The infobar's value, so a page's notice replaces its own on a rescan.
 const NOTIFICATION_VALUE = "zendia-captcha-watch";
@@ -258,6 +265,12 @@ class ZendiaCaptchaWatchService {
     detections = sanitize(detections);
     state = sanitizeState(state);
     const frames = this.#frames.get(browser) ?? new Map();
+    // A sub-frame that reads a state stands in for those that went
+    // (drop()): they are let go now. The page's own report does not, as it
+    // often comes in the gap, its frames having changed.
+    if (top !== true && state.state != "none") {
+      this.#letGo(frames);
+    }
     // A checkbox frame may hold no finding of its own, only its state.
     if (detections.length || state.state != "none") {
       frames.set(frame, {
@@ -283,8 +296,43 @@ class ZendiaCaptchaWatchService {
    */
   drop(browser, frame) {
     const frames = this.#frames.get(browser);
-    if (frames?.delete(frame)) {
-      this.#recompute(browser);
+    const gone = frames?.get(frame);
+    // Nothing kept, or kept already till another stands in: a frame is
+    // dropped twice, as its page hides and as its actor goes.
+    if (!gone || gone.leaving) {
+      return;
+    }
+    // A frame of a page that stays, which held a state, is most often being
+    // replaced (a checkbox frame reloaded on an expiry): what it read stays
+    // in the tab until a frame after it reads a state (report()), or for a
+    // moment at most. The page itself going is read at once, and so are
+    // the frames that stood in for others.
+    const pageStays = [...frames.values()].some(
+      (entry) => entry.top && entry !== gone,
+    );
+    if (!gone.top && pageStays && gone.state?.state != "none") {
+      gone.leaving = setTimeout(() => {
+        if (frames.get(frame) === gone) {
+          frames.delete(frame);
+          this.#recompute(browser);
+        }
+      }, REPLACE_WAIT_MS);
+      return;
+    }
+    frames.delete(frame);
+    if (gone.top) {
+      this.#letGo(frames);
+    }
+    this.#recompute(browser);
+  }
+
+  // Lets the frames that went go, those kept till another stood in.
+  #letGo(frames) {
+    for (const [key, entry] of frames) {
+      if (entry.leaving) {
+        clearTimeout(entry.leaving);
+        frames.delete(key);
+      }
     }
   }
 

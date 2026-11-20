@@ -1243,18 +1243,191 @@ const SELF_READ_KINDS = new Set([
   "invisible",
 ]);
 
+// What a CAPTCHA's widget says of a check that is over, read from inside
+// it: the words it shows ("Verification expired", "Timed out", "Verification
+// failed", "Success!"), the names of the parts it shows them in, which say
+// it whatever the language (reCAPTCHA's .rc-anchor-error-msg-container,
+// GeeTest's geetest_radar_error; Turnstile's are scrambled per build, so
+// only its words tell), and the state a widget gives itself (ALTCHA's
+// data-state="expired"). The words are an element's own text, not only a
+// leaf's: one may sit beside its Refresh link ("Verification expired.
+// <a>Refresh</a>"). A few words may come first ("hCaptcha challenge
+// expired", "Your session has expired").
+const STATUS_TEXT_MAX = 80;
+const EXPIRED_WORDS = /^(?:\S+\s+){0,3}?(?:expired|timed\s+out|time-?out)\b/i;
+const FAILED_WORDS = /^(?:\S+\s+){0,3}?(?:failed|failure|error)\b/i;
+const EXPIRED_NAMES =
+  /(?:^|[-_])(?:expired?|expiry|timeout|timed-?out)(?:$|[-_])/i;
+const FAILED_NAMES = /(?:^|[-_])(?:fail|failed|failure|error)(?:$|[-_])/i;
+const PASSED_NAMES = /(?:^|[-_])(?:success|verified|passed|solved)(?:$|[-_])/i;
+const EXPIRED_STATES = new Set(["expired", "timeout"]);
+const FAILED_STATES = new Set(["error", "failed", "failure"]);
+// Which of them wins when a widget shows more than one: an expiry, then a
+// failure, then a pass. A widget caught between two says it wants a try.
+const STATUS_RANK = { expired: 0, failed: 1, passed: 2 };
+
+// The text an element holds itself, not its children's.
+function ownText(element) {
+  let text = "";
+  for (const node of element.childNodes) {
+    if (node.nodeType == 3) {
+      text += ` ${node.data}`;
+    }
+  }
+  return clean(text);
+}
+
+// An element, what its own shadow root holds, and every element under it.
+function* selfAndDeep(root) {
+  if (root.nodeType == 1) {
+    yield root;
+    const shadow = root.openOrClosedShadowRoot;
+    if (shadow) {
+      yield* deepElements(shadow);
+    }
+  }
+  yield* deepElements(root);
+}
+
+// What one element of a widget says, if anything: "expired", "failed" or,
+// with `passes`, "passed". A name only counts on a part with words in it:
+// a widget keeps empty error holders around.
+function statusOfElement(element, passes) {
+  const state = element.dataset?.state?.toLowerCase();
+  if (state && EXPIRED_STATES.has(state)) {
+    return "expired";
+  }
+  if (state && FAILED_STATES.has(state)) {
+    return "failed";
+  }
+  const words = ownText(element);
+  if (words && words.length <= STATUS_TEXT_MAX) {
+    if (EXPIRED_WORDS.test(words)) {
+      return "expired";
+    }
+    if (FAILED_WORDS.test(words)) {
+      return "failed";
+    }
+    if (passes && MANAGED_PASSED.test(words)) {
+      return "passed";
+    }
+  }
+  const names = [element.id, ...element.classList].filter(Boolean);
+  if (!names.length) {
+    return null;
+  }
+  const rules = [
+    ["expired", EXPIRED_NAMES],
+    ["failed", FAILED_NAMES],
+    ...(passes ? [["passed", PASSED_NAMES]] : []),
+  ];
+  const named = rules.find(([, rule]) =>
+    names.some((name) => rule.test(name)),
+  )?.[0];
+  return named && clean(element.textContent) ? named : null;
+}
+
+/**
+ * What a CAPTCHA's widget shows of a check that is over, from the parts of
+ * it that are shown: "expired", "failed", or, with `passes`, "passed".
+ *
+ * @param {Document|Element} root A service's frame, or a widget of a page.
+ * @param {boolean} [passes] Whether to read a pass too: a managed widget
+ *   says it only in words, a checkbox's tick says it better.
+ * @returns {string|null}
+ */
+function statusOf(root, passes = false) {
+  let found = null;
+  for (const element of selfAndDeep(root)) {
+    const status = statusOfElement(element, passes);
+    if (
+      status &&
+      (!found || STATUS_RANK[status] < STATUS_RANK[found]) &&
+      element.checkVisibility(VISIBILITY)
+    ) {
+      found = status;
+      if (found == "expired") {
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+// The names a checkbox takes while the click it got is being checked.
+const LOADING_NAMES = /(?:^|[-_])(?:loading|checking|busy)$/i;
+// How long a checkbox may spin before it is stuck: the check of a click
+// takes a second or two, and a spinner that never stops (a service that
+// throttles the visitor) wants the user to click again or reload.
+const LOADING_MAX_MS = 10000;
+// Per document, since when its checkbox has been spinning.
+const loadingSince = new WeakMap();
+
+// How long a service's checkbox has shown it is checking a click, by its
+// state or a name it takes for the while; null when it is not.
+function loadingFor(document) {
+  const control = document.querySelector(
+    "#recaptcha-anchor, #checkbox, [role=checkbox]",
+  );
+  const spinning =
+    !!control &&
+    (control.getAttribute("aria-busy") == "true" ||
+      [...control.classList].some((name) => LOADING_NAMES.test(name)));
+  if (!spinning) {
+    loadingSince.delete(document);
+    return null;
+  }
+  const since = loadingSince.get(document) ?? Date.now();
+  loadingSince.set(document, since);
+  return Date.now() - since;
+}
+
 // The state of a service's checkbox frame, read from inside: its box
-// ticked or not, a managed widget's words, or its spinner. A challenge
-// frame cannot see whether it is shown: the page above says that.
+// ticked or not, an expiry or a failure it shows, a managed widget's
+// words, or its spinner. A ticked box is the one sure sign of a pass: an
+// expiry unticks it. A challenge frame cannot see whether it is shown: the
+// page above says that.
 function frameState(window) {
   const url = window.document.documentURI ?? "";
   const name = ZendiaCaptcha.nameOf(url);
   if (ZendiaCaptcha.isChallenge(url)) {
     return { state: "none" };
   }
+  const kind = ZendiaCaptcha.kindOf(url);
   const answer = frameCheckbox(window, true);
-  if (answer?.passed) {
+  if (kind == "checkbox" && answer?.passed) {
+    return { state: "solved", name, how: `${name}'s checkbox is ticked` };
+  }
+  const status =
+    kind == "checkbox" || kind == "managed"
+      ? statusOf(window.document, kind == "managed")
+      : null;
+  if (status == "expired") {
+    return {
+      state: "failed",
+      name,
+      how: `${name} says the check expired`,
+    };
+  }
+  if (status == "failed") {
+    return { state: "failed", name, how: `${name} says the check failed` };
+  }
+  if (answer?.passed || status == "passed") {
     return { state: "solved", name, how: `${name} says the check passed` };
+  }
+  // A box clicked and spinning (reCAPTCHA's recaptcha-checkbox-loading) is
+  // not ticked yet, but asks nothing more: the check is on its way. One
+  // that spins on is stuck, and asks again.
+  const spun = answer?.checkbox ? loadingFor(window.document) : null;
+  if (spun != null && spun < LOADING_MAX_MS) {
+    return { state: "checking", name, how: `${name} is checking the click` };
+  }
+  if (spun != null) {
+    return {
+      state: "unchecked",
+      name,
+      how: `${name}'s checkbox is stuck checking the click: click it again or reload`,
+    };
   }
   if (answer?.done) {
     return {
@@ -1331,10 +1504,38 @@ function pageState(window) {
   for (const field of document.querySelectorAll(
     "input[name], textarea[name]",
   )) {
-    if (field.value && ZendiaCaptcha.isTokenField(field.name)) {
+    if (!ZendiaCaptcha.isTokenField(field.name)) {
+      continue;
+    }
+    const fieldName = field.name.slice(0, 64);
+    const filled = ZendiaCaptcha.tokenState(field.value);
+    if (filled == "solved") {
+      take({ state: "solved", how: `its answer field ${fieldName} is filled` });
+    } else if (filled == "failed") {
       take({
-        state: "solved",
-        how: `its answer field ${field.name.slice(0, 64)} is filled`,
+        state: "failed",
+        how: `its answer field ${fieldName} says the check expired or failed`,
+      });
+    } else if (filled == "checking") {
+      take({
+        state: "checking",
+        how: `its answer field ${fieldName} says the check is running`,
+      });
+    }
+  }
+  // A widget drawn in the page says an expiry or a failure itself; one with
+  // a frame of its own has that frame read it (frameState). An answer left
+  // in its field or a mark of an old pass is outranked by it.
+  for (const widget of widgetsOf(window)) {
+    if (!isShown(window, widget) || holdsFrame(widget, frames)) {
+      continue;
+    }
+    const status = statusOf(widget);
+    if (status == "expired" || status == "failed") {
+      take({
+        state: "failed",
+        name: "widget",
+        how: `its widget says the check ${status}`,
       });
     }
   }
@@ -2101,7 +2302,11 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
     }
     this.#sent = sent;
     this.#state = JSON.stringify(state);
-    this.#followState(found);
+    // A service's own frame is followed whatever it read: its widget is
+    // drawn where the observer cannot see (Turnstile's closed shadow root),
+    // so a frame that read nothing for a moment would not hear of a later
+    // expiry or a box shown again.
+    this.#followState(found || isCaptchaFrame(this.contentWindow));
     // A dev-only audit of coverage: every frame and script the page holds,
     // so what the layer does not yet name can be seen next to what it does.
     if (

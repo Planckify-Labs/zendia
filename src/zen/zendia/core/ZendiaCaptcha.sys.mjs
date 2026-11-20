@@ -328,6 +328,15 @@ const TOKEN_FIELDS = [
   "geetest_seccode",
   "lemin_answer",
 ];
+// What an answer field holds before there is an answer, or after it went:
+// Friendly Captcha's ".UNSTARTED", ".FETCHING", ".UNFINISHED", ".EXPIRED",
+// ".ERROR", ".HEADLESS_ERROR" and the like. No answer is a dotted word.
+const TOKEN_PLACEHOLDER = /^\.([A-Z][A-Z_]*)$/;
+const PLACEHOLDER_FAILED =
+  /(?:^|_)(?:EXPIRED|ERROR|TIMEOUT|RESET|DESTROYED|FAILED)$/;
+const PLACEHOLDER_RUNNING =
+  /^(?:FETCHING|UNFINISHED|SOLVING|REQUESTING|VERIFYING|ACTIVATED)$/;
+const NOT_A_TOKEN = /^(?:null|undefined|false|0)$/i;
 
 // The names a trap field gets: one a person never fills, for they never see
 // it, and a simple script cannot resist. The timing trap — a form sent too
@@ -451,7 +460,7 @@ const ANSWER_TYPES = new Set([
 // strongest:
 //   open       a challenge is up to solve (a grid, a puzzle, a text)
 //   unchecked  a checkbox waits to be ticked ("I'm not a robot")
-//   failed     a managed check failed or expired: it wants a new try
+//   failed     a check failed or expired: it wants a new try
 //   shown      a CAPTCHA is shown whose state the layer cannot read
 //   checking   a check runs on its own (Turnstile's spinner)
 //   solved     passed: a ticked box, a filled answer field, a success mark
@@ -633,6 +642,31 @@ export const ZendiaCaptcha = {
         field.startsWith(token + "-") ||
         field.startsWith(token + "[")
     );
+  },
+
+  /**
+   * What the value of a CAPTCHA's answer field says. A filled field is not
+   * always a pass: Friendly Captcha writes where its widget is at into it
+   * until there is an answer (".UNSTARTED", ".FETCHING", ".EXPIRED",
+   * ".ERROR"), and a script may leave "null" or "false" behind.
+   *
+   * @param {string} value
+   * @returns {"solved"|"failed"|"checking"|null} null when it holds no
+   *   answer and says nothing of one.
+   */
+  tokenState(value) {
+    const token = String(value ?? "").trim();
+    if (!token || NOT_A_TOKEN.test(token)) {
+      return null;
+    }
+    const placeholder = TOKEN_PLACEHOLDER.exec(token)?.[1];
+    if (!placeholder) {
+      return "solved";
+    }
+    if (PLACEHOLDER_FAILED.test(placeholder)) {
+      return "failed";
+    }
+    return PLACEHOLDER_RUNNING.test(placeholder) ? "checking" : null;
   },
 
   /**
