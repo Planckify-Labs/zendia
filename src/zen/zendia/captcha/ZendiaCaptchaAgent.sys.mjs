@@ -361,6 +361,10 @@ class ZendiaCaptchaAgentService {
   // asks any more (the page took it down, moved on to a screen without it),
   // that challenge is over, and the next ask on the same page (an expiry, a
   // form shown again) is a new one, worked live.
+  // Live only while the agent is at work on the tab: a turn runs there, or
+  // the subagent is on it already. A CAPTCHA the user meets on their own,
+  // with the agent idle, is left alone; the end of the agent's next turn
+  // looks at it then (#afterTurn).
   #onDetect(browser, record) {
     const asking = this.#asking(record);
     if (record.state == "solved" || !asking.size) {
@@ -376,6 +380,13 @@ class ZendiaCaptchaAgentService {
       delivered = { url: record.url, keys: new Set() };
       this.#delivered.set(browser, delivered);
     }
+    const conversation = ZendiaAgents.conversationFor(browser);
+    if (!this.#working.has(browser) && !conversation?.running) {
+      say(
+        `detected with the agent idle, left for its next turn: ${record.signature}`
+      );
+      return;
+    }
     const fresh = [...asking].filter(key => !delivered.keys.has(key));
     for (const key of asking) {
       delivered.keys.add(key);
@@ -385,13 +396,12 @@ class ZendiaCaptchaAgentService {
     }
     this.#pending.set(browser, record);
     say(`detected: ${record.signature}`);
-    const conversation = ZendiaAgents.conversationFor(browser);
     if (this.#worked(conversation)) {
+      // Worked once the running turn ends (#deliver waits it out).
       this.#pump(browser);
     } else if (conversation) {
       this.#watchForTurn(browser, conversation);
     }
-    // Without a conversation the finding rests until one starts.
   }
 
   /**
