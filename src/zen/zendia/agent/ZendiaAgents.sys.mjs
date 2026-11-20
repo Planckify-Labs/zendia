@@ -249,9 +249,10 @@ export class ZendiaAgentConversation {
    *   What the user attached: a file on disk, or the bytes of one that is
    *   not (a pasted picture).
    * @param {object} [options]
-   * @param {string} [options.echo] What the panel shows of the request, as
-   *   a note, instead of its text: how a request that is not the user's own
-   *   (the CAPTCHA subagent's) announces itself.
+   * @param {string|false} [options.echo] What the panel shows of the
+   *   request, as a note, instead of its text: how a request that is not the
+   *   user's own (the CAPTCHA subagent's) announces itself. false shows
+   *   nothing of it.
    * @param {boolean} [options.isolated] Run the request on its own: a new
    *   session that is not kept, told nothing of the tab or the user's
    *   instructions, with only the files' pictures to look at.
@@ -259,11 +260,20 @@ export class ZendiaAgentConversation {
    *   look: () => Promise<{name: string, bytes: Uint8Array}|null>}} [options.act]
    *   For an isolated turn that may act: how it presses keys and looks again.
    *   Without it the turn can only look at the pictures it was given.
+   * @param {{message: object|null}} [options.answer] One message the turn's
+   *   words go into, each text replacing the last, with no tool steps shown:
+   *   the reply alone, kept across the turns that share the holder.
+   * @returns {Promise<boolean>} Whether the request was taken: false only
+   *   when it was empty or another turn was running.
    */
-  async send(text, files = [], { echo, isolated = false, act = null } = {}) {
+  async send(
+    text,
+    files = [],
+    { echo, isolated = false, act = null, answer = null } = {}
+  ) {
     text = text.trim();
     if ((!text && !files.length) || this.running) {
-      return;
+      return false;
     }
     // A new turn starts: whatever stopped the last one is history.
     this.#userStopped = false;
@@ -275,15 +285,17 @@ export class ZendiaAgentConversation {
       this.work.paused = null;
     }
     const driver = ZENDIA_DRIVERS[this.agent.id];
-    this.#push(
-      echo != null
-        ? { type: "note", text: echo }
-        : {
-            type: "user",
-            text: text || "See the attached files.",
-            ...(files.length ? { files: files.map(file => file.name) } : {}),
-          }
-    );
+    if (echo !== false) {
+      this.#push(
+        echo != null
+          ? { type: "note", text: echo }
+          : {
+              type: "user",
+              text: text || "See the attached files.",
+              ...(files.length ? { files: files.map(file => file.name) } : {}),
+            }
+      );
+    }
     this.startedAt = Date.now();
     this.unseen = false;
     const first = isolated || !this.resume;
@@ -370,7 +382,7 @@ export class ZendiaAgentConversation {
         ms: Date.now() - this.startedAt,
       });
       this.#push(unstarted);
-      return;
+      return true;
     }
     this.run = new ZendiaAgentRun({
       driver,
@@ -406,8 +418,18 @@ export class ZendiaAgentConversation {
             } else if (event.delta && current) {
               current.text += event.text;
               this.changed();
+            } else if (
+              answer?.message &&
+              this.messages.includes(answer.message)
+            ) {
+              current = answer.message;
+              current.text = event.text;
+              this.changed();
             } else {
               current = this.#push({ type: "agent", text: event.text });
+              if (answer) {
+                answer.message = current;
+              }
             }
             if (!event.delta) {
               current = null;
@@ -415,7 +437,9 @@ export class ZendiaAgentConversation {
             break;
           case "tool":
             current = null;
-            this.#push({ type: "tool", text: event.name });
+            if (!answer) {
+              this.#push({ type: "tool", text: event.name });
+            }
             break;
           case "ui-draft":
             this.#onDraft(event.key, event.json);
@@ -454,6 +478,7 @@ export class ZendiaAgentConversation {
     this.unseen = true;
     this.#service.setDriving(this, false);
     this.changed();
+    return true;
   }
 
   stop() {

@@ -31,6 +31,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "resource:///modules/zendia/captcha/ZendiaCaptchaAgent.sys.mjs",
   ZendiaCaptchaWatch:
     "resource:///modules/zendia/captcha/ZendiaCaptchaWatch.sys.mjs",
+  captchaDebug: "resource:///modules/zendia/captcha/ZendiaCaptchaAgent.sys.mjs",
   ZendiaDockFrame: "resource:///modules/zendia/ui/ZendiaDockFrame.sys.mjs",
   agentColor: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   inputKindOf: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
@@ -1001,9 +1002,11 @@ export class ZendiaAgentDock {
     );
   }
 
-  // The button shows while the watch has a finding on the dock's tab.
+  // The button shows while the watch has a finding on the dock's tab, and
+  // only under `npm run dev:captcha`.
   #syncCaptchaButton(browser) {
-    this.#captchaButton.hidden = !lazy.ZendiaCaptchaWatch.lastFor(browser);
+    this.#captchaButton.hidden =
+      !lazy.captchaDebug() || !lazy.ZendiaCaptchaWatch.lastFor(browser);
   }
 
   #onKey(event) {
@@ -1841,6 +1844,8 @@ export class ZendiaAgentDock {
       return;
     }
     this.#chipAgent = agent?.id ?? "";
+    // A narrow header shows the logo alone: the name stays in the tooltip.
+    this.#agentChip.title = `${agent?.name ?? "No agent"}: pick an agent (Tab cycles)`;
     this.#agentChip.replaceChildren(
       this.#logo(agent?.id),
       this.#create("span", "zendia-agent-chip-name", agent?.name ?? "No agent"),

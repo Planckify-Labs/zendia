@@ -113,6 +113,19 @@ const PARTS_STILL_MS = 250;
 // About how wide a page in the panel is, for the page's height guess.
 const PANEL_WIDTH = 380;
 
+// Set by `npm run dev:captcha`: the chat shows a card with the screenshot
+// of the challenge and what was found of it. Otherwise there is no card,
+// only the agent's text in the chat.
+const ENV_DEBUG = "ZENDIA_CAPTCHA_DEBUG";
+
+/**
+ * @returns {boolean} Whether the CAPTCHA debugging views show: the card
+ *   with the screenshot, what the challenge asks, the header's button.
+ */
+export function captchaDebug() {
+  return !!Services.env.get(ENV_DEBUG);
+}
+
 // How long waiting for the agent goes on without news before the state is
 // looked at again: a closed tab never sends news.
 const IDLE_POLL_MS = 2000;
@@ -453,6 +466,9 @@ class ZendiaCaptchaAgentService {
     const sees = !inputs || inputs.includes("image");
     const isolate = Services.prefs.getBoolPref(PREF_ISOLATE, true);
     const sterile = isolate ? STERILE_LOOK : null;
+    // The chat keeps one message of the subagent's, its latest words, over
+    // every pass; under ZENDIA_CAPTCHA_DEBUG each of its words and steps.
+    const answer = captchaDebug() ? null : { message: null };
     for (
       let attempt = 0;
       attempt < SOLVE_ATTEMPTS && browser.isConnected;
@@ -560,25 +576,24 @@ class ZendiaCaptchaAgentService {
         pictureName: files[0]?.name ?? null,
         sees,
       });
-      // What the panel says of the request. This is the user's own view of
-      // their own screen, so it says what the challenge is; only the
-      // subagent works blind.
-      let echo = "Still working on it…";
-      if (attempt == 0) {
-        echo = said
-          ? `Challenge: "${said}"`
-          : "A verification challenge needs your attention.";
+      // What the panel says of the request: nothing, but under
+      // ZENDIA_CAPTCHA_DEBUG, where it says what the challenge asks.
+      let echo = false;
+      if (captchaDebug()) {
+        echo = "Still working on it…";
+        if (attempt == 0) {
+          echo = said
+            ? `Challenge: "${said}"`
+            : "A verification challenge needs your attention.";
+        }
       }
       let ran = false;
       try {
-        ran = await this.#sendSolve(
-          conversation,
-          browser,
-          prompt,
-          files,
+        ran = await this.#sendSolve(conversation, browser, prompt, files, {
           echo,
-          act
-        );
+          act,
+          answer,
+        });
       } finally {
         // The labels come off once the turn is over, so the next pass labels
         // afresh and the user is not left with stale ones.
@@ -701,14 +716,14 @@ class ZendiaCaptchaAgentService {
   // Send one turn, giving way to a user turn that preempts it; whether it ran.
   // Each is a session of its own (isolated): it resumes nothing, and what
   // it did is not resumed by the next.
-  async #sendSolve(conversation, browser, prompt, files, echo, act) {
+  async #sendSolve(conversation, browser, prompt, files, options) {
     for (let tries = 0; tries < SEND_TRIES; tries++) {
       if (!this.#current(browser, conversation)) {
         return false;
       }
-      const before = conversation.messages.length;
-      await conversation.send(prompt, files, { echo, isolated: true, act });
-      if (conversation.messages.length > before) {
+      if (
+        await conversation.send(prompt, files, { ...options, isolated: true })
+      ) {
         return true;
       }
       // The user's own request went first; the summary follows it.
@@ -954,12 +969,15 @@ class ZendiaCaptchaAgentService {
     return shot;
   }
 
-  // The screenshot of the challenge as a page in the chat: the picture
-  // says what the text of a finding cannot. Where the challenge came apart,
+  // Under ZENDIA_CAPTCHA_DEBUG only, the screenshot of the challenge as a
+  // page in the chat. Where the challenge came apart,
   // its instruction in words above the area to act on, shot alone: the
   // instruction is read, not shown again. A page too big for the panel is
   // the whole challenge again, retaken smaller. The shot shown, or null.
   async #showShot(browser, conversation, record, shot) {
+    if (!captchaDebug()) {
+      return null;
+    }
     const parts = shot?.parts;
     if (parts?.area) {
       const said = parts.instruction;

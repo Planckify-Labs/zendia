@@ -1078,11 +1078,16 @@
   }
 }
 
+/* Icon buttons sit close, groups apart: the row has to fit the panel's
+   narrowest width (420px) with every button in it. Narrower still (a
+   larger font, a smaller window), the agent chip gives up its name, then
+   the side button goes: the layout buttons and Close always stay. */
 .zendia-agent-header {
+  container-type: inline-size;
   display: flex;
   flex: none;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   min-width: 0;
   padding: 10px 10px 8px 14px;
   border-bottom: 0.5px solid color-mix(in srgb, var(--zendia-agent-border) 70%, transparent);
@@ -1096,6 +1101,7 @@
 .zendia-agent-layouts {
   display: flex;
   flex: none;
+  margin-inline: 6px 2px;
   gap: 2px;
   padding: 2px;
   border-radius: 8px;
@@ -2480,7 +2486,9 @@
 
 .zendia-agent-chip {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline-end: 8px;
   align-items: center;
   gap: 7px;
   padding: 3px 9px 3px 5px;
@@ -2500,6 +2508,25 @@
   &:focus-visible {
     outline: 2px solid var(--zendia-accent);
     outline-offset: 1px;
+  }
+}
+
+.zendia-agent-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width: 380px) {
+  .zendia-agent-chip-name {
+    display: none;
+  }
+}
+
+@container (max-width: 300px) {
+  .zendia-agent-icon-button.side {
+    display: none;
   }
 }
 
