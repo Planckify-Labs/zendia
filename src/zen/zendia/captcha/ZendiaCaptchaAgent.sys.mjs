@@ -146,6 +146,13 @@ const KEY_SETTLE_MS = 500;
 const SOLVE_ATTEMPTS = 3;
 const RETRY_GAP_MS = 600;
 
+// How many times the end of an agent's turn sends the subagent back to a
+// challenge that still asks (unticked, expired, failed) with no news from
+// the page in between. A turn the user typed starts the count again, and so
+// does the challenge clearing, so a page the subagent cannot get through
+// does not keep the agent and the subagent handing it back and forth.
+const TURN_END_ROUNDS = 2;
+
 // The named keys the subagent may press, to the tokens the keys take, so it
 // can write them as the labels reference names them ("Enter", "Ctrl+R")
 // rather than in vim notation. A label's letters and the cursor moves (h, H,
@@ -270,6 +277,11 @@ class ZendiaCaptchaAgentService {
   // its labels, or labels of their own): its work there ends, and it does
   // not label the challenge again over them.
   #dismissed = new WeakSet();
+  // The conversations whose turn ends are followed.
+  #followed = new WeakSet();
+  // Per tab, how many turn ends sent the subagent back to the same
+  // challenge (TURN_END_ROUNDS).
+  #rounds = new WeakMap();
 
   init() {
     if (this.#initialized || !Services.prefs.getBoolPref(PREF_AGENT, true)) {
@@ -290,6 +302,7 @@ class ZendiaCaptchaAgentService {
     // A finding that came before the tab had a conversation waits for the
     // first turn of the one that starts.
     ZendiaAgents.onConversation((browser, conversation) => {
+      this.#followTurns(conversation);
       if (this.#pending.has(browser)) {
         this.#watchForTurn(browser, conversation);
       }
@@ -323,15 +336,14 @@ class ZendiaCaptchaAgentService {
     );
   }
 
-  // A finding on a page the user must do something about: a frame, a
-  // widget or a challenge the page draws itself that is shown. Script,
-  // token and honeypot findings alone are invisible checks (a scored
-  // reCAPTCHA, a sensor), and so are hidden frames (a closed challenge, an
-  // invisible mode's helper); opening the tab for one would cry wolf. What
-  // was summarized on this page already is not again.
-  #onDetect(browser, record) {
-    const asking = new Set(
-      record.detections
+  // What of a finding the user must do something about: a frame, a widget
+  // or a challenge the page draws itself that is shown. Script, token and
+  // honeypot findings alone are invisible checks (a scored reCAPTCHA, a
+  // sensor), and so are hidden frames (a closed challenge, an invisible
+  // mode's helper); opening the tab for one would cry wolf.
+  #asking(record) {
+    return new Set(
+      (record?.detections ?? [])
         .filter(
           ({ signal, hidden }) =>
             (signal == "frame" || signal == "widget" || signal == "own") &&
@@ -341,7 +353,22 @@ class ZendiaCaptchaAgentService {
           ({ signal, name, kind }) => `${signal}:${name ?? ""}:${kind ?? ""}`
         )
     );
-    if (!asking.size || !browser.isConnected) {
+  }
+
+  // A finding that asks is worked once. What was worked on this page
+  // already is not again while it stays the same challenge: shown and
+  // hidden, or opened from its checkbox. Once it passes, or nothing of it
+  // asks any more (the page took it down, moved on to a screen without it),
+  // that challenge is over, and the next ask on the same page (an expiry, a
+  // form shown again) is a new one, worked live.
+  #onDetect(browser, record) {
+    const asking = this.#asking(record);
+    if (record.state == "solved" || !asking.size) {
+      this.#delivered.delete(browser);
+      this.#rounds.delete(browser);
+      return;
+    }
+    if (!browser.isConnected) {
       return;
     }
     let delivered = this.#delivered.get(browser);
@@ -402,12 +429,96 @@ class ZendiaCaptchaAgentService {
         let record;
         while ((record = this.#pending.get(browser)) && browser.isConnected) {
           this.#pending.delete(browser);
+          // A finding that waited on other work may be over by now: passed,
+          // or taken down. The button works whatever the watch has.
+          const now = ZendiaCaptchaWatch.lastFor(browser);
+          if (
+            !force &&
+            (!now || now.state == "solved" || !this.#asking(now).size)
+          ) {
+            say("the finding cleared while it waited");
+            continue;
+          }
           await this.#deliver(browser, record, force);
         }
       } finally {
         this.#working.delete(browser);
       }
     })().catch(e => console.error("Zendia: CAPTCHA subagent failed", e));
+  }
+
+  // The ends of the agent's own turns. A challenge that still asks once
+  // one ends (the subagent gave it up, its answer expired with no state
+  // change the watch could tell, or it was met while the subagent was busy)
+  // is worked again, as the agent cannot get through it itself.
+  #followTurns(conversation) {
+    if (this.#followed.has(conversation)) {
+      return;
+    }
+    this.#followed.add(conversation);
+    let running = conversation.running;
+    const off = conversation.subscribe(() => {
+      if (conversation.discarded) {
+        off();
+        return;
+      }
+      if (conversation.running == running) {
+        return;
+      }
+      running = conversation.running;
+      if (!running) {
+        this.#afterTurn(conversation);
+      }
+    });
+  }
+
+  #afterTurn(conversation) {
+    const turn = conversation.lastTurn;
+    const browser = conversation.browser;
+    // The subagent's own isolated turns are its work, not the agent's.
+    if (
+      !turn ||
+      turn.isolated ||
+      turn.error ||
+      conversation.stoppedByUser ||
+      !browser?.isConnected ||
+      !this.#current(browser, conversation)
+    ) {
+      return;
+    }
+    // Already on it, or about to be: a finding that came during the turn
+    // waits on the turn's end in #deliver.
+    if (
+      this.#working.has(browser) ||
+      this.#pending.has(browser) ||
+      this.#opening.has(browser)
+    ) {
+      return;
+    }
+    if (turn.byUser) {
+      this.#rounds.delete(browser);
+    } else if (this.#dismissed.has(browser)) {
+      // The user took this challenge over: only their own request sends
+      // the subagent back to it.
+      return;
+    }
+    const record = ZendiaCaptchaWatch.lastFor(browser);
+    if (
+      !record ||
+      !ZendiaCaptcha.asksUser(record.state) ||
+      !this.#asking(record).size
+    ) {
+      return;
+    }
+    const rounds = this.#rounds.get(browser) ?? 0;
+    if (rounds >= TURN_END_ROUNDS) {
+      say(`still ${record.state} after the agent's turn, left to the user`);
+      return;
+    }
+    this.#rounds.set(browser, rounds + 1);
+    say(`still ${record.state} after the agent's turn: working it again`);
+    this.#pending.set(browser, record);
+    this.#pump(browser);
   }
 
   // A finding whose tab has a conversation but no turn yet is delivered
