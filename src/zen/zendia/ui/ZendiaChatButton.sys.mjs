@@ -131,12 +131,160 @@ export const ZendiaChatButton = {
 };
 
 /**
+ * Whether the window has the compact top bar, the strip that comes down with
+ * the window buttons, for a widget that is in the toolbars.
+ *
+ * @param {Window} window
+ * @param {string} widgetId
+ * @returns {boolean}
+ */
+export function hasCompactTopBar(window, widgetId) {
+  const document = window.document;
+  const root = document.documentElement;
+  // Without window buttons in it, the strip stays shut unless the bookmarks
+  // toolbar keeps it (vertical-tabs-topbar.inc.css).
+  const staysShut =
+    (Services.prefs.getBoolPref(PREF_NO_WINDOW_CONTROLS, false) ||
+      Services.prefs.getIntPref(PREF_IN_TITLEBAR, 1) == 0) &&
+    !root.hasAttribute("zen-has-bookmarks");
+  // Zen marks the strip with should-hide, which also covers a window with
+  // no compact mode: there it never comes down.
+  return (
+    root.getAttribute("zen-compact-mode") == "true" &&
+    !root.hasAttribute("zen-welcome-stage") &&
+    !staysShut &&
+    !!document
+      .getElementById("zen-appcontent-navbar-wrapper")
+      ?.hasAttribute("should-hide") &&
+    !!lazy.CustomizableUI.getPlacementOfWidget(widgetId)
+  );
+}
+
+/**
+ * The box at the end of the compact top bar that holds zendia's buttons
+ * there, made the first time it is asked for.
+ *
+ * @param {Window} window
+ * @returns {Element|null} Null when the window has no top bar to hold it.
+ */
+export function topBarBox(window) {
+  const document = window.document;
+  const id = `${TOP_BAR_ID}-box`;
+  let box = document.getElementById(id);
+  if (box) {
+    return box;
+  }
+  const bar = document.getElementById("zen-appcontent-navbar-container");
+  if (!bar) {
+    return null;
+  }
+  // The toolbar's keys look for buttons inside the roots they are given.
+  box = document.createXULElement("hbox");
+  box.id = id;
+  box.hidden = true;
+  bar.insertBefore(
+    box,
+    bar.querySelector(":scope > .titlebar-buttonbox-container")
+  );
+  return box;
+}
+
+/**
+ * Show the top bar's box while any of its buttons shows.
+ *
+ * @param {Window} window
+ */
+export function syncTopBarBox(window) {
+  const box = window.document.getElementById(`${TOP_BAR_ID}-box`);
+  if (box) {
+    box.hidden = ![...box.children].some(button => !button.hidden);
+  }
+}
+
+/**
+ * A button of zendia's in the top bar: a toolbarbutton, so the toolbar's
+ * keys reach it.
+ *
+ * @param {Window} window
+ * @param {object} options
+ * @param {string} options.id
+ * @param {string} options.label
+ * @param {() => void} options.onCommand
+ * @param {boolean} [options.first] Before the buttons already there.
+ * @returns {Element}
+ */
+export function topBarButton(window, { id, label, onCommand, first = false }) {
+  const button = window.document.createXULElement("toolbarbutton");
+  button.id = id;
+  button.className = "toolbarbutton-1";
+  button.setAttribute("label", label);
+  button.hidden = true;
+  button.addEventListener("command", onCommand);
+  const box = topBarBox(window);
+  if (first) {
+    box?.prepend(button);
+  } else {
+    box?.append(button);
+  }
+  return button;
+}
+
+/**
+ * Call sync whenever what decides where a widget shows changes: compact
+ * mode, the top bar's state, its prefs, or the widget moved or taken out.
+ *
+ * @param {Window} window
+ * @param {string} widgetId
+ * @param {() => void} sync
+ */
+export function watchLayout(window, widgetId, sync) {
+  const document = window.document;
+  const observer = new window.MutationObserver(sync);
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: [
+      "zen-compact-mode",
+      "zen-has-bookmarks",
+      "zen-welcome-stage",
+    ],
+  });
+  for (const pref of [PREF_NO_WINDOW_CONTROLS, PREF_IN_TITLEBAR]) {
+    Services.prefs.addObserver(pref, sync);
+  }
+  const wrapper = document.getElementById("zen-appcontent-navbar-wrapper");
+  if (wrapper) {
+    observer.observe(wrapper, {
+      attributes: true,
+      attributeFilter: ["should-hide"],
+    });
+  }
+  // Taken out of the toolbars by the user, or put back.
+  const onWidget = id => {
+    if (id == widgetId) {
+      sync();
+    }
+  };
+  const listener = { onWidgetAdded: onWidget, onWidgetRemoved: onWidget };
+  lazy.CustomizableUI.addListener(listener);
+  window.addEventListener(
+    "unload",
+    () => {
+      observer.disconnect();
+      lazy.CustomizableUI.removeListener(listener);
+      for (const pref of [PREF_NO_WINDOW_CONTROLS, PREF_IN_TITLEBAR]) {
+        Services.prefs.removeObserver(pref, sync);
+      }
+    },
+    { once: true }
+  );
+}
+
+/**
  * Chat in one window: the widget, and the button in the compact top bar.
  */
 export class ZendiaChatBar {
   #window;
   #dock;
-  #holder;
   #button;
 
   /**
@@ -148,84 +296,13 @@ export class ZendiaChatBar {
   constructor(window, { dock, onToggle }) {
     this.#window = window;
     this.#dock = dock;
-    const document = window.document;
-    // The toolbar's keys look for buttons inside the roots they are given.
-    this.#holder = document.createXULElement("hbox");
-    this.#holder.id = `${TOP_BAR_ID}-box`;
-    this.#holder.hidden = true;
-    this.#button = document.createXULElement("toolbarbutton");
-    this.#button.id = TOP_BAR_ID;
-    this.#button.className = "toolbarbutton-1";
-    this.#button.setAttribute("label", LABEL);
-    this.#button.addEventListener("command", onToggle);
-    this.#holder.append(this.#button);
-    const bar = document.getElementById("zen-appcontent-navbar-container");
-    bar?.insertBefore(
-      this.#holder,
-      bar.querySelector(":scope > .titlebar-buttonbox-container")
-    );
-
-    const sync = () => this.sync();
-    const observer = new window.MutationObserver(sync);
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: [
-        "zen-compact-mode",
-        "zen-has-bookmarks",
-        "zen-welcome-stage",
-      ],
+    this.#button = topBarButton(window, {
+      id: TOP_BAR_ID,
+      label: LABEL,
+      onCommand: onToggle,
     });
-    for (const pref of [PREF_NO_WINDOW_CONTROLS, PREF_IN_TITLEBAR]) {
-      Services.prefs.addObserver(pref, sync);
-    }
-    const wrapper = document.getElementById("zen-appcontent-navbar-wrapper");
-    if (wrapper) {
-      observer.observe(wrapper, {
-        attributes: true,
-        attributeFilter: ["should-hide"],
-      });
-    }
-    // Taken out of the toolbars by the user, or put back.
-    const onWidget = id => {
-      if (id == WIDGET_ID) {
-        this.sync();
-      }
-    };
-    const listener = { onWidgetAdded: onWidget, onWidgetRemoved: onWidget };
-    lazy.CustomizableUI.addListener(listener);
-    window.addEventListener(
-      "unload",
-      () => {
-        lazy.CustomizableUI.removeListener(listener);
-        for (const pref of [PREF_NO_WINDOW_CONTROLS, PREF_IN_TITLEBAR]) {
-          Services.prefs.removeObserver(pref, sync);
-        }
-      },
-      { once: true }
-    );
+    watchLayout(window, WIDGET_ID, () => this.sync());
     this.sync();
-  }
-
-  // Zen marks the strip with should-hide, which also covers a window with no
-  // compact mode: there it never comes down.
-  get #hasTopBar() {
-    const document = this.#window.document;
-    const root = document.documentElement;
-    // Without window buttons in it, the strip stays shut unless the bookmarks
-    // toolbar keeps it (vertical-tabs-topbar.inc.css).
-    const staysShut =
-      (Services.prefs.getBoolPref(PREF_NO_WINDOW_CONTROLS, false) ||
-        Services.prefs.getIntPref(PREF_IN_TITLEBAR, 1) == 0) &&
-      !root.hasAttribute("zen-has-bookmarks");
-    return (
-      root.getAttribute("zen-compact-mode") == "true" &&
-      !root.hasAttribute("zen-welcome-stage") &&
-      !staysShut &&
-      !!document
-        .getElementById("zen-appcontent-navbar-wrapper")
-        ?.hasAttribute("should-hide") &&
-      !!lazy.CustomizableUI.getPlacementOfWidget(WIDGET_ID)
-    );
   }
 
   /**
@@ -233,7 +310,7 @@ export class ZendiaChatBar {
    */
   sync() {
     const status = this.#dock.status;
-    const hasTopBar = this.#hasTopBar;
+    const hasTopBar = hasCompactTopBar(this.#window, WIDGET_ID);
     const widget = this.#window.document.getElementById(WIDGET_ID);
     if (widget) {
       paint(widget, status);
@@ -244,6 +321,7 @@ export class ZendiaChatBar {
         lazy.CustomizableUI.getPlacementOfWidget(WIDGET_ID)?.area == FOOT_AREA;
     }
     paint(this.#button, status);
-    this.#holder.hidden = !hasTopBar;
+    this.#button.hidden = !hasTopBar;
+    syncTopBarBox(this.#window);
   }
 }

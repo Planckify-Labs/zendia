@@ -42,13 +42,19 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   ActorManagerParent: "resource://gre/modules/ActorManagerParent.sys.mjs",
+  CustomizableUI:
+    "moz-src:///browser/components/customizableui/CustomizableUI.sys.mjs",
   ZendiaAgentDock: "resource:///modules/zendia/ui/ZendiaAgentDock.sys.mjs",
+  ZendiaAgentsPanel: "resource:///modules/zendia/ui/ZendiaAgentsPanel.sys.mjs",
   ZendiaAgents: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   ZendiaExplorer: "resource:///modules/zendia/ui/ZendiaExplorer.sys.mjs",
   ZendiaLibraryView: "resource:///modules/zendia/ui/ZendiaLibraryView.sys.mjs",
   ZendiaMenuKeys: "resource:///modules/zendia/ui/ZendiaMenuKeys.sys.mjs",
   ZendiaTheme: "resource:///modules/zendia/ui/ZendiaTheme.sys.mjs",
   ZendiaChatButton: "resource:///modules/zendia/ui/ZendiaChatButton.sys.mjs",
+  ZendiaAgentsBar: "resource:///modules/zendia/ui/ZendiaAgentsButton.sys.mjs",
+  ZendiaAgentsButton:
+    "resource:///modules/zendia/ui/ZendiaAgentsButton.sys.mjs",
   ZendiaChatBar: "resource:///modules/zendia/ui/ZendiaChatButton.sys.mjs",
   ZendiaWebChatDock: "resource:///modules/zendia/ui/ZendiaWebChatDock.sys.mjs",
   ZendiaWebChatButton:
@@ -480,6 +486,14 @@ class ZendiaService {
 
   /**
    * @param {Window} window
+   * @returns {object|null} The window's ZendiaAgentsPanel.
+   */
+  agentsPanelFor(window) {
+    return this.#windows.get(window.document)?.agents ?? null;
+  }
+
+  /**
+   * @param {Window} window
    * @returns {object|null} The window's ZendiaWebChatDock.
    */
   webChatDockFor(window) {
@@ -653,8 +667,10 @@ class ZendiaService {
       toolbar: null,
       library: null,
       agent: null,
+      agents: null,
       webchat: null,
       chatBar: null,
+      agentsBar: null,
       webChatBar: null,
       engine: null,
     };
@@ -676,10 +692,30 @@ class ZendiaService {
           if (dock && dock != buffer) {
             if (docks.includes(buffer)) {
               dock.close();
-            } else {
+            } else if (buffer != ui.agents) {
               dock.release();
             }
           }
+        }
+        // The agents panel stays beside the chat it opens, unless the two
+        // would sit over each other at the same side of the page.
+        const sharesSide = (a, b) =>
+          a?.isOpen &&
+          b?.isOpen &&
+          a.side == b.side &&
+          (a.layout != "split" || b.layout != "split");
+        if (docks.includes(buffer)) {
+          if (sharesSide(buffer, ui.agents)) {
+            ui.agents.close();
+          }
+        } else if (buffer == ui.agents) {
+          for (const dock of docks) {
+            if (sharesSide(buffer, dock)) {
+              dock.close();
+            }
+          }
+        } else {
+          ui.agents?.release();
         }
       }
       ui.engine?.reset();
@@ -699,6 +735,16 @@ class ZendiaService {
       onStatus: () => ui.chatBar?.sync(),
       onSwitch: () =>
         this.run("webchat.toggle", {}, { window }).catch(console.error),
+      onAgents: () =>
+        this.run("agent.list", {}, { window }).catch(console.error),
+    });
+    ui.agents = new lazy.ZendiaAgentsPanel(window, {
+      onChange: () => onChange(ui.agents),
+      onStatus: () => ui.agentsBar?.sync(),
+      openChat: browser => {
+        const target = browser.documentGlobal;
+        this.agentDockFor(target)?.open(browser);
+      },
     });
     ui.webchat = new lazy.ZendiaWebChatDock(window, {
       onChange: () => {
@@ -716,11 +762,20 @@ class ZendiaService {
     try {
       const toggleChat = target =>
         this.run("agent.toggle", {}, { window: target }).catch(console.error);
+      this.#dropSidebarButton();
       lazy.ZendiaVimModeSwitch.install(window);
       lazy.ZendiaChatButton.register({ onToggle: toggleChat });
       ui.chatBar = new lazy.ZendiaChatBar(window, {
         dock: ui.agent,
         onToggle: () => toggleChat(window),
+      });
+      // Beside Chat, so after it.
+      const toggleAgents = target =>
+        this.run("agent.list", {}, { window: target }).catch(console.error);
+      lazy.ZendiaAgentsButton.register({ onToggle: toggleAgents });
+      ui.agentsBar = new lazy.ZendiaAgentsBar(window, {
+        panel: ui.agents,
+        onToggle: () => toggleAgents(window),
       });
       const toggleWebChat = target =>
         this.run("webchat.toggle", {}, { window: target }).catch(console.error);
@@ -752,6 +807,7 @@ class ZendiaService {
         // What is typed into the agent dock, or the web chat, is theirs.
         if (
           ui.agent.contains(event.target) ||
+          ui.agents.contains(event.target) ||
           ui.webchat.contains(event.target)
         ) {
           return;
@@ -873,6 +929,21 @@ class ZendiaService {
   // The onboarding looks like plain Zen: vim mode is offered there, not
   // assumed, so its mode indicator, the window's mode color and its keys in
   // the browser UI wait until the onboarding is over.
+  // Firefox's "Show sidebars" button, which Firefox puts in the toolbar on
+  // its own. With sidebar.revamp locked off it only opens Firefox's old
+  // sidebar (Bookmarks, History) beside Zen's: taken out once per profile,
+  // and left alone if the user puts it back.
+  #dropSidebarButton() {
+    const done = "zendia.ui.sidebar-button-removed";
+    if (Services.prefs.getBoolPref(done, false)) {
+      return;
+    }
+    Services.prefs.setBoolPref(done, true);
+    if (lazy.CustomizableUI.getPlacementOfWidget("sidebar-button")) {
+      lazy.CustomizableUI.removeWidgetFromArea("sidebar-button");
+    }
+  }
+
   #inOnboarding(document) {
     return document.documentElement.hasAttribute("zen-welcome-stage");
   }

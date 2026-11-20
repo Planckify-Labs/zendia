@@ -11,6 +11,8 @@ firefox-appdir = "browser"
 
 ["test_agent_motion.js"]
 
+["test_agent_roster.js"]
+
 ["test_agent_ui.js"]
 
 ["test_agent_work.js"]

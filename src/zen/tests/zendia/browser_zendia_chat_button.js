@@ -357,7 +357,7 @@ add_task(async function test_the_top_bar_button_follows_the_widget() {
 
   CustomizableUI.removeWidgetFromArea(WIDGET);
   await settled();
-  ok(topBarBox().hidden, "taken out of the toolbars, Chat goes for good");
+  ok(topBarChat().hidden, "taken out of the toolbars, Chat goes for good");
   putBackInTheFootRow();
   await settled();
   ok(!topBarBox().hidden, "put back, it returns");
@@ -436,4 +436,83 @@ add_task(async function test_chat_shows_the_agent_working() {
   document.documentElement.removeAttribute("zen-welcome-stage");
   await settled();
   ok(!widget().hasAttribute("running"), "until it stops");
+});
+
+add_task(async function test_agents_button_beside_chat() {
+  const AGENTS = "zendia-agents-button";
+  const agents = () => document.getElementById(AGENTS);
+  const panel = Zendia.agentsPanelFor(window);
+  await setSingleToolbar(true);
+  await setCompact(false);
+  await settled();
+  const row = CustomizableUI.getWidgetIdsInArea(FOOT);
+  Assert.equal(
+    row.indexOf(AGENTS),
+    row.indexOf(WIDGET) - 1,
+    "Agents sits in the row below the sidebar, just before Chat"
+  );
+  ok(!agents().hidden, "within reach");
+
+  // What the agents panel reports, without agents at work.
+  const status = { open: false, working: 2, waiting: 0, first: null };
+  Object.defineProperty(panel, "status", {
+    configurable: true,
+    get: () => status,
+  });
+  registerCleanupFunction(() => delete panel.status);
+  // The onboarding's end makes every button look again.
+  document.documentElement.setAttribute("zen-welcome-stage", "true");
+  await settled();
+  document.documentElement.removeAttribute("zen-welcome-stage");
+  await settled();
+  Assert.equal(
+    agents().getAttribute("zendia-count"),
+    "2",
+    "a count of those at work"
+  );
+  ok(
+    agents().hasAttribute("working") && !agents().hasAttribute("waiting"),
+    "in the accent color"
+  );
+
+  status.waiting = 1;
+  status.first = { name: "Claude Code", label: "Asks permission" };
+  document.documentElement.setAttribute("zen-welcome-stage", "true");
+  await settled();
+  document.documentElement.removeAttribute("zen-welcome-stage");
+  await settled();
+  Assert.equal(
+    agents().getAttribute("zendia-count"),
+    "1",
+    "then of those that wait"
+  );
+  ok(agents().hasAttribute("waiting"), "in amber");
+  ok(
+    agents()
+      .getAttribute("tooltiptext")
+      .startsWith("Claude Code: asks permission"),
+    "and says which"
+  );
+  delete panel.status;
+
+  agents().doCommand();
+  await TestUtils.waitForCondition(
+    () => panel.isOpen,
+    "a click opens the agents panel"
+  );
+  agents().doCommand();
+  await TestUtils.waitForCondition(
+    () => !panel.isOpen,
+    "and another closes it"
+  );
+
+  await setCompact(true);
+  await settled();
+  ok(
+    !document.getElementById("zendia-agents-topbar").hidden,
+    "in compact mode the top bar has it"
+  );
+  ok(agents().hidden, "and the row below the sidebar gives way");
+  await setCompact(false);
+  await settled();
 });

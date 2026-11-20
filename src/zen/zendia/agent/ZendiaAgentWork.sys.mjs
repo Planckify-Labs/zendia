@@ -62,6 +62,9 @@ export class ZendiaWorkList {
     this.lastFinal = -1;
     // Whether a work tool was called in the turn running now.
     this.touched = true;
+    // Why the loop stopped short of the end, until the next turn of the
+    // user's: the agents panel shows the list as waiting on them.
+    this.paused = null;
   }
 
   /**

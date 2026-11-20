@@ -181,6 +181,9 @@ class ZendiaAgentLoopService {
     });
     say(`${action}: ${reason} (${work.progress()})`);
     if (action == "stop" && !conversation.discarded && !turn.error) {
+      if (!conversation.stoppedByUser && !work.complete) {
+        work.paused = reason;
+      }
       if (!conversation.stoppedByUser) {
         conversation.note(
           `Work list paused: ${reason} (${work.progress()}). Say "continue" to go on.`

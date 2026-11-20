@@ -230,6 +230,11 @@ export class ZendiaWebChatDock {
     return this.#frame.isOpen;
   }
 
+  /** The side it sits at: "left" or "right". */
+  get side() {
+    return this.#frame.side;
+  }
+
   /**
    * @param {Element} browser
    * @returns {boolean} Whether the browser is a page of the panel that is in

@@ -180,6 +180,7 @@ export const ZendiaKeymapsSpec = {
     // The user's agent on this tab, after sidekick.nvim's <leader>a keys.
     ["n", "<leader>aa", "agent.ask"],
     ["n", "<leader>ap", "agent.toggle"],
+    ["n", "<leader>aA", "agent.list"],
     ["n", "<leader>as", "agent.select"],
     ["n", "<leader>am", "agent.model"],
     ["n", "<leader>ax", "agent.stop"],

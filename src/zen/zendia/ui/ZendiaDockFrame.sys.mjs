@@ -49,6 +49,7 @@ export class ZendiaDockFrame {
   #window;
   #branch;
   #minWidth;
+  #defaultSide;
   #defaultWidth;
   #keepOpen;
   #onLayout;
@@ -85,6 +86,8 @@ export class ZendiaDockFrame {
    * @param {string} options.branch The pref branch, with its trailing dot.
    * @param {number} [options.defaultWidth] The width it first opens at.
    * @param {number} [options.minWidth] The narrowest it gets.
+   * @param {"left"|"right"} [options.side] The side it sits at until
+   *   <branch>side says otherwise.
    * @param {() => boolean} [options.keepOpen] Whether the slid-in panel
    *   waits on the user and must not hide.
    * @param {() => void} [options.onLayout] Called after the layout is
@@ -104,6 +107,7 @@ export class ZendiaDockFrame {
       branch,
       defaultWidth = 420,
       minWidth = 420,
+      side = "right",
       keepOpen = () => false,
       onLayout = () => {},
       onPrefs = () => {},
@@ -114,6 +118,7 @@ export class ZendiaDockFrame {
     this.#window = window;
     this.#branch = branch;
     this.#minWidth = minWidth;
+    this.#defaultSide = side == "left" ? "left" : "right";
     this.#defaultWidth = Math.max(minWidth, defaultWidth);
     this.#keepOpen = keepOpen;
     this.#onLayout = onLayout;
@@ -172,6 +177,11 @@ export class ZendiaDockFrame {
 
   get isOpen() {
     return this.#open;
+  }
+
+  /** The side it sits at, picked in <branch>side: "left" or "right". */
+  get side() {
+    return this.#prefs.side;
   }
 
   /**
@@ -356,7 +366,8 @@ export class ZendiaDockFrame {
     return {
       layout: layout in DOCK_LAYOUTS ? layout : "float",
       side:
-        Services.prefs.getStringPref(`${branch}side`, "right") == "left"
+        Services.prefs.getStringPref(`${branch}side`, this.#defaultSide) ==
+        "left"
           ? "left"
           : "right",
       width: Math.max(

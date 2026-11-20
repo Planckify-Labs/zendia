@@ -26,6 +26,11 @@ export const ZendiaAgentSpec = {
       agent: false,
       run: context => dock(context)?.toggle(context.browser),
     },
+    "agent.list": {
+      desc: "Toggle Agents Panel",
+      agent: false,
+      run: ({ zendia, window }) => zendia.agentsPanelFor(window)?.toggle(),
+    },
     "agent.select": {
       desc: "Select Agent",
       agent: false,

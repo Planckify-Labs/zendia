@@ -191,6 +191,7 @@ export class ZendiaAgentDock {
   #onChange;
   #onStatus;
   #onSwitch;
+  #onAgents;
   #picking = false;
   #renderQueued = false;
   // Each message's row, and what it showed when it was built.
@@ -205,12 +206,15 @@ export class ZendiaAgentDock {
    *   changed.
    * @param {() => void} [options.onSwitch] Called by the header's web chat
    *   button, which swaps this panel for the web chat's.
+   * @param {() => void} [options.onAgents] Called by the header's agents
+   *   button, which shows every agent's work (ZendiaAgentsPanel).
    */
-  constructor(window, { onChange, onStatus, onSwitch }) {
+  constructor(window, { onChange, onStatus, onSwitch, onAgents }) {
     this.#window = window;
     this.#onChange = onChange;
     this.#onStatus = onStatus;
     this.#onSwitch = onSwitch;
+    this.#onAgents = onAgents;
     const document = window.document;
     const create = (tag, className, parent) => {
       const element = document.createElementNS(HTML_NS, tag);
@@ -269,6 +273,10 @@ export class ZendiaAgentDock {
     this.#agentChip.title = "Pick an agent (Tab cycles)";
     this.#agentChip.addEventListener("click", () => this.pickAgent());
     create("span", "zendia-agent-spacer", header);
+    iconButton("agents", header, "All agents (<leader>aA)").addEventListener(
+      "click",
+      () => this.#onAgents?.()
+    );
     iconButton("new-chat", header, "New chat (<leader>an)").addEventListener(
       "click",
       () =>
@@ -496,6 +504,11 @@ export class ZendiaAgentDock {
 
   get isOpen() {
     return this.#open;
+  }
+
+  /** The side it sits at: "left" or "right". */
+  get side() {
+    return this.#frame.side;
   }
 
   /**
@@ -939,6 +952,15 @@ export class ZendiaAgentDock {
     );
     if (current && current != this.#conversation) {
       this.#bind(current);
+    } else if (!current && this.#conversation?.discarded) {
+      // Dismissed from the agents panel: the tab starts over.
+      this.#bind(null);
+      if (this.#open) {
+        this.open(this.#window.gBrowser.selectedBrowser, { focus: false });
+      } else {
+        this.#syncPill();
+      }
+      return;
     }
     const conversation = this.#conversation;
     if (this.#open && conversation) {

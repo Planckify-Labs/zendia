@@ -116,6 +116,10 @@ export class ZendiaAgentConversation {
    */
   discarded = false;
   startedAt = 0;
+  /** When the conversation began, which orders it in the agents panel. */
+  createdAt = Date.now();
+  /** When anything in it last changed. */
+  updatedAt = Date.now();
   /** Whether a finished turn has not been looked at yet. */
   unseen = false;
   /** @type {ZendiaAgentLog|null} The trace of this conversation. */
@@ -201,6 +205,7 @@ export class ZendiaAgentConversation {
   }
 
   changed() {
+    this.updatedAt = Date.now();
     for (const listener of this.#listeners) {
       try {
         listener(this);
@@ -208,6 +213,7 @@ export class ZendiaAgentConversation {
         console.error("Zendia: agent listener failed", e);
       }
     }
+    this.#service.rosterChanged();
   }
 
   #push(message) {
@@ -228,7 +234,11 @@ export class ZendiaAgentConversation {
     this.agent = agent;
     this.resume = null;
     this.log = null;
-    this.#push({ type: "note", text: `Now talking to ${agent.name}` });
+    if (this.messages.length) {
+      this.#push({ type: "note", text: `Now talking to ${agent.name}` });
+    } else {
+      this.changed();
+    }
   }
 
   /**
@@ -262,6 +272,7 @@ export class ZendiaAgentConversation {
     this.lastTurn = null;
     if (this.work && !isolated) {
       this.work.touched = false;
+      this.work.paused = null;
     }
     const driver = ZENDIA_DRIVERS[this.agent.id];
     this.#push(
@@ -354,8 +365,11 @@ export class ZendiaAgentConversation {
     const unstarted = this.#unstartable(connected);
     if (unstarted) {
       ZendiaAgentServer.close(token);
-      log.write("done", { error: unstarted, ms: Date.now() - this.startedAt });
-      this.#push({ type: "error", text: unstarted });
+      log.write("done", {
+        error: unstarted.text,
+        ms: Date.now() - this.startedAt,
+      });
+      this.#push(unstarted);
       return;
     }
     this.run = new ZendiaAgentRun({
@@ -445,17 +459,25 @@ export class ZendiaAgentConversation {
   stop() {
     this.#userStopped = true;
     this.run?.stop();
+    this.changed();
   }
 
-  // Why a turn that got ready cannot start, or null: a new chat was started
-  // over this one while it got ready, or the agent could not be connected.
+  // Why a turn that got ready cannot start, as the message that says so, or
+  // null: the user stopped it, a new chat was started over this one while it
+  // got ready, or the agent could not be connected.
   #unstartable(connected) {
+    if (this.#userStopped) {
+      return { type: "note", text: "Stopped before it started" };
+    }
     if (this.discarded) {
-      return "Discarded: a new chat was started";
+      return { type: "error", text: "Discarded: a new chat was started" };
     }
     return connected
       ? null
-      : `Could not add zendia to ${this.agent.name}'s MCP servers`;
+      : {
+          type: "error",
+          text: `Could not add zendia to ${this.agent.name}'s MCP servers`,
+        };
   }
 
   // Whether the user stopped the last turn by hand, so work that drives this
@@ -705,6 +727,10 @@ class ZendiaAgentService {
   #connected = new Map();
   // Who hears that a tab got a conversation: the CAPTCHA subagent.
   #listeners = new Set();
+  // Every conversation not yet discarded, in every window, for the agents
+  // panel; and who hears that any of them changed.
+  #roster = new Set();
+  #rosterListeners = new Set();
 
   /** Set by Zendia. */
   zendia = null;
@@ -1154,14 +1180,20 @@ class ZendiaAgentService {
    * The tab's conversation, started with the default agent if it has none.
    *
    * @param {Element} browser
+   * @param {object} [options]
+   * @param {object} [options.agent] The agent to start it with, in place of
+   *   the default; a conversation the tab has already switches to it.
    * @returns {Promise<ZendiaAgentConversation|null>} Null when no agent
    *   is installed.
    */
-  async open(browser) {
+  async open(browser, { agent: picked = null } = {}) {
     this.recordNetwork();
     let conversation = this.#conversations.get(browser);
+    if (conversation && picked) {
+      conversation.setAgent(picked);
+    }
     if (!conversation) {
-      const agent = await this.defaultAgent();
+      const agent = picked ?? (await this.defaultAgent());
       if (!agent) {
         return null;
       }
@@ -1169,6 +1201,8 @@ class ZendiaAgentService {
       if (!conversation) {
         conversation = new ZendiaAgentConversation(this, browser, agent);
         this.#conversations.set(browser, conversation);
+        this.#roster.add(conversation);
+        this.rosterChanged();
         for (const listener of this.#listeners) {
           try {
             listener(browser, conversation);
@@ -1188,20 +1222,71 @@ class ZendiaAgentService {
    */
   reset(browser) {
     const conversation = this.#conversations.get(browser);
-    if (conversation) {
-      // Gone for good: a turn still winding down cannot bring it back to a
-      // tab (retarget), and nothing sent to it later resumes its session.
-      conversation.discarded = true;
-      conversation.resume = null;
-      conversation.stop();
-    }
     this.#conversations.delete(browser);
-    for (const tab of conversation?.tabs ?? []) {
+    if (conversation) {
+      this.dismiss(conversation);
+    }
+    return conversation;
+  }
+
+  /**
+   * Forget a conversation, stopping its turn: every tab it was on starts
+   * over with an empty chat.
+   *
+   * @param {ZendiaAgentConversation} conversation
+   */
+  dismiss(conversation) {
+    // Gone for good: a turn still winding down cannot bring it back to a
+    // tab (retarget), and nothing sent to it later resumes its session.
+    conversation.discarded = true;
+    conversation.resume = null;
+    conversation.stop();
+    for (const tab of conversation.tabs) {
       if (this.#conversations.get(tab) == conversation) {
         this.#conversations.delete(tab);
       }
     }
-    return conversation;
+    this.#roster.delete(conversation);
+    // A panel showing it moves on; the agents panel drops it.
+    conversation.changed();
+  }
+
+  /**
+   * Every conversation with an agent, in every window: the agents panel's
+   * rows. One whose tabs are all closed and whose turn is over is let go.
+   *
+   * @returns {ZendiaAgentConversation[]}
+   */
+  roster() {
+    for (const conversation of this.#roster) {
+      if (
+        conversation.discarded ||
+        (!conversation.running && !liveTabOf(conversation))
+      ) {
+        this.#roster.delete(conversation);
+      }
+    }
+    return [...this.#roster];
+  }
+
+  /**
+   * @param {() => void} listener Called whenever any conversation, or the
+   *   set of them, changes: as often as text streams in.
+   * @returns {() => void} Removes it.
+   */
+  onRosterChange(listener) {
+    this.#rosterListeners.add(listener);
+    return () => this.#rosterListeners.delete(listener);
+  }
+
+  rosterChanged() {
+    for (const listener of this.#rosterListeners) {
+      try {
+        listener();
+      } catch (e) {
+        console.error("Zendia: agents panel listener failed", e);
+      }
+    }
   }
 
   /**
@@ -1257,6 +1342,7 @@ class ZendiaAgentService {
     if (own) {
       // No tab's any more: the panel showing it moves to the agent's chat.
       own.discarded = true;
+      this.#roster.delete(own);
       own.changed();
     }
     conversation.changed();
@@ -1464,6 +1550,27 @@ class ZendiaAgentService {
       tab.setAttribute("zendia-agent-name", agent?.name ?? "");
     }
   }
+}
+
+/**
+ * The tab a conversation shows on that is still open: the one it works on,
+ * else any other it worked on.
+ *
+ * @param {ZendiaAgentConversation} conversation
+ * @returns {Element|null} Its browser.
+ */
+export function liveTabOf(conversation) {
+  const open = browser => {
+    if (!browser?.isConnected) {
+      return false;
+    }
+    const tab = browser.documentGlobal?.gBrowser?.getTabForBrowser(browser);
+    return !!tab && !tab.closing;
+  };
+  if (open(conversation.browser)) {
+    return conversation.browser;
+  }
+  return [...conversation.tabs].find(open) ?? null;
 }
 
 /**
