@@ -428,6 +428,16 @@ export class ZendiaAgentConversation {
   }
 
   /**
+   * A line of the browser's in the panel, from outside a turn: the CAPTCHA
+   * subagent's word that a challenge passed by itself.
+   *
+   * @param {string} text
+   */
+  note(text) {
+    this.#push({ type: "note", text });
+  }
+
+  /**
    * A page for the panel from outside a turn, drawn like a ui_show result:
    * the CAPTCHA subagent's screenshot of a challenge.
    *

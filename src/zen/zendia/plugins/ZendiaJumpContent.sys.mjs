@@ -76,10 +76,6 @@ const PROMPT_BAND = 52;
 // How long the prompt says a key found nothing to press.
 const NOTICE_MS = 1500;
 
-// A widget's mark of a check passed: GeeTest's geetest_lock_success and
-// geetest_radar_success, Friendly Captcha's frc-success, a "verified" state.
-const SOLVED_CLASS = /(?:^|[_-])(?:success|verified|solved|passed)$/i;
-
 // The answers the CAPTCHAs of a page have left: the fields that hold one,
 // and the widgets that show they were passed. One more than when a jump
 // began means one was solved, for a CAPTCHA that leaves no field (GeeTest
@@ -96,11 +92,12 @@ function captchaTokens(window) {
       }
     }
     for (const widget of document.querySelectorAll(
-      `:is(${ZendiaCaptcha.WIDGETS}):is([class*=success], [class*=verified], [class*=solved], [class*=passed], [data-state=verified])`
+      ZendiaCaptcha.SOLVED_MARKS
     )) {
-      const marked =
-        widget.dataset.state == "verified" ||
-        [...widget.classList].some(name => SOLVED_CLASS.test(name));
+      const marked = ZendiaCaptcha.marksSolved({
+        classes: widget.classList,
+        state: widget.dataset.state,
+      });
       if (marked && widget.checkVisibility()) {
         count++;
       }

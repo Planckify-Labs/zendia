@@ -182,7 +182,7 @@ function frameLines(page) {
     const captcha = captchaOf(url);
     if (captcha) {
       lines.push(
-        `This is a ${captcha} challenge, a check made for the user. Do not click in it or try to solve it. Tell the user to complete it, then observe again.`
+        `This is a ${captcha} challenge, a check made for the user. Do not click in it or try to solve it. Tell the user to complete it and end your turn: you are told to carry on once it is cleared.`
       );
     } else if (frame.skipped) {
       lines.push("(not read: too many frames)");

@@ -12,6 +12,13 @@
 //
 // It only watches and names. Acting on what it finds is the user's part,
 // with the keys (jump.captcha), as it is for the agent.
+//
+// It watches live: every frame reads where its CAPTCHA is at (asking,
+// checking, solved; ZendiaCaptcha.STATES) and reports again when that
+// changes, so a pass, an expiry or a new ask on the same page is announced
+// as it happens, and so is the CAPTCHA going away.
+
+import { ZendiaCaptcha } from "resource:///modules/zendia/core/ZendiaCaptcha.sys.mjs";
 
 const PARENT_URI =
   "resource:///modules/zendia/captcha/ZendiaCaptchaWatchParent.sys.mjs";
@@ -62,6 +69,19 @@ function sanitize(detections) {
       },
     ];
   });
+}
+
+// What a frame says its CAPTCHA is at, reduced to what is kept of it.
+function sanitizeState(reading) {
+  const state = text(reading?.state, 16);
+  if (!ZendiaCaptcha.STATES.includes(state)) {
+    return { state: "none" };
+  }
+  return {
+    state,
+    name: text(reading.name, 64),
+    how: text(reading.how, 160),
+  };
 }
 
 /**
@@ -147,6 +167,8 @@ class ZendiaCaptchaWatchService {
   // The signature last announced for a tab, so the same finding is not
   // announced again as frames report and re-report.
   #announced = new WeakMap();
+  // What of it the notice was last put up for: the finding, not its state.
+  #noticed = new WeakMap();
   // Who hears of a tab's new finding: the CAPTCHA subagent.
   #listeners = new Set();
 
@@ -199,7 +221,7 @@ class ZendiaCaptchaWatchService {
    * The merged finding of a tab: what all its frames hold together.
    *
    * @param {Element} browser
-   * @returns {{url: string, detections: object[], text: string, signature: string, at: number}|null}
+   * @returns {{url: string, detections: object[], state: string, how: string|null, text: string, signature: string, at: number}|null}
    */
   lastFor(browser) {
     return this.#last.get(browser) ?? null;
@@ -207,7 +229,9 @@ class ZendiaCaptchaWatchService {
 
   /**
    * Called with the browser and the tab's merged finding when the finding
-   * is new, after the log line and the doorhanger.
+   * is new or its state changed, after the log line and the doorhanger;
+   * and with a finding of state "none" and no detections when the CAPTCHA
+   * went from the tab.
    *
    * @param {(browser: Element, record: object) => void} listener
    * @returns {() => void} Removes it.
@@ -222,20 +246,24 @@ class ZendiaCaptchaWatchService {
    * tab's other frames, then logged and shown when the merged finding is new.
    *
    * @param {Element} browser The tab the frame belongs to.
-   * @param {{url: string, detections: object[], frame?: number, top?: boolean}} report
+   * @param {{url: string, detections: object[], state?: object, frame?: number, top?: boolean}} report
+   *   `state` is where the frame's CAPTCHA is at (captchaState).
    * @returns {object|null} The tab's merged finding, or null when it holds
    *   nothing.
    */
-  report(browser, { url, detections, frame = 0, top = true } = {}) {
+  report(browser, { url, detections, state, frame = 0, top = true } = {}) {
     if (!browser) {
       return null;
     }
     detections = sanitize(detections);
+    state = sanitizeState(state);
     const frames = this.#frames.get(browser) ?? new Map();
-    if (detections.length) {
+    // A checkbox frame may hold no finding of its own, only its state.
+    if (detections.length || state.state != "none") {
       frames.set(frame, {
         url: text(url, MAX_URL) ?? "",
         detections,
+        state,
         top: top === true,
       });
     } else if (!frames.delete(frame)) {
@@ -260,16 +288,26 @@ class ZendiaCaptchaWatchService {
     }
   }
 
-  // Merge every frame's findings into the tab's, drop duplicates, and
-  // announce the result if it changed since last time.
+  // Merge every frame's findings into the tab's, drop duplicates, take the
+  // state that asks most of the user, and announce the result if it
+  // changed since last time, its state included.
   #recompute(browser) {
     const frames = this.#frames.get(browser);
     const merged = [];
     const seen = new Set();
     let url = "";
+    let state = { state: "none" };
     for (const entry of frames?.values() ?? []) {
       if (entry.top || !url) {
         url = entry.url;
+      }
+      if (
+        entry.state &&
+        entry.state.state != state.state &&
+        ZendiaCaptcha.stronger(state.state, entry.state.state) ==
+          entry.state.state
+      ) {
+        state = entry.state;
       }
       for (const detection of entry.detections) {
         const key = signatureOf([detection]);
@@ -279,16 +317,31 @@ class ZendiaCaptchaWatchService {
         }
       }
     }
-    if (!merged.length) {
+    if (!merged.length && state.state == "none") {
       this.#last.delete(browser);
-      this.#announced.delete(browser);
+      // Whoever heard of the CAPTCHA hears it went: the page moved on, or
+      // the page took the widget down once it passed.
+      this.#noticed.delete(browser);
+      if (this.#announced.delete(browser)) {
+        this.#tell(browser, {
+          url: browser.currentURI?.spec ?? "",
+          detections: [],
+          state: "none",
+          how: "the CAPTCHA is gone from the page",
+          text: "",
+          signature: "",
+          at: Date.now(),
+        });
+      }
       return null;
     }
-    const signature = signatureOf(merged);
+    const signature = `${signatureOf(merged)}#${state.state}`;
     const record = {
       url,
       detections: merged,
-      text: describe(merged),
+      state: state.state,
+      how: state.how ?? null,
+      text: describe(merged) || state.name || "CAPTCHA",
       signature,
       at: Date.now(),
     };
@@ -297,9 +350,22 @@ class ZendiaCaptchaWatchService {
     if (this.#announced.get(browser) == signature) {
       return record;
     }
+    const found = signatureOf(merged);
+    const before = this.#noticed.get(browser);
+    this.#noticed.set(browser, found);
     this.#announced.set(browser, signature);
-    console.log(`Zendia: CAPTCHA watch: ${record.text} [${record.url}]`);
-    this.#notify(browser, record.text);
+    console.log(
+      `Zendia: CAPTCHA watch: ${record.text}, ${record.state}${record.how ? ` (${record.how})` : ""} [${record.url}]`
+    );
+    // The notice is for a CAPTCHA found, not for each turn of its state.
+    if (before != found) {
+      this.#notify(browser, record.text);
+    }
+    this.#tell(browser, record);
+    return record;
+  }
+
+  #tell(browser, record) {
     for (const listener of this.#listeners) {
       try {
         listener(browser, record);
@@ -307,7 +373,6 @@ class ZendiaCaptchaWatchService {
         console.error("Zendia: CAPTCHA watch listener failed", e);
       }
     }
-    return record;
   }
 
   // The browser-UI window that holds a tab's browser. Its own ownerGlobal is

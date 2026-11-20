@@ -3,16 +3,25 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 // The CAPTCHA subagent: it works on its own, and only after the agent.
-// When the watch (ZendiaCaptchaWatch) finds a challenge on a tab, the
-// finding waits for the agent's work there: a running turn is waited out,
-// and a tab the agent never worked on is waited for its first turn — a
-// page that is only opened stays quiet. Once the agent is done, the
-// subagent opens the challenge from its checkbox where there is one,
-// labels it for the keys, photographs it for the chat and for the agent,
-// asks the agent for the steps that complete it (the keys to type, read
-// off the labels in the picture), and brings the tab to the front so the
-// user can follow them. Solving stays the user's part, as it is for the
-// agent: the steps say what to look for, never the answer.
+// The watch (ZendiaCaptchaWatch) reads every CAPTCHA live — a box to tick,
+// a challenge open, a check running, solved — and says so each time it
+// changes, with no reload. A CAPTCHA that asks the user waits for the
+// agent's work on the tab: a running turn is waited out, and a tab the
+// agent never worked on is waited for its first turn — a page that is
+// only opened stays quiet. Once the agent is done, the subagent reads the
+// state again: one solved meanwhile is left alone. One that still asks is
+// opened from its checkbox where there is one, labeled for the keys,
+// photographed for the chat and for the agent, and the agent asked for
+// the steps that complete it (the keys to type, read off the labels in
+// the picture), the tab brought to the front so the user can follow them.
+// Solving stays the user's part, as it is for the agent: the steps say
+// what to look for, never the answer.
+//
+// The agent and the subagent hand the tab back and forth: a turn of the
+// agent's that ends while a CAPTCHA holds its tab up stopped on it, and
+// once the CAPTCHA is cleared (solved, or gone with the page that held
+// it), the subagent reports back and the agent carries on with the
+// user's request.
 //
 // The summary is a turn of the same agent the user talks to, with the same
 // tools. The picture in the chat is the service's own, for a model cannot
@@ -23,6 +32,7 @@
 import { ZendiaAgents } from "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs";
 import { pageFromArgs } from "resource:///modules/zendia/agent/ZendiaAgentUi.sys.mjs";
 import { ZendiaCaptchaWatch } from "resource:///modules/zendia/captcha/ZendiaCaptchaWatch.sys.mjs";
+import { ZendiaCaptcha } from "resource:///modules/zendia/core/ZendiaCaptcha.sys.mjs";
 
 // The module scope has no timers of its own this early in the startup.
 import { clearTimeout, setTimeout } from "resource://gre/modules/Timer.sys.mjs";
@@ -89,6 +99,13 @@ const IDLE_POLL_MS = 2000;
 // How often a summary the user's own turn preempted is tried again.
 const SEND_TRIES = 3;
 
+// How long a check that runs on its own (Turnstile's spinner) is given to
+// pass or ask before it is shot as it is.
+const CHECKING_WAIT_MS = 15000;
+// How long a CAPTCHA must stay gone from the page to count as cleared: a
+// widget drawn again (a retry, a re-render) is gone for less.
+const GONE_SETTLE_MS = 2000;
+
 // Text the service wrote cannot break out of the page's markup.
 function escapeHtml(text) {
   return String(text)
@@ -128,6 +145,28 @@ Recipes:
 - A checkbox: type its tag.`;
 }
 
+// The kinds of a service's frame that never ask the user: a scored or
+// invisible check, a proof of work.
+const SILENT_KINDS = new Set(["score", "invisible", "proof-of-work"]);
+
+// Whether a finding shows the user a CAPTCHA: a service's frame that is
+// shown and can ask, a widget the page drew, or a challenge it draws. A
+// script, a token or a trap field alone shows nothing.
+function asksOnPage(record) {
+  return !!record?.detections?.some(
+    ({ signal, hidden, kind }) =>
+      !hidden &&
+      (signal == "widget" ||
+        signal == "own" ||
+        (signal == "frame" && !SILENT_KINDS.has(kind)))
+  );
+}
+
+// The page a tab shows, without its fragment.
+function pageOf(browser) {
+  return browser.currentURI?.specIgnoringRef ?? browser.currentURI?.spec ?? "";
+}
+
 // What is up on the user's screen, by what #labelChallenge labeled.
 const LABELED_NOW = {
   captcha:
@@ -139,24 +178,39 @@ const LABELED_NOW = {
 
 class ZendiaCaptchaAgentService {
   #initialized = false;
-  // The newest finding of each tab that waits for its summary; older ones
-  // are not worth catching up on.
-  #pending = new WeakMap();
-  // The tabs the subagent is on, so a finding there queues instead of
-  // starting a second summary.
+  // Per tab, the round of its CAPTCHA asking the user: from the state that
+  // first asks (a box to tick, a challenge open) until it is cleared
+  // (solved, or gone). Each round is shot once, however often the
+  // challenge is closed and opened again inside it; a CAPTCHA that asks
+  // again once cleared (expired, or a new one) is a new round, on the same
+  // page with no reload. {shot, cleared, record}.
+  #rounds = new WeakMap();
+  // Per tab, what the watch last said the CAPTCHA is at: {state, how,
+  // record}.
+  #states = new WeakMap();
+  // The tabs whose agent stopped on the CAPTCHA: a turn of its work ended
+  // while one held the tab up. Told to carry on once it is cleared.
+  #held = new WeakSet();
+  // The tabs the subagent is on, those to look at again once it is done,
+  // and those the button asked for.
   #working = new WeakSet();
-  // The conversations already watched for their first turn.
-  #watched = new WeakSet();
-  // The tabs whose challenge the subagent is opening itself: the findings
-  // the opening brings are the same finding's, not new ones.
-  #opening = new WeakSet();
+  #again = new WeakSet();
+  #forced = new WeakSet();
+  // The tabs whose challenge the subagent is opening and shooting: a pass
+  // that seems to come and go while it clicks is the same round's.
+  #delivering = new WeakSet();
+  // The conversations followed for the end of their turns, and those
+  // running a turn of the subagent's own (the guide), which is no work of
+  // the agent's.
+  #followed = new WeakSet();
+  #side = new WeakSet();
+  // Per tab, the page whose CAPTCHA was last shot: one that asks again
+  // there (expired, reset) pulls the tab to the front only when the agent
+  // waits on it or the user is on it already.
+  #shotOn = new WeakMap();
   // Per tab, where in a sub-frame the challenge was last seen while it was
   // made ready, for a shot when it no longer answers.
   #lastFrame = new WeakMap();
-  // Per tab, the page and what of it was summarized already, so a
-  // challenge that is closed and opened again, or hidden and shown, is not
-  // summarized again on the same page.
-  #delivered = new WeakMap();
 
   init() {
     if (this.#initialized || !Services.prefs.getBoolPref(PREF_AGENT, true)) {
@@ -165,16 +219,17 @@ class ZendiaCaptchaAgentService {
     this.#initialized = true;
     ZendiaCaptchaWatch.onDetect((browser, record) => {
       try {
-        this.#onDetect(browser, record);
+        this.#onState(browser, record);
       } catch (e) {
         console.error("Zendia: CAPTCHA subagent failed", e);
       }
     });
-    // A finding that came before the tab had a conversation waits for the
+    // A CAPTCHA found before the tab had a conversation waits for the
     // first turn of the one that starts.
     ZendiaAgents.onConversation((browser, conversation) => {
-      if (this.#pending.has(browser)) {
-        this.#watchForTurn(browser, conversation);
+      this.#follow(conversation);
+      if (this.#states.has(browser)) {
+        this.#schedule(browser);
       }
     });
   }
@@ -189,54 +244,119 @@ class ZendiaCaptchaAgentService {
     );
   }
 
-  // A finding on a page the user must do something about: a frame, a
-  // widget or a challenge the page draws itself that is shown. Script,
-  // token and honeypot findings alone are invisible checks (a scored
-  // reCAPTCHA, a sensor), and so are hidden frames (a closed challenge, an
-  // invisible mode's helper); opening the tab for one would cry wolf. What
-  // was summarized on this page already is not again.
-  #onDetect(browser, record) {
-    const asking = new Set(
-      record.detections
-        .filter(
-          ({ signal, hidden }) =>
-            (signal == "frame" || signal == "widget" || signal == "own") &&
-            !hidden
-        )
-        .map(
-          ({ signal, name, kind }) => `${signal}:${name ?? ""}:${kind ?? ""}`
-        )
-    );
-    if (!asking.size || !browser.isConnected) {
+  // The watch's word on a tab, live: a CAPTCHA that asks starts a round,
+  // one that is solved or gone ends it. Script, token and honeypot findings
+  // alone ask nothing (a scored reCAPTCHA, a sensor), and neither does a
+  // hidden frame (a closed challenge, an invisible mode's helper): their
+  // state is none or solved, and opening the tab for one would cry wolf.
+  #onState(browser, record) {
+    if (!browser.isConnected) {
       return;
     }
-    let delivered = this.#delivered.get(browser);
-    if (delivered?.url != record.url) {
-      delivered = { url: record.url, keys: new Set() };
-      this.#delivered.set(browser, delivered);
+    const state = record.state ?? "none";
+    this.#states.set(browser, { state, how: record.how ?? null, record });
+    let round = this.#rounds.get(browser);
+    if (round?.clearing && state != "none") {
+      clearTimeout(round.clearing);
+      round.clearing = null;
     }
-    const fresh = [...asking].filter(key => !delivered.keys.has(key));
-    for (const key of asking) {
-      delivered.keys.add(key);
+    if (ZendiaCaptcha.asksUser(state)) {
+      if (round?.cleared && this.#delivering.has(browser)) {
+        // The subagent's own click flickered the state: the same round.
+        round.cleared = false;
+      } else if (!round || round.cleared) {
+        round = { shot: false, cleared: false, record };
+        this.#rounds.set(browser, round);
+        say(`asks: ${record.text}, ${state} (${record.how ?? "-"})`);
+      }
+      round.record = record;
+    } else if (state == "solved" && round && !round.cleared) {
+      round.cleared = true;
+      say(`cleared: ${record.how ?? state}`);
+    } else if (
+      this.#cleared(state, record) &&
+      round &&
+      !round.cleared &&
+      !round.clearing
+    ) {
+      // Gone: once it stays gone. A widget that draws itself again (a
+      // managed check that retries) is gone for a moment only.
+      round.clearing = setTimeout(() => {
+        round.clearing = null;
+        const now = this.#states.get(browser);
+        if (now && this.#cleared(now.state, now.record) && !round.cleared) {
+          round.cleared = true;
+          say(`cleared: ${record.how ?? state}`);
+          if (ZendiaAgents.conversationFor(browser)) {
+            this.#schedule(browser);
+          }
+        }
+      }, GONE_SETTLE_MS);
     }
-    if (!fresh.length || this.#opening.has(browser)) {
-      return;
-    }
-    this.#pending.set(browser, record);
-    say(`detected: ${record.signature}`);
     const conversation = ZendiaAgents.conversationFor(browser);
-    if (this.#worked(conversation)) {
-      this.#pump(browser);
-    } else if (conversation) {
-      this.#watchForTurn(browser, conversation);
+    if (conversation) {
+      this.#follow(conversation);
+      this.#schedule(browser);
     }
-    // Without a conversation the finding rests until one starts.
+    // Without a conversation the CAPTCHA rests until one starts.
+  }
+
+  // Whether a state clears the CAPTCHA: solved, or none with nothing on
+  // the page that asks. A frame still loading reads as none for a moment
+  // (an empty checkbox frame, a widget mid-render); while the page still
+  // shows a CAPTCHA's frame, widget or challenge, that none is no pass.
+  #cleared(state, record) {
+    if (state == "solved") {
+      return true;
+    }
+    return state == "none" && !asksOnPage(record);
+  }
+
+  // The ends of the agent's turns: one that ends while a CAPTCHA holds its
+  // tab up stopped on it, and is told to carry on once it clears; one that
+  // starts is the agent at work again. Each end lets the subagent run.
+  #follow(conversation) {
+    if (this.#followed.has(conversation)) {
+      return;
+    }
+    this.#followed.add(conversation);
+    let running = conversation.running;
+    conversation.subscribe(() => {
+      if (conversation.running == running) {
+        return;
+      }
+      running = conversation.running;
+      if (this.#side.has(conversation)) {
+        return;
+      }
+      if (running) {
+        for (const tab of conversation.tabs) {
+          this.#held.delete(tab);
+        }
+        return;
+      }
+      const browser = conversation.browser;
+      const last = this.#states.get(browser);
+      if (
+        last &&
+        (ZendiaCaptcha.holdsUp(last.state) ||
+          !this.#cleared(last.state, last.record))
+      ) {
+        say("the agent's turn ended on the CAPTCHA");
+        this.#held.add(browser);
+      }
+      for (const tab of conversation.tabs) {
+        if (this.#states.has(tab)) {
+          this.#schedule(tab);
+        }
+      }
+    });
   }
 
   /**
-   * The button's way to test the subagent on a tab: the finding the watch
-   * has for it is delivered now, whether the agent worked the tab before
-   * or not.
+   * The button's way to run the subagent on a tab: the CAPTCHA the watch
+   * has for it is shot now, whether the agent worked the tab before or
+   * not, and whether it was shot before or not.
    *
    * @param {Element} browser
    * @returns {Promise<boolean>} False when the watch found nothing on the
@@ -251,78 +371,188 @@ class ZendiaCaptchaAgentService {
     if (!conversation) {
       return false;
     }
-    this.#pending.set(browser, record);
-    this.#pump(browser, { force: true });
+    this.#follow(conversation);
+    this.#states.set(browser, {
+      state: record.state ?? "none",
+      how: record.how ?? null,
+      record,
+    });
+    this.#rounds.set(browser, { shot: false, cleared: false, record });
+    this.#schedule(browser, { force: true });
     return true;
   }
 
-  // Work off what waits on the tab, one finding at a time. Forced, the
-  // worked gate is skipped: the button asked for it.
-  #pump(browser, { force = false } = {}) {
+  // Run the subagent on a tab, one step at a time; what changes while a
+  // step runs is looked at once it is done.
+  #schedule(browser, { force = false } = {}) {
+    if (force) {
+      this.#forced.add(browser);
+    }
     if (this.#working.has(browser)) {
+      this.#again.add(browser);
       return;
     }
     this.#working.add(browser);
     (async () => {
       try {
-        let record;
-        while ((record = this.#pending.get(browser)) && browser.isConnected) {
-          this.#pending.delete(browser);
-          await this.#deliver(browser, record, force);
-        }
+        do {
+          this.#again.delete(browser);
+          await this.#step(browser);
+        } while (this.#again.has(browser) && browser.isConnected);
       } finally {
         this.#working.delete(browser);
       }
     })().catch(e => console.error("Zendia: CAPTCHA subagent failed", e));
   }
 
-  // A finding whose tab has a conversation but no turn yet is delivered
-  // once the first turn ends: the conversation's changes say when.
-  #watchForTurn(browser, conversation) {
-    if (this.#watched.has(conversation)) {
-      return;
-    }
-    this.#watched.add(conversation);
-    const off = conversation.subscribe(() => {
-      if (!browser.isConnected || !this.#pending.has(browser)) {
-        off();
-        return;
-      }
-      if (!this.#worked(conversation)) {
-        return;
-      }
-      // send() marks the turn running a few statements after its request is
-      // pushed and the listeners fired: wait the statements out, then the
-      // turn itself.
-      setTimeout(() => {
-        off();
-        this.#pump(browser);
-      }, 0);
-    });
-  }
-
-  // One summary: the agent's turn once the agent is done with the tab, the
-  // tab in front for the challenge, its picture and the finding's line in
-  // the chat. Forced (the button), the worked gate is skipped.
-  async #deliver(browser, record, force = false) {
+  // What the subagent does for a tab now, always after the agent: a
+  // running turn is waited out, and a tab the agent never worked on waits
+  // for its first turn — a page that is only opened stays quiet. Then a
+  // CAPTCHA that still asks, read live, is shot (once a round); and an
+  // agent that stopped on it is told to carry on once it is cleared.
+  async #step(browser) {
     const conversation = ZendiaAgents.conversationFor(browser);
-    if (!conversation) {
+    if (!conversation || !browser.isConnected) {
       return;
     }
-    if (!this.#worked(conversation) && !force) {
-      // The conversation was reset while the finding waited: wait for the
-      // first turn of the new one.
-      this.#pending.set(browser, record);
-      this.#watchForTurn(browser, conversation);
+    const forced = this.#forced.has(browser);
+    if (!forced && !this.#worked(conversation)) {
+      // The end of the first turn schedules the tab again (#follow).
       return;
     }
     if (!(await this.#idle(conversation, browser))) {
       return;
     }
-    // To the front first: a background tab's browser has no size to
-    // capture, and the user is handed the challenge anyway.
-    this.#toFront(browser);
-    const shot = await this.captureChallenge(browser).catch(() => null);
+    const round = this.#rounds.get(browser);
+    if (round && !round.shot && !round.cleared) {
+      // The watch's last word can be a moment old, and a check still
+      // running is given its time.
+      const live = await this.#settledState(browser);
+      say(`live: ${live.state} (${live.how ?? "-"})`);
+      const asks =
+        ZendiaCaptcha.asksUser(live.state) ||
+        (forced && !ZendiaCaptcha.isCleared(live.state));
+      if (
+        asks &&
+        !forced &&
+        this.#shotOn.get(browser) == pageOf(browser) &&
+        !this.#held.has(browser) &&
+        !this.#inFront(browser)
+      ) {
+        // Asks again on a page shot before, in a tab in the background
+        // that nothing waits on: left for the user, not pulled forward.
+        round.shot = true;
+        say("asks again in the background: left for the user");
+      } else if (asks) {
+        round.shot = true;
+        this.#forced.delete(browser);
+        this.#shotOn.set(browser, pageOf(browser));
+        await this.#deliver(browser, conversation, round.record, live);
+      } else if (
+        live.state == "solved" ||
+        (forced && ZendiaCaptcha.isCleared(live.state))
+      ) {
+        round.cleared = true;
+        if (forced) {
+          this.#forced.delete(browser);
+          conversation.note(
+            `The CAPTCHA on this tab is solved (${live.how ?? "it is gone"}): nothing to do.`
+          );
+        }
+      }
+      // Still checking on its own: the watch says when it is done.
+    }
+    if (!this.#held.has(browser)) {
+      return;
+    }
+    if (!(await this.#idle(conversation, browser))) {
+      return;
+    }
+    const live = await this.#liveState(browser);
+    // A turn of the user's ran meanwhile (the flag went with it), or the
+    // CAPTCHA asks still: the watch says when it clears. Gone counts once
+    // it stayed gone, which the round says (#onState).
+    const latest = this.#rounds.get(browser);
+    const gone =
+      this.#cleared(live.state, this.#states.get(browser)?.record) &&
+      (!latest || latest.cleared);
+    if (!this.#held.has(browser) || !(live.state == "solved" || gone)) {
+      return;
+    }
+    this.#held.delete(browser);
+    await this.#carryOn(browser, conversation, live);
+  }
+
+  // Where the tab's CAPTCHA is at, asked of every frame now and merged:
+  // the state that asks most of the user wins. What the watch last said
+  // when no frame answers in time.
+  async #liveState(browser) {
+    let best = null;
+    await this.#eachFrame(browser, "Zendia:CaptchaWatch:State", null, answer => {
+      if (
+        answer?.state &&
+        ZendiaCaptcha.STATES.includes(answer.state) &&
+        (!best ||
+          (answer.state != best.state &&
+            ZendiaCaptcha.stronger(best.state, answer.state) == answer.state))
+      ) {
+        best = { state: answer.state, how: answer.how ?? null };
+      }
+      return false;
+    });
+    const known = this.#states.get(browser);
+    if (!best) {
+      return known ?? { state: "none", how: null };
+    }
+    // The page's word now is newer than the watch's last: what is acted on
+    // (a report back) is not undone by a report the frames sent before it.
+    this.#states.set(browser, { ...best, record: known?.record ?? null });
+    return best;
+  }
+
+  // The live state once a check that runs on its own is done, or its time
+  // is up.
+  async #settledState(browser) {
+    const until = Date.now() + CHECKING_WAIT_MS;
+    let live = await this.#liveState(browser);
+    while (
+      live.state == "checking" &&
+      Date.now() < until &&
+      browser.isConnected
+    ) {
+      await new Promise(resolve => setTimeout(resolve, CHALLENGE_POLL_MS));
+      live = await this.#liveState(browser);
+    }
+    return live;
+  }
+
+  // One shot of a CAPTCHA that asks: the tab in front for it, its picture
+  // and the finding's line in the chat, and a turn of the agent that tells
+  // the user how to complete it. Unless the click on its checkbox passed
+  // it: the chat says so, and an agent it stopped carries on.
+  async #deliver(browser, conversation, record, live) {
+    this.#delivering.add(browser);
+    try {
+      // To the front first: a background tab's browser has no size to
+      // capture, and the user is handed the challenge anyway.
+      this.#toFront(browser);
+      const shot = await this.captureChallenge(browser).catch(() => null);
+      if (shot?.state == "passed") {
+        conversation.note(
+          `The CAPTCHA on this tab passed once its checkbox was ticked: nothing for you to do.`
+        );
+        return;
+      }
+      await this.#guide(browser, conversation, record, live, shot);
+    } finally {
+      this.#delivering.delete(browser);
+    }
+  }
+
+  // The shot in the chat and the agent's turn that tells the user how to
+  // complete the challenge, a turn of the subagent's (#side): it is no work
+  // on the user's request.
+  async #guide(browser, conversation, record, live, shot) {
     const shown = await this.#showShot(browser, conversation, record, shot);
     // The picture goes to the agent too, at its full size whatever the
     // panel took: the cropped challenge, sharper than a shot of the whole
@@ -333,14 +563,12 @@ class ZendiaCaptchaAgentService {
     const picture = sees ? (shot ?? shown) : null;
     const parts = picture?.parts?.area ? picture.parts : null;
     const said = shot?.parts?.instruction?.text ?? null;
-    const prompt = this.#prompt(
-      record,
-      picture,
-      parts,
-      said,
-      shot?.labeled || false,
-      shot?.state ?? null
-    );
+    const prompt = this.#prompt(record, picture, parts, said, {
+      labeled: shot?.labeled || false,
+      state: shot?.state ?? null,
+      live,
+      held: this.#held.has(browser),
+    });
     let files = [];
     if (parts) {
       files = [{ name: "captcha-challenge-area.jpg", bytes: parts.area.bytes }];
@@ -356,18 +584,57 @@ class ZendiaCaptchaAgentService {
     } else if (picture) {
       files = [{ name: "captcha-challenge.jpg", bytes: picture.bytes }];
     }
-    const echo = `CAPTCHA on this tab: ${record.text}.${said ? ` It asks: "${said}"` : ""} You complete the challenge; the assistant tells you how.`;
-    for (let tries = 0; tries < SEND_TRIES; tries++) {
-      const before = conversation.messages.length;
-      await conversation.send(prompt, files, { echo });
-      if (conversation.messages.length > before) {
-        return;
+    const echo = `CAPTCHA on this tab: ${record.text}${live?.how ? ` (${live.how})` : ""}.${said ? ` It asks: "${said}"` : ""} You complete the challenge; the assistant tells you how.`;
+    await this.#sendSide(conversation, browser, prompt, files, echo);
+  }
+
+  // A request of the subagent's, sent as a turn of the agent's once it is
+  // idle; a request of the user's that went first is waited out.
+  async #sendSide(conversation, browser, prompt, files, echo) {
+    this.#side.add(conversation);
+    try {
+      for (let tries = 0; tries < SEND_TRIES; tries++) {
+        const before = conversation.messages.length;
+        await conversation.send(prompt, files, { echo });
+        if (conversation.messages.length > before) {
+          return true;
+        }
+        if (!(await this.#idle(conversation, browser))) {
+          return false;
+        }
       }
-      // The user's own request went first; the summary follows it.
-      if (!(await this.#idle(conversation, browser))) {
-        return;
-      }
+      return false;
+    } finally {
+      this.#side.delete(conversation);
     }
+  }
+
+  // The report back: the CAPTCHA that stopped the agent is cleared, and it
+  // carries on with the user's request. A turn of its work, not a side
+  // one: should it stop on a CAPTCHA again, the round goes on from there.
+  async #carryOn(browser, conversation, live) {
+    const request = conversation.messages.findLast(
+      message => message.type == "user"
+    )?.text;
+    // A conversation reset since: no request is left to carry on.
+    if (!request) {
+      return;
+    }
+    const how =
+      live.how ?? (live.state == "none" ? "it is gone from the page" : "it passed");
+    const title = browser.contentTitle || browser.currentURI?.spec || "";
+    const prompt = [
+      `The browser's CAPTCHA assistant reports back: the CAPTCHA that stopped you on the tab "${title}" (${browser.currentURI?.spec}) is cleared now: ${how}.`,
+      `The request you were working on, in the user's words: "${request}"`,
+      `Observe the tab again and carry on with that request from where the CAPTCHA stopped you, by the same rules as before. If it is already done, say so in one sentence and do nothing more. Should a CAPTCHA stop you again, say so in one sentence and end your turn: the assistant shows it to the user and reports back once it is cleared.`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const echo = `CAPTCHA cleared (${how}). The agent carries on with your request.`;
+    say(`carry on: ${how}`);
+    // Sent only if the agent is idle: a request of the user's that went
+    // first is the agent at work again, with nothing left to carry on.
+    await conversation.send(prompt, [], { echo });
   }
 
   // Once the agent is done with the tab: a turn of the user's or one of
@@ -516,110 +783,108 @@ class ZendiaCaptchaAgentService {
   //
   // @returns {Promise<string>} How the wait ended: "open", "settled" or
   //   "clicked" — the challenge is there to act on; "passed" — the check
-  //   went by itself, nothing to act on; "timeout" — it never said.
+  //   went by itself, nothing to act on; "failed" — a managed check failed
+  //   or expired, to be tried again; "timeout" — it never said.
   async #prepareChallenge(browser) {
     const top = browser.browsingContext;
     if (!top) {
       return "timeout";
     }
-    this.#opening.add(browser);
     this.#lastFrame.delete(browser);
-    try {
-      const deadline = Date.now() + CHALLENGE_DRAW_MS;
-      // The frames whose checkbox this delivery already clicked: the
-      // spinner after a click is not clicked again.
-      const clicked = new Set();
-      // Whether a checkbox was seen, so a challenge may still open; and
-      // where the shot was when one was clicked, and when: what a click
-      // opens in the page (a popup, a puzzle) is no frame that asks for
-      // clicks, and is known by the shot moving to it.
-      let checkbox = false;
-      let clickedFrom = null;
-      let clickedAt = 0;
-      let last = null;
-      while (Date.now() < deadline) {
-        const area = await this.#challengeRect(browser);
-        const open =
-          area?.challenge &&
-          area.fullWidth >= CHALLENGE_MIN_WIDTH &&
-          area.fullHeight >= CHALLENGE_MIN_HEIGHT;
-        const drawn = area ? await this.#drawn(area) : false;
-        if (area && area.context != top) {
-          this.#lastFrame.set(browser, area);
-        }
-        const place = area
-          ? [
-              area.context.id,
-              area.left,
-              area.top,
-              area.width,
-              area.height,
-              area.pictures ?? 0,
-            ]
-              .map(value => Math.round(value))
-              .join()
-          : null;
-        const still = !!place && place == last;
-        last = place;
-        say(
-          `poll: challenge=${!!area?.challenge} size=${area ? `${Math.round(area.fullWidth)}x${Math.round(area.fullHeight)}` : "-"} open=${open} drawn=${drawn} still=${still} left=${deadline - Date.now()}ms`
-        );
-        if (open && drawn) {
-          return "open";
-        }
-        const peek = await this.#peek(browser);
-        if (peek.passed) {
-          say("an invisible pass: nothing to show");
-          return "passed";
-        }
-        checkbox ||= peek.checkbox;
-        // A challenge frame still opening is waited on; anything else that
-        // is drawn and holds still is what there is to shoot.
-        const settled =
-          area && !open && !(area.challenge && area.frame) && drawn && still;
-        if (settled && !checkbox) {
-          say("nothing to open: the challenge is shot as it is");
-          return "settled";
-        }
-        // What a click opened in the page is shot once its puzzle is past
-        // its spinner: a picture of it is up, loaded, and holds still. A
-        // puzzle drawn with no picture element (a CSS background) is given
-        // a little longer instead.
-        if (
-          settled &&
-          clicked.size &&
-          place != clickedFrom &&
-          Date.now() - clickedAt >= OPENED_SETTLE_MS &&
-          (area.pictures !== 0 ||
-            Date.now() - clickedAt >= OPENED_PICTURELESS_MS)
-        ) {
-          say("the click opened the challenge in the page");
-          return "clicked";
-        }
-        await this.#eachFrame(
-          browser,
-          "Zendia:CaptchaWatch:Open",
-          null,
-          (answer, context) => {
-            if (clicked.has(context.id) || !answer?.opened) {
-              return false;
-            }
-            say(`clicked the ${answer.name} checkbox in frame ${context.id}`);
-            clicked.add(context.id);
-            clickedFrom = place;
-            clickedAt = Date.now();
-            return false;
-          },
-          context => !clicked.has(context.id)
-        );
-        await new Promise(resolve => setTimeout(resolve, CHALLENGE_POLL_MS));
+    const deadline = Date.now() + CHALLENGE_DRAW_MS;
+    // The frames whose checkbox this delivery already clicked: the
+    // spinner after a click is not clicked again.
+    const clicked = new Set();
+    // Whether a checkbox was seen, so a challenge may still open; and
+    // where the shot was when one was clicked, and when: what a click
+    // opens in the page (a popup, a puzzle) is no frame that asks for
+    // clicks, and is known by the shot moving to it.
+    let checkbox = false;
+    let clickedFrom = null;
+    let clickedAt = 0;
+    let last = null;
+    while (Date.now() < deadline) {
+      const area = await this.#challengeRect(browser);
+      const open =
+        area?.challenge &&
+        area.fullWidth >= CHALLENGE_MIN_WIDTH &&
+        area.fullHeight >= CHALLENGE_MIN_HEIGHT;
+      const drawn = area ? await this.#drawn(area) : false;
+      if (area && area.context != top) {
+        this.#lastFrame.set(browser, area);
       }
-      return "timeout";
-    } finally {
-      // The rescan the opening brings can lag the poll: keep the findings
-      // it reports the same finding's a moment longer.
-      setTimeout(() => this.#opening.delete(browser), CHALLENGE_DRAW_MS);
+      const place = area
+        ? [
+            area.context.id,
+            area.left,
+            area.top,
+            area.width,
+            area.height,
+            area.pictures ?? 0,
+          ]
+            .map(value => Math.round(value))
+            .join()
+        : null;
+      const still = !!place && place == last;
+      last = place;
+      say(
+        `poll: challenge=${!!area?.challenge} size=${area ? `${Math.round(area.fullWidth)}x${Math.round(area.fullHeight)}` : "-"} open=${open} drawn=${drawn} still=${still} left=${deadline - Date.now()}ms`
+      );
+      if (open && drawn) {
+        return "open";
+      }
+      const peek = await this.#peek(browser);
+      if (peek.passed) {
+        say("an invisible pass: nothing to show");
+        return "passed";
+      }
+      if (peek.failed) {
+        say("the check failed or expired: shot as it is");
+        return "failed";
+      }
+      checkbox ||= peek.checkbox;
+      // A challenge frame still opening is waited on; anything else that
+      // is drawn and holds still is what there is to shoot.
+      const settled =
+        area && !open && !(area.challenge && area.frame) && drawn && still;
+      if (settled && !checkbox) {
+        say("nothing to open: the challenge is shot as it is");
+        return "settled";
+      }
+      // What a click opened in the page is shot once its puzzle is past
+      // its spinner: a picture of it is up, loaded, and holds still. A
+      // puzzle drawn with no picture element (a CSS background) is given
+      // a little longer instead.
+      if (
+        settled &&
+        clicked.size &&
+        place != clickedFrom &&
+        Date.now() - clickedAt >= OPENED_SETTLE_MS &&
+        (area.pictures !== 0 ||
+          Date.now() - clickedAt >= OPENED_PICTURELESS_MS)
+      ) {
+        say("the click opened the challenge in the page");
+        return "clicked";
+      }
+      await this.#eachFrame(
+        browser,
+        "Zendia:CaptchaWatch:Open",
+        null,
+        (answer, context) => {
+          if (clicked.has(context.id) || !answer?.opened) {
+            return false;
+          }
+          say(`clicked the ${answer.name} checkbox in frame ${context.id}`);
+          clicked.add(context.id);
+          clickedFrom = place;
+          clickedAt = Date.now();
+          return false;
+        },
+        context => !clicked.has(context.id)
+      );
+      await new Promise(resolve => setTimeout(resolve, CHALLENGE_POLL_MS));
     }
+    return "timeout";
   }
 
   // The challenge labeled for the keys, as `gc` labels it: only the
@@ -694,17 +959,18 @@ class ZendiaCaptchaAgentService {
   // check passed, so no challenge will open, and whether a checkbox is
   // there to open one.
   async #peek(browser) {
-    const result = { passed: false, checkbox: false };
+    const result = { passed: false, failed: false, checkbox: false };
     await this.#eachFrame(
       browser,
       "Zendia:CaptchaWatch:Open",
       { peek: true },
       answer => {
         result.checkbox ||= !!answer?.checkbox;
-        // A managed check that failed or expired comes to nothing more:
-        // shot as it is, like a pass.
-        result.passed ||= !!answer?.passed || !!answer?.done;
-        return result.passed;
+        // A managed check that failed or expired comes to nothing more
+        // either: shot as it is, for the user to try it again.
+        result.failed ||= !!answer?.done;
+        result.passed ||= !!answer?.passed;
+        return result.passed || result.failed;
       }
     );
     return result;
@@ -1105,6 +1371,11 @@ class ZendiaCaptchaAgentService {
     return { area: shot, instruction };
   }
 
+  // Whether the tab is the one shown in its window.
+  #inFront(browser) {
+    return this.#windowFor(browser)?.gBrowser?.selectedBrowser == browser;
+  }
+
   // The tab with the challenge, in front, with its chat open beside it.
   // The keys stay on the page, where the challenge takes them.
   #toFront(browser) {
@@ -1141,8 +1412,16 @@ class ZendiaCaptchaAgentService {
   // reference of the jump and the cursor, and `labeled` says which are up
   // (#labelChallenge). Unlabeled, they are the mouse's. `state` is how
   // the wait for the challenge ended (#prepareChallenge): one that never
-  // showed, or passed by itself, has no steps to give.
-  #prompt(record, picture, parts, said, labeled = false, state = null) {
+  // showed, or passed by itself, has no steps to give. `live` is what the
+  // page said the CAPTCHA is at before it was opened, and `held` whether
+  // it stopped the agent's work, which waits for the report back.
+  #prompt(
+    record,
+    picture,
+    parts,
+    said,
+    { labeled = false, state = null, live = null, held = false } = {}
+  ) {
     let look = `1. Call page_screenshot to look at the challenge (page_observe if your model cannot see images).`;
     if (parts) {
       look = `1. Look at the attached pictures first, each cut from the page and drawn larger than on screen: captcha-challenge-area.jpg is only the part of the challenge to act on (its images, puzzle or distorted text)${parts.instruction?.shot && parts.instruction.pictures ? `; captcha-instruction-example.jpg is the instruction's own picture (an example to match, icons to click in order)` : ""}. Call page_screenshot only if you cannot view them or they do not show the challenge (page_observe if your model cannot see images).`;
@@ -1151,7 +1430,10 @@ class ZendiaCaptchaAgentService {
     }
     const key = this.#captchaKey();
     return [
-      `You are the browser's CAPTCHA assistant. The watch layer found a CAPTCHA on the tab you work on: ${record.text}. Page: ${record.url}.`,
+      `You are the browser's CAPTCHA assistant. The watch layer found a CAPTCHA on the tab you work on: ${record.text}. Page: ${record.url}.${live?.how ? ` Read live from the page: ${live.how}.` : ""}`,
+      held
+        ? "It stopped your work on the user's request. Do not carry on with that request in this turn: once the CAPTCHA is cleared, you are told to carry on."
+        : null,
       said
         ? `The challenge's instruction, read from its own text: "${said}" Quote it as it is; do not guess another.`
         : null,
@@ -1159,13 +1441,16 @@ class ZendiaCaptchaAgentService {
       state == "passed"
         ? "The check went through by itself while it was being opened: there is likely nothing left for the user to do."
         : null,
+      state == "failed"
+        ? "The check failed or expired (the widget says so): give no steps to solve it. Say so in one sentence, and tell the user to try it again with the widget's own retry link, or by reloading the page if it has none."
+        : null,
       state == "timeout"
         ? `The challenge had not shown when it was shot (it may still be loading, or open only once something on the page is clicked). If the picture shows none, say so in one sentence: it has not loaded yet${key ? `, and \`${key}\` labels it for the keys once it shows` : ""}. Give no steps for a challenge you cannot see.`
         : null,
       labeled
         ? `The challenge on their screen is labeled for the keys, and the labels are in the pictures. ${LABELED_NOW[labeled] ?? LABELED_NOW.captcha} These are the keys, exactly as they work; use no others:\n${keysReference(key)}`
         : null,
-      !labeled && state != "passed"
+      !labeled && state != "passed" && state != "failed"
         ? `The challenge is not labeled for the keys: tell them where to click or drag with the mouse.${key ? ` In a last step, tell them \`${key}\` labels it so it can be done from the keyboard.` : ""}`
         : null,
       `Do exactly this:
