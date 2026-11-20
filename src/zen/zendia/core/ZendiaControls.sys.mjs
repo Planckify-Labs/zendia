@@ -35,6 +35,10 @@ const CONTROLS = [
   "[onclick]",
 ].join(",");
 
+// The fields that take typed text, which `i` (input.choose) picks among.
+const FIELDS =
+  "input, textarea, select, [contenteditable='true'], [contenteditable='']";
+
 // The cursors that say an element can be pressed, or dragged: a slider's
 // handle has no markup to say so either.
 const DRAG_CURSORS = new Set([
@@ -114,8 +118,79 @@ function isInWindow(window, rect) {
   );
 }
 
+// The boxes of a control looked at, past its whole box: a link that wraps
+// has one per line.
+const FRAGMENTS_MAX = 4;
+// Where in a box to look for the control, as fractions of its width and
+// height: the middle first, then around it.
+const SPOTS = [
+  [0.5, 0.5],
+  [0.25, 0.5],
+  [0.75, 0.5],
+  [0.5, 0.25],
+  [0.5, 0.75],
+];
+
 /**
- * Whether an element in the window shows and nothing covers it.
+ * Whether the element on top at a point is the control, or in it.
+ *
+ * @param {Window} window
+ * @param {Element} element
+ * @param {number} x
+ * @param {number} y
+ * @returns {boolean}
+ */
+function isOnTopAt(window, element, x, y) {
+  const hit = ZendiaDom.deepElementFromPoint(window.document, x, y);
+  return (
+    !!hit &&
+    (ZendiaDom.composedContains(element, hit) ||
+      ZendiaDom.composedContains(hit, element) ||
+      hit.closest("label")?.control === element)
+  );
+}
+
+/**
+ * A point in the window where a control is on top, or null if something
+ * covers all of it. The middle of its box is not enough: a link whose box
+ * spans two lines (Google's result titles, under their site's name) may have
+ * another link there, beside it, and a link that wraps has nothing of its
+ * own between the end of one line and the start of the next.
+ *
+ * @param {Window} window
+ * @param {Element} element
+ * @param {DOMRect} [rect] Its box, if already read.
+ * @returns {{x: number, y: number}|null}
+ */
+function shownPoint(window, element, rect = element.getBoundingClientRect()) {
+  const boxes = [rect];
+  const fragments = element.getClientRects();
+  if (fragments.length > 1) {
+    boxes.push(...[...fragments].slice(0, FRAGMENTS_MAX));
+  }
+  for (const box of boxes) {
+    // The part of the box in the window: an element half scrolled out is
+    // looked for in the half that shows.
+    const left = Math.max(box.left, 0);
+    const top = Math.max(box.top, 0);
+    const right = Math.min(box.right, window.innerWidth);
+    const bottom = Math.min(box.bottom, window.innerHeight);
+    if (right - left < 1 || bottom - top < 1) {
+      continue;
+    }
+    for (const [across, down] of SPOTS) {
+      const x = left + (right - left) * across;
+      const y = top + (bottom - top) * down;
+      if (isOnTopAt(window, element, x, y)) {
+        return { x, y };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether an element in the window shows and something of it is not covered.
  *
  * @param {Window} window
  * @param {Element} element
@@ -123,20 +198,7 @@ function isInWindow(window, rect) {
  * @returns {boolean}
  */
 function isShown(window, element, rect) {
-  if (!element.checkVisibility()) {
-    return false;
-  }
-  const hit = ZendiaDom.deepElementFromPoint(
-    window.document,
-    Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1),
-    Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1)
-  );
-  return (
-    !!hit &&
-    (ZendiaDom.composedContains(element, hit) ||
-      ZendiaDom.composedContains(hit, element) ||
-      hit.closest("label")?.control === element)
-  );
+  return element.checkVisibility() && !!shownPoint(window, element, rect);
 }
 
 /**
@@ -260,6 +322,35 @@ export const ZendiaControls = {
       }
     }
     return [...found];
+  },
+
+  /**
+   * Whether a control is a field to type in, which `i` picks rather than a
+   * label of `s`.
+   *
+   * @param {Element} element
+   * @returns {boolean}
+   */
+  isField(element) {
+    return element.matches(FIELDS) && ZendiaDom.isEditable(element);
+  },
+
+  /**
+   * Where to press a control: a point where it is on top, else the middle
+   * of its box.
+   *
+   * @param {Window} window
+   * @param {Element} element
+   * @returns {{x: number, y: number}}
+   */
+  pointOf(window, element) {
+    const rect = element.getBoundingClientRect();
+    return (
+      shownPoint(window, element, rect) ?? {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      }
+    );
   },
 
   /**

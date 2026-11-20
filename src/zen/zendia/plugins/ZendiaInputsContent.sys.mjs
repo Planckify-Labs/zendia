@@ -4,10 +4,10 @@
 
 import { ZendiaControls } from "resource:///modules/zendia/core/ZendiaControls.sys.mjs";
 import { ZendiaDom } from "resource:///modules/zendia/core/ZendiaDom.sys.mjs";
-import { labelElements } from "resource:///modules/zendia/plugins/ZendiaJumpContent.sys.mjs";
-
-const FIELDS =
-  "input, textarea, select, [contenteditable='true'], [contenteditable='']";
+import {
+  fieldTargets,
+  labelFields,
+} from "resource:///modules/zendia/plugins/ZendiaJumpContent.sys.mjs";
 
 // Fields whose tops are this close sit on the same row.
 const ROW_TOLERANCE = 4;
@@ -23,9 +23,7 @@ function isShown(element) {
 }
 
 function isField(element) {
-  return (
-    element.matches(FIELDS) && ZendiaDom.isEditable(element) && isShown(element)
-  );
+  return ZendiaControls.isField(element) && isShown(element);
 }
 
 function inReadingOrder(elements) {
@@ -47,17 +45,6 @@ function inReadingOrder(elements) {
  */
 function fields(document) {
   return inReadingOrder([...ZendiaDom.deepElements(document)].filter(isField));
-}
-
-/**
- * The fields in the window that a user can see, in reading order: one under a
- * dialog is no choice.
- *
- * @param {Window} window
- * @returns {Element[]}
- */
-function fieldsToChoose(window) {
-  return inReadingOrder(ZendiaControls.find(window).filter(isField));
 }
 
 function inViewport(element, window) {
@@ -116,20 +103,17 @@ function first({ actor, document, window }, { count = 1 }) {
 export const actions = {
   "input.first": first,
 
-  // A count says which field, and one field needs no choosing. Agents have
-  // `input.first`: labels would wait for keys they do not press.
+  // A count says which field, and one field needs no choosing. The fields of
+  // the page's frames are choices too. Agents have `input.first`: labels
+  // would wait for keys they do not press.
   "input.choose": async function (context, { count }) {
     const { actor, window } = context;
-    const choices = count === undefined ? fieldsToChoose(window) : [];
+    const choices =
+      count === undefined ? await fieldTargets(actor, window) : [];
     if (choices.length > 1) {
-      await labelElements(
-        actor,
-        window,
-        () => fieldsToChoose(window),
-        focusField
-      );
+      await labelFields(actor, window);
     } else if (choices.length) {
-      focusField(choices[0]);
+      await choices[0].pick({ newTab: false });
     } else {
       // A field that something clear lies over is still the one to type in.
       first(context, { count });

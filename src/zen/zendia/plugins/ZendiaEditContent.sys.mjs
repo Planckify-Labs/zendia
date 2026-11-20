@@ -17,10 +17,19 @@ function editorCommand(command) {
   };
 }
 
-export const actions = {
-  "edit.deleteWordBackward": editorCommand("cmd_deleteWordBackward"),
-  "edit.deleteToLineStart": editorCommand("cmd_deleteToBeginningOfLine"),
-  "edit.deleteCharBackward": editorCommand("cmd_deleteCharBackward"),
-  "edit.deleteCharForward": editorCommand("cmd_deleteCharForward"),
-  "edit.deleteToLineEnd": editorCommand("cmd_deleteToEndOfLine"),
+// The editor command of each action, which the browser's own fields (the
+// urlbar, a search box) run too.
+export const EDIT_COMMANDS = {
+  "edit.deleteWordBackward": "cmd_deleteWordBackward",
+  "edit.deleteToLineStart": "cmd_deleteToBeginningOfLine",
+  "edit.deleteCharBackward": "cmd_deleteCharBackward",
+  "edit.deleteCharForward": "cmd_deleteCharForward",
+  "edit.deleteToLineEnd": "cmd_deleteToEndOfLine",
 };
+
+export const actions = Object.fromEntries(
+  Object.entries(EDIT_COMMANDS).map(([id, command]) => [
+    id,
+    editorCommand(command),
+  ])
+);

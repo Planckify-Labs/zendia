@@ -30,11 +30,12 @@ const MAX_REFUSED_FOCUS = 3;
 const USER_INPUT_THROTTLE_MS = 300;
 
 // Content actions that work on the field the keys went to, so they stay in
-// its frame; the others act on the page.
+// its frame; the others act on the page. `i` chooses among the fields of the
+// whole page, its frames' too.
 function actsOnFocusedField(id) {
   return (
     id.startsWith("edit.") ||
-    id.startsWith("input.") ||
+    (id.startsWith("input.") && id != "input.choose") ||
     id.startsWith("yank.put") ||
     id == "mode.insert"
   );

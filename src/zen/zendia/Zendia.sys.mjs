@@ -18,6 +18,7 @@ import { ZendiaOptions } from "resource:///modules/zendia/config/ZendiaOptions.s
 import { ZendiaAgentSpec } from "resource:///modules/zendia/plugins/ZendiaAgent.sys.mjs";
 import { ZendiaCoreSpec } from "resource:///modules/zendia/plugins/ZendiaCore.sys.mjs";
 import { ZendiaEditSpec } from "resource:///modules/zendia/plugins/ZendiaEdit.sys.mjs";
+import { EDIT_COMMANDS } from "resource:///modules/zendia/plugins/ZendiaEditContent.sys.mjs";
 import { ZendiaExplorerSpec } from "resource:///modules/zendia/plugins/ZendiaExplorerSpec.sys.mjs";
 import { ZendiaToolbarSpec } from "resource:///modules/zendia/plugins/ZendiaToolbarSpec.sys.mjs";
 import { ZendiaFindSpec } from "resource:///modules/zendia/plugins/ZendiaFind.sys.mjs";
@@ -427,10 +428,12 @@ class ZendiaService {
       field: field === true,
     };
     this.#states.set(browser, state);
+    const window = windowOf(browser);
     const ui = this.#windows.get(browser.ownerDocument);
     if (
-      windowOf(browser)?.gBrowser?.selectedBrowser == browser &&
+      window?.gBrowser &&
       ui &&
+      this.#keyedBrowser(window, ui) == browser &&
       !this.#activeBuffer(ui)
     ) {
       this.#showState(ui, state);
@@ -508,10 +511,20 @@ class ZendiaService {
     );
   }
 
+  // The page whose mode the statusline shows: the web chat's while it has
+  // the focus, as its keys are its own, and the tab in front otherwise.
+  #keyedBrowser(window, ui) {
+    const focused = window.document.activeElement;
+    if (focused?.localName == "browser" && ui.webchat?.isShowing(focused)) {
+      return focused;
+    }
+    return window.gBrowser.selectedBrowser;
+  }
+
   #stateOf(window, ui) {
     const buffer = this.#activeBuffer(ui);
     if (!buffer) {
-      return this.stateFor(window.gBrowser.selectedBrowser);
+      return this.stateFor(this.#keyedBrowser(window, ui));
     }
     return {
       // The library's search box is its insert mode.
@@ -794,6 +807,20 @@ class ZendiaService {
     });
     refresh();
     window.gBrowser.tabContainer.addEventListener("TabSelect", refresh);
+    // The focus moving between the tab and the web chat's page changes whose
+    // mode is shown.
+    let keyed = null;
+    window.addEventListener(
+      "focusin",
+      () => {
+        const browser = this.#keyedBrowser(window, ui);
+        if (browser != keyed) {
+          keyed = browser;
+          refresh();
+        }
+      },
+      true
+    );
     let unclaimed = null;
     window.addEventListener(
       "keydown",
@@ -804,12 +831,23 @@ class ZendiaService {
         if (ui.whichKey.pinned) {
           ui.whichKey.hide();
         }
-        // What is typed into the agent dock, or the web chat, is theirs.
+        // What is typed into the agent dock, or the agents panel, is theirs.
         if (
           ui.agent.contains(event.target) ||
-          ui.agents.contains(event.target) ||
-          ui.webchat.contains(event.target)
+          ui.agents.contains(event.target)
         ) {
+          return;
+        }
+        // The browser's own fields, like the urlbar, are in insert mode while
+        // they have the focus: its editing keys, Ctrl+W above all, are vim's
+        // and not the browser's.
+        if (this.#editChromeField(window, event)) {
+          return;
+        }
+        if (ui.webchat.contains(event.target)) {
+          // The web chat's page is a page like a tab's: the browser's own
+          // shortcuts that its mode maps, <C-w> in a field, are its keys.
+          this.#takeReservedKey(window, event);
           return;
         }
         // An open menu or panel takes the keys, with vim's j and k.
@@ -897,13 +935,48 @@ class ZendiaService {
     }
   }
 
+  /**
+   * Run an editing key of insert mode in a field of the browser UI, as
+   * ZendiaEditContent does in a page's.
+   *
+   * @param {Window} window
+   * @param {KeyboardEvent} event
+   * @returns {boolean} Whether the key was taken.
+   */
+  #editChromeField(window, event) {
+    const { document } = window;
+    if (!event.isTrusted || !ZendiaOptions.enabled) {
+      return false;
+    }
+    const field = ZendiaDom.deepActiveElement(document);
+    if (field?.ownerDocument != document || !ZendiaDom.isEditable(field)) {
+      return false;
+    }
+    const token = ZendiaKeys.fromEvent(event);
+    const command = token && EDIT_COMMANDS[this.keymap.get("i", token)?.rhs];
+    if (!command) {
+      return false;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const controller =
+      document.commandDispatcher.getControllerForCommand(command);
+    if (controller?.isCommandEnabled(command)) {
+      controller.doCommand(command);
+    }
+    return true;
+  }
+
   #takeReservedKey(window, event) {
     const browser = event.target;
     if (
       !event.isTrusted ||
       !ZendiaOptions.enabled ||
       browser?.localName != "browser" ||
-      !window.gBrowser.getTabForBrowser(browser)
+      !(
+        window.gBrowser.getTabForBrowser(browser) ||
+        this.webChatDockFor(window)?.isShowing(browser)
+      )
     ) {
       return;
     }

@@ -229,6 +229,7 @@ async function collectFrames(actor, window) {
           slider: item.slider === true,
           track: isRectData(item.track) ? fromFrame(box, item.track) : null,
           canvas: item.canvas === true,
+          field: item.field === true,
           purpose: ZendiaCaptcha.PURPOSES.includes(item.purpose)
             ? item.purpose
             : null,
@@ -290,6 +291,7 @@ export async function collectControls(actor, window) {
       id,
       text: ZendiaControls.textOf(element),
       rect: { left, top, width, height },
+      field: ZendiaControls.isField(element),
       // Part of a CAPTCHA the page draws itself, and what to drag.
       captcha: inPageCaptcha(element, own),
       drag: ZendiaControls.isDraggable(window, element),
@@ -451,7 +453,13 @@ function isUncovered(window, element, rect) {
 // The controls of the page, or with `scope`:
 //   "challenge" just those of a CAPTCHA that asks for clicks,
 //   "captcha" those of any part of a CAPTCHA, a checkbox and a badge too.
-async function controlsSource(window, actor, { scope = "all" } = {}) {
+// The fields to type in are kept with `fields` "include", left out with
+// "exclude" (`s`, as `i` picks them) or the only ones with "only" (`i`).
+async function controlsSource(
+  window,
+  actor,
+  { scope = "all", fields = "include" } = {}
+) {
   const from = center(window);
   const own = ownCaptchas(window);
   // What is part of a CAPTCHA stays labeled between picks, can be held and
@@ -459,7 +467,11 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
   const controls = ZendiaControls.find(window);
   const local = controls.flatMap(element => {
     const inCaptcha = inPageCaptcha(element, own);
-    if (scope != "all" && !inCaptcha) {
+    if (
+      (scope != "all" && !inCaptcha) ||
+      (fields != "include" &&
+        ZendiaControls.isField(element) != (fields == "only"))
+    ) {
       return [];
     }
     let rect = element.getBoundingClientRect();
@@ -489,7 +501,7 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
       },
     ];
   });
-  if (scope != "all") {
+  if (scope != "all" && fields != "only") {
     // The pictures of the CAPTCHA that nothing listens to: one a site makes
     // itself to click on or turn, a canvas a widget draws in. Their label
     // brings the cursor over them.
@@ -520,6 +532,9 @@ async function controlsSource(window, actor, { scope = "all" } = {}) {
   }
   const remote = (await collectFrames(actor, window))
     .filter(item => {
+      if (fields != "include" && item.field != (fields == "only")) {
+        return false;
+      }
       if (scope == "all") {
         return !item.canvas;
       }
@@ -794,11 +809,19 @@ function pressElement(
     // The keys asked for it: it is insert mode, not focus a page stole.
     actor?.setMode("i");
     element.focus();
+    try {
+      // Continue typing after what is there, as `A` would in vim.
+      const end = element.value?.length;
+      if (end !== undefined) {
+        element.setSelectionRange(end, end);
+      }
+    } catch {
+      // Some input types (email, number) have no selection.
+    }
     return true;
   }
-  const rect = element.getBoundingClientRect();
-  const x = rect.left + rect.width / 2;
-  const y = rect.top + rect.height / 2;
+  // Where it is on top: the middle of its box may be another control's.
+  const { x, y } = ZendiaControls.pointOf(window, element);
   // The mouse input a user's would be, for the handlers that listen to
   // mousedown rather than click.
   const modifiers = newTab ? Ci.nsIDOMWindowUtils.MODIFIER_CONTROL : 0;
@@ -1688,30 +1711,30 @@ async function begin(actor, window, makeSource, options) {
 }
 
 /**
- * A label on each of some elements of this window, to choose one with the keys.
+ * The fields of the page in the window, its frames' too, for `i`: each
+ * picked takes the focus, in insert mode.
  *
  * @param {object} actor
  * @param {Window} window
- * @param {() => Element[]} find The elements, read again as the page scrolls.
- * @param {(element: Element) => void} pick
- * @returns {Promise<void>}
+ * @returns {Promise<object[]>}
  */
-export function labelElements(actor, window, find, pick) {
-  const makeSource = () => {
-    const from = center(window);
-    const targets = find().map(element => {
-      const rect = element.getBoundingClientRect();
-      return {
-        id: element,
-        rect,
-        nexts: [],
-        distance: distance(rect, from),
-        pick: () => pick(element),
-      };
-    });
-    return { isText: false, matches: () => targets };
-  };
-  return begin(actor, window, makeSource, { hints: true });
+export async function fieldTargets(actor, window) {
+  return (await controlsSource(window, actor, { fields: "only" })).matches("");
+}
+
+/**
+ * Label the fields of the page, its frames' too, to pick one to type in.
+ *
+ * @param {object} actor
+ * @param {Window} window
+ */
+export function labelFields(actor, window) {
+  return begin(
+    actor,
+    window,
+    () => controlsSource(window, actor, { fields: "only" }),
+    { hints: true }
+  );
 }
 
 // Labels for the controls of the whole page, frames included. They are
@@ -1741,9 +1764,13 @@ const labelControls =
       focused.blur();
       window.focus();
     }
-    const { stayInChallenges, captcha, ...rest } = options ?? {};
+    const { stayInChallenges, captcha, skipFields, ...rest } = options ?? {};
     const makeSource = () =>
-      controlsSource(window, actor, { scope: captcha ? "captcha" : "all" });
+      controlsSource(window, actor, {
+        scope: captcha ? "captcha" : "all",
+        // An agent's labels keep them: it has no `i` to reach a field with.
+        fields: skipFields && !agentDriven ? "exclude" : "include",
+      });
     const source = await makeSource();
     if (captcha && !source.matches("").length) {
       // Nothing to label: a picture drawn in a canvas, say, or a button to
@@ -1841,11 +1868,13 @@ export const actions = {
   // Type some of a control's text, then its label.
   "jump.controls": labelControls("jump.controls"),
 
-  // Every control labeled at once. In a CAPTCHA challenge the labels stay for
-  // each image to be picked, and for the button that checks them.
+  // Every control labeled at once, but for the fields, which `i` picks. In a
+  // CAPTCHA challenge the labels stay for each image to be picked, and for
+  // the button that checks them.
   "jump.hints": labelControls("jump.hints", {
     hints: true,
     stayInChallenges: true,
+    skipFields: true,
   }),
 
   // Only the CAPTCHAs of the page, for solving one with the keys alone: its
