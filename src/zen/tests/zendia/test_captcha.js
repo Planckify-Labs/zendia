@@ -442,3 +442,50 @@ add_task(function test_a_sites_own_reset_and_check_buttons() {
   Assert.equal(purpose("Rotate left"), null);
   Assert.ok(ZendiaCaptcha.isTokenField("lemin_answer"), "Lemin's answer");
 });
+
+add_task(function test_the_state_that_asks_most_wins() {
+  Assert.equal(ZendiaCaptcha.stronger("solved", "unchecked"), "unchecked");
+  Assert.equal(ZendiaCaptcha.stronger("open", "unchecked"), "open");
+  Assert.equal(
+    ZendiaCaptcha.stronger("checking", "solved"),
+    "checking",
+    "a check still running holds the page up over another one passed"
+  );
+  Assert.equal(ZendiaCaptcha.stronger("none", "solved"), "solved");
+  Assert.equal(
+    ZendiaCaptcha.stronger("bogus", "none"),
+    "none",
+    "an unknown state counts for nothing"
+  );
+});
+
+add_task(function test_what_each_state_asks_of_the_user() {
+  for (const state of ["open", "unchecked", "failed", "shown"]) {
+    Assert.ok(ZendiaCaptcha.asksUser(state), `${state} asks the user`);
+    Assert.ok(ZendiaCaptcha.holdsUp(state), `${state} holds the page up`);
+    Assert.ok(!ZendiaCaptcha.isCleared(state), `${state} is not cleared`);
+  }
+  Assert.ok(!ZendiaCaptcha.asksUser("checking"), "a running check asks none");
+  Assert.ok(ZendiaCaptcha.holdsUp("checking"), "but holds the page up");
+  for (const state of ["solved", "none"]) {
+    Assert.ok(!ZendiaCaptcha.holdsUp(state), `${state} holds nothing up`);
+    Assert.ok(ZendiaCaptcha.isCleared(state), `${state} is cleared`);
+  }
+});
+
+add_task(function test_a_widgets_success_mark() {
+  Assert.ok(
+    ZendiaCaptcha.marksSolved({ classes: ["geetest_lock_success"] }),
+    "GeeTest's lock"
+  );
+  Assert.ok(
+    ZendiaCaptcha.marksSolved({ classes: ["frc-captcha", "frc-success"] }),
+    "Friendly Captcha's"
+  );
+  Assert.ok(ZendiaCaptcha.marksSolved({ state: "verified" }), "a state");
+  Assert.ok(
+    !ZendiaCaptcha.marksSolved({ classes: ["success-message-box-wrapper"] }),
+    "a word inside a name is no mark"
+  );
+  Assert.ok(!ZendiaCaptcha.marksSolved(), "nothing is no mark");
+});

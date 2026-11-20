@@ -8,15 +8,18 @@ EXTRA_JS_MODULES.zendia += [
 
 EXTRA_JS_MODULES.zendia.agent += [
     "agent/ZendiaAgentDetect.sys.mjs",
+    "agent/ZendiaAgentHandoff.sys.mjs",
     "agent/ZendiaAgentHarness.sys.mjs",
     "agent/ZendiaAgentIcons.sys.mjs",
     "agent/ZendiaAgentInstructions.sys.mjs",
     "agent/ZendiaAgentLog.sys.mjs",
+    "agent/ZendiaAgentLoop.sys.mjs",
     "agent/ZendiaAgentNetwork.sys.mjs",
     "agent/ZendiaAgents.sys.mjs",
     "agent/ZendiaAgentServer.sys.mjs",
     "agent/ZendiaAgentTools.sys.mjs",
     "agent/ZendiaAgentUi.sys.mjs",
+    "agent/ZendiaAgentWork.sys.mjs",
 ]
 
 EXTRA_JS_MODULES.zendia.actors += [

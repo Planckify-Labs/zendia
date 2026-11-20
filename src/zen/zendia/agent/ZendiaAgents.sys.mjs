@@ -19,6 +19,7 @@ import { ZendiaAgentInstructions } from "resource:///modules/zendia/agent/Zendia
 import { ZendiaAgentLog } from "resource:///modules/zendia/agent/ZendiaAgentLog.sys.mjs";
 import { ZendiaNetworkLog } from "resource:///modules/zendia/agent/ZendiaAgentNetwork.sys.mjs";
 import { ZendiaAgentServer } from "resource:///modules/zendia/agent/ZendiaAgentServer.sys.mjs";
+import { ZendiaWorkList } from "resource:///modules/zendia/agent/ZendiaAgentWork.sys.mjs";
 import {
   pageHeight,
   partialFields,
@@ -117,6 +118,18 @@ export class ZendiaAgentConversation {
   unseen = false;
   /** @type {ZendiaAgentLog|null} The trace of this conversation. */
   log = null;
+  /**
+   * @type {ZendiaWorkList|null} The work list the agent wrote for a request
+   *   that asks for many of something, which ZendiaAgentLoop keeps it on.
+   */
+  work = null;
+  /**
+   * How the last turn ended, for ZendiaAgentLoop: {isolated, byUser,
+   * error}. byUser is a request the user typed, not one the browser sent.
+   *
+   * @type {{isolated: boolean, byUser: boolean, error: string|null}|null}
+   */
+  lastTurn = null;
 
   #turns = 0;
   #uiCount = 0;
@@ -242,6 +255,12 @@ export class ZendiaAgentConversation {
     }
     // A new turn starts: whatever stopped the last one is history.
     this.#userStopped = false;
+    const byUser = echo == null && !isolated;
+    // Set again once the turn ends; a turn that never starts leaves none.
+    this.lastTurn = null;
+    if (this.work && !isolated) {
+      this.work.touched = false;
+    }
     const driver = ZENDIA_DRIVERS[this.agent.id];
     this.#push(
       echo != null
@@ -296,6 +315,7 @@ export class ZendiaAgentConversation {
           opened: this.opened,
           onUi: ui => this.#onUi(ui),
           network: this.#service.recordNetwork(),
+          onWork: (name, args) => this.#onWork(name, args, text),
         });
     const token = ZendiaAgentServer.open(toolbox);
     // The effort and window depend on the model's entry in the list, which
@@ -411,6 +431,7 @@ export class ZendiaAgentConversation {
     this.messages = this.messages.filter(
       message => !(message.type == "ui" && message.status == "draft")
     );
+    this.lastTurn = { isolated, byUser, error: error ?? null };
     this.run = null;
     this.unseen = true;
     this.#service.setDriving(this, false);
@@ -507,6 +528,44 @@ export class ZendiaAgentConversation {
     message.status = step.status;
     message.detail = step.detail;
     this.changed();
+  }
+
+  // The agent's work_plan and work_update calls. The list's table in the
+  // panel is redrawn in place on every change.
+  #onWork(name, args, request) {
+    if (name == "work_plan") {
+      if (args.append && this.work) {
+        this.work.add(args.items);
+      } else {
+        const userRequest =
+          this.messages.findLast(message => message.type == "user")?.text ??
+          request;
+        this.work = new ZendiaWorkList({
+          goal: args.goal || userRequest,
+          items: args.items,
+          doneWhen: args.done_when,
+          request: userRequest,
+        });
+      }
+    } else {
+      if (!this.work) {
+        throw new Error("There is no work list yet: call work_plan first.");
+      }
+      this.work.update(args);
+    }
+    this.work.touched = true;
+    this.#onUi(this.work.table());
+    return this.work.reply();
+  }
+
+  /**
+   * A line of the browser's in the panel, from outside a turn: the CAPTCHA
+   * subagent's word that a challenge passed by itself.
+   *
+   * @param {string} text
+   */
+  note(text) {
+    this.#push({ type: "note", text });
   }
 
   /**

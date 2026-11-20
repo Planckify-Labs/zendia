@@ -11,3 +11,7 @@ category browser-idle-startup resource:///modules/zendia/ublock/ZendiaUblock.sys
 category browser-idle-startup resource:///modules/zendia/captcha/ZendiaCaptchaWatch.sys.mjs ZendiaCaptchaWatch.init
 
 category browser-idle-startup resource:///modules/zendia/captcha/ZendiaCaptchaAgent.sys.mjs ZendiaCaptchaAgent.init
+
+category browser-idle-startup resource:///modules/zendia/agent/ZendiaAgentHandoff.sys.mjs ZendiaAgentHandoff.init
+
+category browser-idle-startup resource:///modules/zendia/agent/ZendiaAgentLoop.sys.mjs ZendiaAgentLoop.init

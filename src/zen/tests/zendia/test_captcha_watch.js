@@ -158,3 +158,99 @@ add_task(function test_what_a_page_sends_is_checked() {
     "and one without findings",
   );
 });
+
+add_task(function test_the_tab_takes_the_state_that_asks_most() {
+  const browser = {};
+  // The page sees a widget; its checkbox frame says the box is not ticked.
+  ZendiaCaptchaWatch.report(browser, {
+    url: "https://shop.example/login",
+    frame: 0,
+    top: true,
+    detections: [
+      { signal: "frame", name: "reCAPTCHA", kind: "checkbox", detail: "a" },
+    ],
+    state: { state: "none" },
+  });
+  const record = ZendiaCaptchaWatch.report(browser, {
+    url: "https://www.google.com/recaptcha/api2/anchor",
+    frame: 3,
+    top: false,
+    detections: [],
+    state: {
+      state: "unchecked",
+      name: "reCAPTCHA",
+      how: "reCAPTCHA's checkbox is not ticked",
+    },
+  });
+  Assert.equal(record.state, "unchecked", "the frame's state is the tab's");
+  Assert.equal(record.how, "reCAPTCHA's checkbox is not ticked");
+  Assert.equal(
+    record.url,
+    "https://shop.example/login",
+    "a frame with only a state does not name the tab"
+  );
+});
+
+add_task(function test_a_change_of_state_is_announced_live() {
+  const browser = {};
+  const heard = [];
+  const off = ZendiaCaptchaWatch.onDetect((tab, record) => {
+    if (tab == browser) {
+      heard.push(record.state);
+    }
+  });
+  const page = state => ({
+    url: "https://shop.example/",
+    frame: 0,
+    top: true,
+    detections: [{ signal: "widget", detail: "1" }],
+    state,
+  });
+  try {
+    ZendiaCaptchaWatch.report(browser, page({ state: "unchecked" }));
+    ZendiaCaptchaWatch.report(browser, page({ state: "unchecked" }));
+    ZendiaCaptchaWatch.report(browser, page({ state: "solved" }));
+    // Expired: it asks again on the same page, with no reload.
+    ZendiaCaptchaWatch.report(browser, page({ state: "unchecked" }));
+    // The page takes the widget down.
+    ZendiaCaptchaWatch.report(browser, { ...page(), detections: [] });
+  } finally {
+    off();
+  }
+  Assert.deepEqual(
+    heard,
+    ["unchecked", "solved", "unchecked", "none"],
+    "each change is told once, and so is the CAPTCHA going"
+  );
+  Assert.equal(ZendiaCaptchaWatch.lastFor(browser), null);
+});
+
+add_task(function test_a_state_a_page_sends_is_checked() {
+  const record = ZendiaCaptchaWatch.report(
+    {},
+    {
+      url: "https://x",
+      detections: [{ signal: "widget", detail: "1" }],
+      state: { state: "pwned", how: "x".repeat(1000) },
+    }
+  );
+  Assert.equal(record.state, "none", "an unknown state is none");
+  Assert.equal(
+    ZendiaCaptchaWatch.report(
+      {},
+      { url: "https://x", detections: [], state: { state: "none" } }
+    ),
+    null,
+    "a report of nothing is kept out"
+  );
+  const kept = ZendiaCaptchaWatch.report(
+    {},
+    {
+      url: "https://x",
+      detections: [],
+      state: { state: "solved", how: "y".repeat(1000) },
+    }
+  );
+  Assert.equal(kept.state, "solved", "a state alone is kept");
+  Assert.ok(kept.how.length <= 160, "and what it says is cut short");
+});

@@ -13,6 +13,8 @@ firefox-appdir = "browser"
 
 ["test_agent_ui.js"]
 
+["test_agent_work.js"]
+
 ["test_captcha.js"]
 
 ["test_captcha_boundary.js"]

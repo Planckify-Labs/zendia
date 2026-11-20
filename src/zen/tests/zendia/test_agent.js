@@ -1490,7 +1490,7 @@ add_task(function test_observation_text_reads_frames_and_hands_over_captchas() {
       "Card number",
       "",
       "Frame f9 at 0,0 400x500: https://www.google.com/recaptcha/api2/bframe",
-      "This is a reCAPTCHA challenge, a check made for the user. Do not click in it or try to solve it. Tell the user to complete it, then observe again.",
+      "This is a reCAPTCHA challenge, a check made for the user. Do not click in it or try to solve it. Tell the user to complete it and end your turn: you are told to carry on once it is cleared.",
       "",
       "Frame f8 at 0,700 300x100: https://ads.example/",
       "(could not be read)",

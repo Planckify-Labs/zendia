@@ -17,6 +17,7 @@ import {
   readEntry,
   replayOf,
 } from "resource:///modules/zendia/agent/ZendiaAgentNetwork.sys.mjs";
+import { workToolDefinitions } from "resource:///modules/zendia/agent/ZendiaAgentWork.sys.mjs";
 import { ZendiaCaptcha } from "resource:///modules/zendia/core/ZendiaCaptcha.sys.mjs";
 import {
   pageFromArgs,
@@ -182,7 +183,7 @@ function frameLines(page) {
     const captcha = captchaOf(url);
     if (captcha) {
       lines.push(
-        `This is a ${captcha} challenge, a check made for the user. Do not click in it or try to solve it. Tell the user to complete it, then observe again.`
+        `This is a ${captcha} challenge, a check made for the user. Do not click in it or try to solve it. Tell the user to complete it and end your turn: you are told to carry on once it is cleared.`
       );
     } else if (frame.skipped) {
       lines.push("(not read: too many frames)");
@@ -575,6 +576,7 @@ export function toolDefinitions(registry) {
       },
     },
     ...uiToolDefinitions(),
+    ...workToolDefinitions(),
   ];
 }
 
@@ -757,6 +759,9 @@ export class ZendiaAgentToolbox {
    *   the panel; returns its id. Without it the ui tools refuse.
    * @param {object} [options.network] The ZendiaNetworkLog recording
    *   the tabs' requests. Without it the network tools say they are off.
+   * @param {(name: string, args: object) => string} [options.onWork] The
+   *   conversation's work list (work_plan, work_update); returns what the
+   *   agent reads. Without it the work tools refuse.
    */
   constructor({
     zendia,
@@ -768,6 +773,7 @@ export class ZendiaAgentToolbox {
     opened = new WeakSet(),
     onUi = null,
     network = null,
+    onWork = null,
   }) {
     this.zendia = zendia;
     this.browser = browser;
@@ -778,6 +784,7 @@ export class ZendiaAgentToolbox {
     this.opened = opened;
     this.onUi = onUi;
     this.network = network;
+    this.onWork = onWork;
     this.window = browser()?.documentGlobal;
   }
 
@@ -863,6 +870,12 @@ export class ZendiaAgentToolbox {
       case "ui_table":
       case "ui_show":
         return this.#showUi(name, args);
+      case "work_plan":
+      case "work_update":
+        if (!this.onWork) {
+          throw new Error("There is no work list in this conversation.");
+        }
+        return { text: this.onWork(name, args) };
       case "ui_guide":
         return { text: uiGuide(args.topic) };
     }

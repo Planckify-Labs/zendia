@@ -446,6 +446,34 @@ const ANSWER_TYPES = new Set([
   "url",
 ]);
 
+// Where a CAPTCHA is at for the user, read live from the page, the one
+// that asks most first, so the states of a tab's frames merge into the
+// strongest:
+//   open       a challenge is up to solve (a grid, a puzzle, a text)
+//   unchecked  a checkbox waits to be ticked ("I'm not a robot")
+//   failed     a managed check failed or expired: it wants a new try
+//   shown      a CAPTCHA is shown whose state the layer cannot read
+//   checking   a check runs on its own (Turnstile's spinner)
+//   solved     passed: a ticked box, a filled answer field, a success mark
+//   none       no CAPTCHA on the page
+const STATES = [
+  "open",
+  "unchecked",
+  "failed",
+  "shown",
+  "checking",
+  "solved",
+  "none",
+];
+// The states that need the user's hand, and those that hold the page up.
+const ASKING = new Set(["open", "unchecked", "failed", "shown"]);
+const HOLDING = new Set([...ASKING, "checking"]);
+
+// A widget's mark of a check passed: GeeTest's geetest_lock_success and
+// geetest_radar_success, Friendly Captcha's frc-success, a "verified" state.
+const SOLVED_CLASS = /(?:^|[_-])(?:success|verified|solved|passed)$/i;
+const SOLVED_MARKS = `:is(${WIDGETS}):is([class*=success], [class*=verified], [class*=solved], [class*=passed], [data-state=verified])`;
+
 // The service a frame address is a CAPTCHA's, if any; and the loader a
 // script address is. Neither on a service's own website.
 function serviceOf(url) {
@@ -467,6 +495,59 @@ export const ZendiaCaptcha = {
   NAMES,
   WIDGETS,
   NOT_OPENED,
+  STATES,
+  SOLVED_MARKS,
+
+  /**
+   * @param {string} a A state, one of STATES.
+   * @param {string} b Another.
+   * @returns {string} The one that asks more of the user; an unknown one
+   *   counts as none.
+   */
+  stronger(a, b) {
+    const rank = state => {
+      const index = STATES.indexOf(state);
+      return index < 0 ? STATES.length : index;
+    };
+    return rank(b) < rank(a) ? b : a;
+  },
+
+  /**
+   * @param {string} state
+   * @returns {boolean} Whether the user must act on it: solve, tick, retry.
+   */
+  asksUser(state) {
+    return ASKING.has(state);
+  },
+
+  /**
+   * @param {string} state
+   * @returns {boolean} Whether the page is not through it yet: it asks the
+   *   user, or still checks on its own.
+   */
+  holdsUp(state) {
+    return HOLDING.has(state);
+  },
+
+  /**
+   * @param {string} state
+   * @returns {boolean} Whether the page is through it: passed, or gone.
+   */
+  isCleared(state) {
+    return state == "solved" || state == "none";
+  },
+
+  /**
+   * Whether a widget's classes or state say its check was passed.
+   *
+   * @param {{classes?: Iterable<string>, state?: string}} widget
+   * @returns {boolean}
+   */
+  marksSolved({ classes = [], state = "" } = {}) {
+    return (
+      state == "verified" || [...classes].some(name => SOLVED_CLASS.test(name))
+    );
+  },
   PROMPT_WORDS,
   PROMPT_MAX,
 

@@ -1162,17 +1162,7 @@ function pageCheckbox(window, peek) {
   // A service's challenge already open in the page (GeeTest's popup over
   // its button) is not clicked open again: a second click could close or
   // renew it.
-  const view = window.innerWidth * window.innerHeight;
-  const open = widgetsOf(window, true).some((widget) => {
-    const { width, height } = widget.getBoundingClientRect();
-    return (
-      width >= OPEN_SIDE &&
-      height >= OPEN_SIDE &&
-      width * height < view * MOSTLY_VIEW &&
-      isShown(window, widget)
-    );
-  });
-  if (open) {
+  if (openWidget(window)) {
     return null;
   }
   const roots = [
@@ -1209,6 +1199,197 @@ function pageCheckbox(window, peek) {
     return { opened: true, name };
   }
   return null;
+}
+
+// A service's widget drawn in the page whose challenge is open: a popup
+// the size of one (GeeTest's over its button), not a mask over the whole
+// page.
+function openWidget(window) {
+  const view = window.innerWidth * window.innerHeight;
+  return (
+    widgetsOf(window, true).find((widget) => {
+      const { width, height } = widget.getBoundingClientRect();
+      return (
+        width >= OPEN_SIDE &&
+        height >= OPEN_SIDE &&
+        width * height < view * MOSTLY_VIEW &&
+        isShown(window, widget)
+      );
+    }) ?? null
+  );
+}
+
+// Whether a frame of the page sits inside an element, its shadow roots
+// included: Turnstile draws its frame in a closed one.
+function holdsFrame(element, frames) {
+  return frames.some((frame) => {
+    for (let node = frame; node; node = node.parentNode ?? node.host) {
+      if (node == element) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+// The kinds of a service's frame that say nothing of their state to the
+// page: a checkbox or managed widget reads its own from inside
+// (frameState), the others run without the user.
+const SELF_READ_KINDS = new Set([
+  "checkbox",
+  "managed",
+  "proof-of-work",
+  "score",
+  "invisible",
+]);
+
+// The state of a service's checkbox frame, read from inside: its box
+// ticked or not, a managed widget's words, or its spinner. A challenge
+// frame cannot see whether it is shown: the page above says that.
+function frameState(window) {
+  const url = window.document.documentURI ?? "";
+  const name = ZendiaCaptcha.nameOf(url);
+  if (ZendiaCaptcha.isChallenge(url)) {
+    return { state: "none" };
+  }
+  const answer = frameCheckbox(window, true);
+  if (answer?.passed) {
+    return { state: "solved", name, how: `${name} says the check passed` };
+  }
+  if (answer?.done) {
+    return {
+      state: "failed",
+      name,
+      how: `${name} says the check failed or expired`,
+    };
+  }
+  if (answer?.checkbox) {
+    return { state: "unchecked", name, how: `${name}'s checkbox is not ticked` };
+  }
+  // A managed widget with neither words nor a box is still checking, unless
+  // it is drawn nowhere: an invisible mode's helper never says more.
+  if (
+    ZendiaCaptcha.kindOf(url) == "managed" &&
+    window.innerWidth >= MIN_SIDE &&
+    window.innerHeight >= MIN_SIDE
+  ) {
+    return { state: "checking", name, how: `${name} is checking on its own` };
+  }
+  return { state: "none" };
+}
+
+// The state of the CAPTCHAs a page shows: the challenges up in it, its
+// checkboxes, and the answers solved ones left behind.
+function pageState(window) {
+  const document = window.document;
+  let best = { state: "none" };
+  const take = (reading) => {
+    if (
+      reading.state != best.state &&
+      ZendiaCaptcha.stronger(best.state, reading.state) == reading.state
+    ) {
+      best = reading;
+    }
+  };
+  const frames = framesOf(window);
+  for (const frame of frames) {
+    const src = srcOf(frame);
+    const name = src && ZendiaCaptcha.nameOf(src);
+    if (!name || !isShown(window, frame)) {
+      continue;
+    }
+    if (ZendiaCaptcha.isChallenge(src)) {
+      take({ state: "open", name, how: `${name}'s challenge is open` });
+    } else if (!SELF_READ_KINDS.has(ZendiaCaptcha.kindOf(src))) {
+      take({ state: "shown", name, how: `${name} is shown` });
+    }
+  }
+  const own = ownChallenges(window);
+  for (const { kind, prompt } of own) {
+    if (kind != "checkbox") {
+      take({
+        state: "open",
+        name: "page",
+        how: `the page's challenge "${prompt.slice(0, 80)}" is shown`,
+      });
+    }
+  }
+  const popup = openWidget(window);
+  if (popup && !holdsFrame(popup, frames)) {
+    take({ state: "open", name: "widget", how: "a CAPTCHA's popup is open" });
+  }
+  const checkbox = pageCheckbox(window, true);
+  if (checkbox?.checkbox) {
+    take({
+      state: "unchecked",
+      name: "page",
+      how: "its checkbox is not ticked",
+    });
+  } else if (checkbox?.passed) {
+    take({ state: "solved", name: "page", how: "its checkbox is ticked" });
+  }
+  for (const field of document.querySelectorAll(
+    "input[name], textarea[name]",
+  )) {
+    if (field.value && ZendiaCaptcha.isTokenField(field.name)) {
+      take({
+        state: "solved",
+        how: `its answer field ${field.name.slice(0, 64)} is filled`,
+      });
+    }
+  }
+  const marked = [];
+  for (const widget of document.querySelectorAll(ZendiaCaptcha.SOLVED_MARKS)) {
+    if (
+      ZendiaCaptcha.marksSolved({
+        classes: widget.classList,
+        state: widget.dataset.state,
+      }) &&
+      widget.checkVisibility()
+    ) {
+      marked.push(widget);
+      take({ state: "solved", how: "its widget shows the success mark" });
+    }
+  }
+  // Read nothing else: a widget of the page shown with no frame of its own
+  // and no mark of a pass, or a checkbox challenge with no box to read,
+  // still asks the user as far as the page tells.
+  if (best.state == "none") {
+    const shown = widgetsOf(window).some(
+      (widget) =>
+        isShown(window, widget) &&
+        !holdsFrame(widget, frames) &&
+        !marked.some((mark) => widget.contains(mark) || mark.contains(widget)),
+    );
+    if (shown || own.length) {
+      take({ state: "shown", name: "page", how: "a CAPTCHA is shown" });
+    }
+  }
+  return best;
+}
+
+/**
+ * Where the CAPTCHAs of this document are at now, read live: whether one
+ * asks the user (a challenge open, a box to tick), runs on its own, or is
+ * solved. The watch reports it again whenever it changes, so whoever
+ * follows the tab hears of a pass or a new ask without a reload. A
+ * service's checkbox frame reads its own box or managed widget from
+ * inside; a page reads what it shows and the answers solved ones left.
+ *
+ * @param {Window} window
+ * @returns {{state: string, name?: string, how?: string}} `state` is one
+ *   of ZendiaCaptcha.STATES; `how` says it in a few words.
+ */
+export function captchaState(window) {
+  try {
+    if (!window.document?.documentElement) {
+      return { state: "none" };
+    }
+    return isCaptchaFrame(window) ? frameState(window) : pageState(window);
+  } catch {
+    // A window going away, or a page's element that breaks a read.
+    return { state: "none" };
+  }
 }
 
 /**
@@ -1799,9 +1980,25 @@ const RESHOW_DELAY_MS = 1000;
 // Looks again after a page is shown, for what is drawn where no change is
 // seen: a widget in a shadow root.
 const LATE_LOOKS_MS = [1500, 4000];
+// How often a page with a CAPTCHA reads its state again, for what changes
+// with no change the observer sees: words in a closed shadow root
+// (Turnstile's "Success!"), an answer field a script fills.
+const STATE_POLL_MS = 1500;
 
 const WATCHED = new Set(["iframe", "frame", "script", "input", "textarea"]);
-const SHOWN_BY = ["style", "class", "hidden", "open", "aria-hidden"];
+// And a checkbox ticked, or a widget's state: the CAPTCHA's state changed.
+const SHOWN_BY = [
+  "style",
+  "class",
+  "hidden",
+  "open",
+  "aria-hidden",
+  "aria-checked",
+  "data-state",
+];
+
+// What a report of a page with no CAPTCHA would carry.
+const NOTHING = JSON.stringify([[], { state: "none" }]);
 
 // Whether a change to the page could have brought a CAPTCHA with it.
 function bringsCaptcha(records) {
@@ -1833,9 +2030,12 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
   #timer = null;
   #reshowTimer = null;
   #lateTimers = [];
+  #stateTimer = null;
   // What was last reported, so a look that finds the same says nothing,
   // and one that finds the CAPTCHA gone says so.
-  #sent = "[]";
+  #sent = NOTHING;
+  // The state last reported, for the poll to tell a change by.
+  #state = "";
 
   handleEvent(event) {
     switch (event.type) {
@@ -1845,7 +2045,8 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
         break;
       case "pagehide":
         this.#unwatch();
-        this.#sent = "[]";
+        this.#sent = NOTHING;
+        this.#state = "";
         this.sendAsyncMessage("Zendia:CaptchaWatch:Gone");
         break;
     }
@@ -1873,6 +2074,9 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
     if (message.name == "Zendia:CaptchaWatch:Drawn") {
       return challengeDrawn(this.contentWindow, message.data?.any === true);
     }
+    if (message.name == "Zendia:CaptchaWatch:State") {
+      return captchaState(this.contentWindow);
+    }
     return undefined;
   }
 
@@ -1885,14 +2089,19 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
       return;
     }
     const detections = scanPage(this.contentWindow);
-    const sent = JSON.stringify(detections);
-    if (force ? detections.length : sent != this.#sent) {
+    const state = captchaState(this.contentWindow);
+    const found = detections.length || state.state != "none";
+    const sent = JSON.stringify([detections, state]);
+    if (force ? found : sent != this.#sent) {
       this.sendAsyncMessage("Zendia:CaptchaWatch:Report", {
         url: this.document.documentURI,
         detections,
+        state,
       });
     }
     this.#sent = sent;
+    this.#state = JSON.stringify(state);
+    this.#followState(found);
     // A dev-only audit of coverage: every frame and script the page holds,
     // so what the layer does not yet name can be seen next to what it does.
     if (
@@ -1938,6 +2147,29 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
     );
   }
 
+  // While the page holds a CAPTCHA, its state is read again now and then,
+  // and the page looked at again when it changed: a pass, an expiry or a
+  // new ask is reported as it happens, with no reload.
+  #followState(found) {
+    const window = this.contentWindow;
+    if (!found || !window) {
+      window?.clearInterval(this.#stateTimer);
+      this.#stateTimer = null;
+      return;
+    }
+    if (this.#stateTimer) {
+      return;
+    }
+    this.#stateTimer = window.setInterval(() => {
+      if (
+        this.document &&
+        JSON.stringify(captchaState(this.contentWindow)) != this.#state
+      ) {
+        this.#scan();
+      }
+    }, STATE_POLL_MS);
+  }
+
   #unwatch() {
     this.#observer?.disconnect();
     this.#observer = null;
@@ -1945,6 +2177,7 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
       const window = this.contentWindow;
       window?.clearTimeout(this.#timer);
       window?.clearTimeout(this.#reshowTimer);
+      window?.clearInterval(this.#stateTimer);
       for (const timer of this.#lateTimers) {
         window?.clearTimeout(timer);
       }
@@ -1953,6 +2186,7 @@ export class ZendiaCaptchaWatchChild extends JSWindowActorChild {
     }
     this.#timer = null;
     this.#reshowTimer = null;
+    this.#stateTimer = null;
     this.#lateTimers = [];
   }
 }
