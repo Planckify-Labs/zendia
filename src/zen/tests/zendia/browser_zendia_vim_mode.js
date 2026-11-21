@@ -235,24 +235,29 @@ add_task(
     );
     Assert.equal(indicator.getAttribute("mode"), "n", "It is in NORMAL mode");
     Assert.equal(
-      indicator.querySelector(".zendia-statusline-mode").textContent,
+      indicator.getAttribute("aria-label"),
       "NORMAL",
-      "and says so on its tag"
+      "and names it for screen readers"
+    );
+    ok(
+      !indicator.querySelector(".zendia-statusline-mode"),
+      "with no tag of text: the mascot alone shows the mode"
     );
     const mascot = indicator.querySelector("svg.zendia-mascot");
-    Assert.greater(
-      mascot.querySelectorAll("polygon").length,
-      8,
-      "The mascot is drawn"
+    Assert.equal(
+      mascot.querySelectorAll("path").length,
+      12,
+      "The ring has an arc for each mode, each over its ink edge"
     );
-    const tag = indicator
-      .querySelector(".zendia-statusline-mode")
-      .getBoundingClientRect();
-    Assert.greater(tag.width, 40, "The tag with the mode's name can be read");
+    Assert.greater(
+      mascot.querySelectorAll("polygon, polyline").length,
+      5,
+      "The mascot and its face are drawn"
+    );
     Assert.greater(
       mascot.getBoundingClientRect().width,
-      60,
-      "The mascot is larger than the chip it replaced"
+      20,
+      "The mascot can be seen"
     );
   }
 );

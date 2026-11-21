@@ -47,9 +47,6 @@ const VIM_KEYS = [
   ["Esc", "zendia-welcome-key-escape"],
 ];
 
-// Zendia's pink, the color of NORMAL mode: the mascot's while it guides.
-const MASCOT_COLOR = "#fca7ea";
-
 /** What an async call of the host returned, or null while it runs. */
 function useHostData(load) {
   const [data, setData] = useState(null);
@@ -480,7 +477,7 @@ export function App({ host, dev = {} }) {
 
           <section id="zen-welcome-deck" ref={deck}>
             <div className="zen-welcome-guide">
-              <Mascot pose={chapter.pose} color={MASCOT_COLOR} />
+              <Mascot pose={chapter.pose} still={still} />
               <div className="zen-welcome-text" key={chapter.id}>
                 <T as="h1" id={`zendia-welcome-${chapter.id}-title`} />
                 <T as="p" id={`zendia-welcome-${chapter.id}-description`} />

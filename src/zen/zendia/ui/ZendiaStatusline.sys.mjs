@@ -3,9 +3,14 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import {
-  MASCOT_SIZE,
-  mascotColors,
-  mascotShapes,
+  MASCOT_COLORS,
+  MASCOT_EDGE,
+  MASCOT_FACE,
+  MASCOT_MODES,
+  MASCOT_STROKES,
+  MASCOT_VIEWBOX,
+  mascotFrame,
+  mixColor,
 } from "resource:///modules/zendia/ui/ZendiaMascot.sys.mjs";
 import { ZendiaTheme } from "resource:///modules/zendia/ui/ZendiaTheme.sys.mjs";
 
@@ -23,6 +28,9 @@ const MODES = {
   l: "LIBRARY",
 };
 
+// How long a switch from one mode to another takes, in milliseconds.
+const MORPH_MS = 360;
+
 function rgb(hex) {
   return [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
 }
@@ -30,15 +38,25 @@ function rgb(hex) {
 /**
  * The mode indicator in a browser window: the mode of the selected tab's
  * page and whatever has been typed towards a mapping. The mode is shown by
- * Zendia's mascot (ZendiaMascot.sys.mjs), which has a drawing for each mode
- * in that mode's color.
+ * Zendia's mascot (ZendiaMascot.sys.mjs) inside its ring of modes, in that
+ * mode's color and with that mode's face. A switch morphs it into the next
+ * mode's drawing, and now and then it blinks.
  */
 export class ZendiaStatusline {
   #element;
-  #mode;
   #keys;
   #mascot;
+  // The parts of the mascot's drawing that move: the ring's arcs, the body's
+  // group, its head and antennas, and the face's strokes.
+  #parts;
   #drawn;
+  // The mode the mascot is in (or on its way to), and its body's color.
+  #shown = "n";
+  #shownColor = MASCOT_COLORS.n;
+  #morph = null;
+  #blinkTimer = null;
+  // The first drawing is put down at once; later ones morph.
+  #painted = false;
   // Where it stood before it stepped aside from the pointer, or null.
   #home = null;
   #root;
@@ -62,18 +80,18 @@ export class ZendiaStatusline {
     // zendia.css draws it and picks the corner, away from the sidebar.
     this.#element.style.display = "flex";
 
-    // The mode's name, on a tag under the mascot.
-    this.#mode = create("span", "zendia-statusline-mode");
     this.#keys = create("span", "zendia-statusline-keys");
     this.#mascot = document.createElementNS(SVG_NS, "svg");
     this.#mascot.setAttribute("class", "zendia-mascot");
+    const box = MASCOT_VIEWBOX;
     this.#mascot.setAttribute(
       "viewBox",
-      `0 0 ${MASCOT_SIZE.width} ${MASCOT_SIZE.height}`
+      `${box.x} ${box.y} ${box.width} ${box.height}`
     );
     this.#mascot.setAttribute("aria-hidden", "true");
+    this.#parts = this.#buildMascot(document);
 
-    this.#element.append(this.#mode, this.#keys, this.#mascot);
+    this.#element.append(this.#keys, this.#mascot);
     (document.getElementById("browser") ?? document.documentElement).append(
       this.#element
     );
@@ -145,12 +163,16 @@ export class ZendiaStatusline {
     const key = visual ? "v" : mode;
     const label = MODES[key] ?? mode.toUpperCase();
     const color = ZendiaTheme.hex(`mode-${key}`) ?? ZendiaTheme.hex("warning");
-    this.#mode.textContent = label;
+    // The mascot alone shows the mode; its name is only for screen readers.
+    this.#element.setAttribute("aria-label", label);
     if (`${key} ${color}` != this.#drawn) {
       this.#drawn = `${key} ${color}`;
       this.#element.setAttribute("mode", key);
       this.#element.style.setProperty("--zendia-mascot-color", color);
       this.#drawMascot(key, color);
+      if (this.#blinkTimer === null) {
+        this.#scheduleBlink();
+      }
     }
     if (color != this.#color) {
       this.#paintWindow(color);
@@ -161,36 +183,224 @@ export class ZendiaStatusline {
   }
 
   /**
-   * The mascot's drawing for a mode, in the mode's color. One drawing
-   * replaces the other at once, as cels do; zendia.css jolts the new one
-   * for a moment so that the change is seen.
+   * The mascot's drawing, built once; #paint moves it.
+   *
+   * @param {Document} document
+   */
+  #buildMascot(document) {
+    const make = (tag, attributes, parent) => {
+      const element = document.createElementNS(SVG_NS, tag);
+      for (const [name, value] of Object.entries(attributes)) {
+        element.setAttribute(name, value);
+      }
+      parent.append(element);
+      return element;
+    };
+    // The ink edge, under everything: the ring's arcs and the silhouette again,
+    // a little wider.
+    const edge = make(
+      "g",
+      {
+        stroke: MASCOT_EDGE.color,
+        fill: MASCOT_EDGE.color,
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+      },
+      this.#mascot
+    );
+    const edgeArcs = MASCOT_MODES.map(() =>
+      make(
+        "path",
+        {
+          fill: "none",
+          "stroke-width": MASCOT_STROKES.ring + MASCOT_EDGE.width,
+        },
+        edge
+      )
+    );
+    const edgeHead = make(
+      "polygon",
+      { "stroke-width": MASCOT_STROKES.head + MASCOT_EDGE.width },
+      edge
+    );
+    const edgeAntennas = [0, 1].map(() =>
+      make(
+        "polygon",
+        { "stroke-width": MASCOT_STROKES.antenna + MASCOT_EDGE.width },
+        edge
+      )
+    );
+    const ring = make(
+      "g",
+      {
+        fill: "none",
+        "stroke-linecap": "round",
+        "stroke-width": MASCOT_STROKES.ring,
+      },
+      this.#mascot
+    );
+    const arcs = MASCOT_MODES.map(() => make("path", {}, ring));
+    const body = make("g", { "stroke-linejoin": "round" }, this.#mascot);
+    const head = make("polygon", { "stroke-width": MASCOT_STROKES.head }, body);
+    const antennas = [0, 1].map(() =>
+      make("polygon", { "stroke-width": MASCOT_STROKES.antenna }, body)
+    );
+    const faceGroup = make(
+      "g",
+      { fill: "none", "stroke-linecap": "round", "stroke-linejoin": "round" },
+      this.#mascot
+    );
+    const face = mascotFrame("n").face.map(() =>
+      make("polyline", {}, faceGroup)
+    );
+    return {
+      edgeArcs,
+      edgeHead,
+      edgeAntennas,
+      arcs,
+      body,
+      head,
+      antennas,
+      faceGroup,
+      face,
+    };
+  }
+
+  /**
+   * Draws one frame of the mascot: at rest in a mode, or partway from one
+   * mode to another.
+   *
+   * @param {string} from
+   * @param {string} to
+   * @param {number} t
+   * @param {string} fromColor The body's color in `from`.
+   * @param {string} toColor The body's color in `to`.
+   * @param {number} [blink]
+   */
+  #paint(from, to, t, fromColor, toColor, blink = 0) {
+    const frame = mascotFrame(from, to, t, { blink });
+    const points = list =>
+      list.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    frame.arcs.forEach(({ mode, d }, i) => {
+      const arc = this.#parts.arcs[i];
+      arc.setAttribute("d", d);
+      this.#parts.edgeArcs[i].setAttribute("d", d);
+      arc.setAttribute(
+        "stroke",
+        ZendiaTheme.hex(`mode-${mode}`) ?? MASCOT_COLORS[mode]
+      );
+    });
+    const color = mixColor(fromColor, toColor, frame.color);
+    this.#parts.body.setAttribute("fill", color);
+    this.#parts.body.setAttribute("stroke", color);
+    const head = points(frame.head);
+    this.#parts.head.setAttribute("points", head);
+    this.#parts.edgeHead.setAttribute("points", head);
+    frame.antennas.forEach((antenna, i) => {
+      const outline = points(antenna);
+      this.#parts.antennas[i].setAttribute("points", outline);
+      this.#parts.edgeAntennas[i].setAttribute("points", outline);
+    });
+    this.#parts.faceGroup.setAttribute(
+      "stroke",
+      ZendiaTheme.hex("statusline-background") ?? MASCOT_FACE
+    );
+    frame.face.forEach(({ points: line, width }, i) => {
+      const stroke = this.#parts.face[i];
+      stroke.setAttribute("points", points(line));
+      stroke.setAttribute("stroke-width", width.toFixed(2));
+    });
+  }
+
+  #reducedMotion() {
+    return this.#window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  /**
+   * Morphs the mascot into a mode's drawing, in the mode's color: the ring's
+   * arcs slide, the color blends, it leans and swings its antenna, and its
+   * face bends into the new one. From partway through a switch it goes on
+   * from where it is.
    *
    * @param {string} mode
    * @param {string} color
    */
   #drawMascot(mode, color) {
-    const colors = mascotColors(color);
-    const document = this.#mascot.ownerDocument;
-    this.#mascot.replaceChildren(
-      ...mascotShapes(mode).map(({ paint, points, line }) => {
-        const polygon = document.createElementNS(SVG_NS, "polygon");
-        polygon.setAttribute(
-          "points",
-          points.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")
-        );
-        polygon.setAttribute("fill", colors[paint]);
-        if (line) {
-          polygon.setAttribute("stroke", colors.ink);
-          polygon.setAttribute("stroke-width", "1.3");
-          polygon.setAttribute("stroke-linejoin", "miter");
-        }
-        return polygon;
-      })
+    const window = this.#window;
+    const from = this.#shown;
+    const fromColor = this.#morph?.color ?? this.#shownColor;
+    if (this.#morph) {
+      window.cancelAnimationFrame(this.#morph.frame);
+    }
+    this.#shown = mode;
+    this.#shownColor = color;
+    if (
+      !this.#painted ||
+      this.#reducedMotion() ||
+      (from == mode && fromColor == color)
+    ) {
+      this.#painted = true;
+      this.#morph = null;
+      this.#paint(mode, mode, 1, color, color);
+      return;
+    }
+    const start = window.performance.now();
+    const morph = { color: fromColor };
+    const step = now => {
+      // A frame's time can be a little earlier than the switch.
+      const t = Math.min(1, Math.max(0, (now - start) / MORPH_MS));
+      this.#paint(from, mode, t, fromColor, color);
+      morph.color = mixColor(fromColor, color, t);
+      if (t < 1) {
+        morph.frame = window.requestAnimationFrame(step);
+      } else {
+        this.#morph = null;
+      }
+    };
+    this.#morph = morph;
+    morph.frame = window.requestAnimationFrame(step);
+  }
+
+  /**
+   * Now and then it blinks, so it looks alive between switches.
+   */
+  #scheduleBlink() {
+    this.#window.clearTimeout(this.#blinkTimer);
+    this.#blinkTimer = this.#window.setTimeout(
+      () => this.#blink(),
+      2600 + Math.random() * 3400
     );
-    // Restart the jolt.
-    this.#mascot.removeAttribute("changed");
-    this.#mascot.getBoundingClientRect();
-    this.#mascot.setAttribute("changed", "");
+  }
+
+  #blink() {
+    const window = this.#window;
+    if (
+      !this.#morph &&
+      this.#element.style.display != "none" &&
+      !this.#reducedMotion()
+    ) {
+      const start = window.performance.now();
+      const step = now => {
+        if (this.#morph) {
+          return;
+        }
+        const t = Math.min(1, Math.max(0, (now - start) / 180));
+        const mode = this.#shown;
+        this.#paint(
+          mode,
+          mode,
+          1,
+          this.#shownColor,
+          this.#shownColor,
+          Math.sin(Math.PI * t)
+        );
+        if (t < 1) {
+          window.requestAnimationFrame(step);
+        }
+      };
+      window.requestAnimationFrame(step);
+    }
+    this.#scheduleBlink();
   }
 
   /**
@@ -203,6 +413,10 @@ export class ZendiaStatusline {
   }
 
   destroy() {
+    if (this.#morph) {
+      this.#window.cancelAnimationFrame(this.#morph.frame);
+    }
+    this.#window.clearTimeout(this.#blinkTimer);
     this.#window.removeEventListener("mousemove", this.#onPointerMove);
     this.#root.removeEventListener("mouseleave", this.#onPointerLeave);
     this.#element.remove();

@@ -117,32 +117,11 @@ p {
   text-wrap: balance;
 }
 
-/* The mascot, in the page as it is in the browser's mode indicator. A new
-   drawing arrives torn, for three held frames. */
+/* The mascot inside its ring, in the page as it is in the browser's mode
+   indicator. A new pose morphs in (ui.jsx). */
 .zen-welcome-mascot {
   flex-shrink: 0;
   overflow: visible;
-  animation: zen-welcome-jolt 0.2s steps(1, end);
-}
-
-@keyframes zen-welcome-jolt {
-  0% {
-    translate: -5px 1px;
-    clip-path: polygon(0 0, 100% 0, 100% 34%, 0 34%, 0 52%, 100% 52%, 100% 100%, 0 100%);
-    filter: drop-shadow(4px 0 0 #22b8ff) drop-shadow(-4px 0 0 #ff4d6a);
-  }
-
-  34% {
-    translate: 4px -1px;
-    clip-path: polygon(0 0, 100% 0, 100% 62%, 0 62%, 0 74%, 100% 74%, 100% 100%, 0 100%);
-    filter: drop-shadow(-3px 0 0 #22b8ff) drop-shadow(3px 0 0 #ff4d6a);
-  }
-
-  67% {
-    translate: -1px 0;
-    clip-path: none;
-    filter: none;
-  }
 }
 
 /* Start page: what Zendia is in one line, and the way in. Its name and its

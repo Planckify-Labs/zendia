@@ -564,9 +564,7 @@
   right: 12px;
   bottom: 12px;
   align-items: flex-end;
-  gap: 8px;
-  /* Room under the mascot for the tag with the mode's name. */
-  padding-bottom: 20px;
+  gap: 6px;
   pointer-events: none;
   transition: translate 340ms var(--zendia-spring);
 
@@ -574,28 +572,6 @@
      pointer has left (ZendiaStatusline.sys.mjs). */
   &[aside] {
     translate: var(--zendia-statusline-aside) 0;
-  }
-}
-
-/* The mode's name, on a tag in the mode's color under the mascot. */
-.zendia-statusline-mode {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  box-sizing: border-box;
-  width: 92px;
-  border: 1.5px solid var(--zendia-ink);
-  border-radius: 5px;
-  background: var(--zendia-mascot-color);
-  color: var(--zendia-ink);
-  font: 800 10px/14px ui-monospace, monospace;
-  letter-spacing: 0.04em;
-  text-align: center;
-  white-space: nowrap;
-
-  :root[zen-right-side] & {
-    right: auto;
-    left: 0;
   }
 }
 
@@ -615,60 +591,20 @@
   }
 }
 
-/* Zendia's mascot. ZendiaStatusline.sys.mjs draws it, one drawing for each
-   mode (ZendiaMascot.sys.mjs); here is only its size and how it moves. */
+/* Zendia's mascot inside its ring of modes. ZendiaStatusline.sys.mjs draws
+   it and morphs it from mode to mode (ZendiaMascot.sys.mjs); here is only its
+   size and how it rises. It is never mirrored: its face carries letters. */
 .zendia-mascot {
-  /* Small for a character, not for an indicator: large enough to read its
-     face from across the window. */
-  width: 92px;
-  height: 80px;
+  /* Half its first size: large enough to read its face, small enough not to
+     cover the page. */
+  width: 44px;
+  height: 44px;
   overflow: visible;
   transition: translate 160ms var(--zendia-ease-out);
-
-  /* Stepped aside, it turns to face back into the page. */
-  #zendia-statusline[aside] > & {
-    scale: -1 1;
-  }
 
   /* It rises while a mapping is half typed. */
   #zendia-statusline[typing] > & {
     translate: 0 -4px;
-  }
-
-  &[changed] {
-    animation: zendia-mascot-jolt 170ms steps(1, end);
-  }
-
-  /* With the sidebar on the right it stands in the other corner, turned
-     to face into the window as it does on the left. */
-  :root[zen-right-side] #zendia-statusline > & {
-    scale: -1 1;
-  }
-
-  :root[zen-right-side] #zendia-statusline[aside] > & {
-    scale: 1 1;
-  }
-}
-
-/* A new drawing arrives torn: three held frames of it knocked sideways and
-   cut into bands, then still. */
-@keyframes zendia-mascot-jolt {
-  0% {
-    translate: -4px 1px;
-    clip-path: polygon(0 0, 100% 0, 100% 34%, 0 34%, 0 52%, 100% 52%, 100% 100%, 0 100%);
-    filter: drop-shadow(3px 0 0 #22b8ff) drop-shadow(-3px 0 0 #ff4d6a);
-  }
-
-  34% {
-    translate: 3px -1px;
-    clip-path: polygon(0 0, 100% 0, 100% 62%, 0 62%, 0 74%, 100% 74%, 100% 100%, 0 100%);
-    filter: drop-shadow(-2px 0 0 #22b8ff) drop-shadow(2px 0 0 #ff4d6a);
-  }
-
-  67% {
-    translate: -1px 0;
-    clip-path: none;
-    filter: none;
   }
 }
 
@@ -679,10 +615,6 @@
 
   .zendia-mascot {
     transition: none;
-
-    &[changed] {
-      animation: none;
-    }
   }
 }
 

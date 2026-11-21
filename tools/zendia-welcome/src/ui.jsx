@@ -5,8 +5,16 @@
 // The pieces the pages are built from. Text comes from Fluent: an element
 // only carries its message's id, and the document's l10n fills it in.
 
-import { useMemo } from "react";
-import { MASCOT_SIZE, mascotColors, mascotShapes } from "../../../src/zen/zendia/ui/ZendiaMascot.sys.mjs";
+import { useEffect, useRef, useState } from "react";
+import {
+  MASCOT_COLORS,
+  MASCOT_EDGE,
+  MASCOT_FACE,
+  MASCOT_STROKES,
+  MASCOT_VIEWBOX,
+  mascotFrame,
+  mixColor,
+} from "../../../src/zen/zendia/ui/ZendiaMascot.sys.mjs";
 
 /** An element whose text is the Fluent message `id`. */
 export function T({ id, args, as: Tag = "span", ...props }) {
@@ -69,30 +77,73 @@ export function Key({ id }) {
 }
 
 /**
- * Zendia's mascot in one of its drawings (ZendiaMascot.sys.mjs), as it is in
- * the browser's own mode indicator.
+ * Zendia's mascot inside its ring, in its drawing for `pose`, as it is in the
+ * browser's mode indicator (ZendiaMascot.sys.mjs). A new pose morphs in the
+ * way the browser's does: the arcs slide, the color blends and the face bends
+ * into the new one.
  */
-export function Mascot({ pose, color, ...props }) {
-  const colors = useMemo(() => mascotColors(color), [color]);
-  const shapes = useMemo(() => mascotShapes(pose), [pose]);
+const MORPH_MS = 360;
+
+export function Mascot({ pose, still = false, ...props }) {
+  const [frame, setFrame] = useState(() => ({ from: pose, to: pose, t: 1 }));
+  const shown = useRef(pose);
+  useEffect(() => {
+    const from = shown.current;
+    shown.current = pose;
+    if (from == pose || still || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setFrame({ from: pose, to: pose, t: 1 });
+      return undefined;
+    }
+    const start = performance.now();
+    let raf;
+    const step = now => {
+      const t = Math.min(1, Math.max(0, (now - start) / MORPH_MS));
+      setFrame({ from, to: pose, t });
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+      }
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [pose, still]);
+
+  const { from, to, t } = frame;
+  const drawing = mascotFrame(from, to, t);
+  const body = mixColor(MASCOT_COLORS[from], MASCOT_COLORS[to], drawing.color);
+  const points = list => list.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const box = MASCOT_VIEWBOX;
   return (
     <svg
       className="zen-welcome-mascot"
-      viewBox={`0 0 ${MASCOT_SIZE.width} ${MASCOT_SIZE.height}`}
+      viewBox={`${box.x} ${box.y} ${box.width} ${box.height}`}
       aria-hidden="true"
-      // A new key restarts the jolt a new drawing arrives with.
-      key={pose}
       {...props}
     >
-      {shapes.map(({ paint, points, line }, index) => (
-        <polygon
-          key={index}
-          points={points.map(point => point.join(",")).join(" ")}
-          fill={colors[paint]}
-          stroke={line ? colors.ink : undefined}
-          strokeWidth={line ? 1.3 : undefined}
-        />
-      ))}
+      <g fill={MASCOT_EDGE.color} stroke={MASCOT_EDGE.color} strokeLinecap="round" strokeLinejoin="round">
+        {drawing.arcs.map(arc => (
+          <path key={arc.mode} d={arc.d} fill="none" strokeWidth={MASCOT_STROKES.ring + MASCOT_EDGE.width} />
+        ))}
+        <polygon points={points(drawing.head)} strokeWidth={MASCOT_STROKES.head + MASCOT_EDGE.width} />
+        {drawing.antennas.map((antenna, index) => (
+          <polygon key={index} points={points(antenna)} strokeWidth={MASCOT_STROKES.antenna + MASCOT_EDGE.width} />
+        ))}
+      </g>
+      <g fill="none" strokeLinecap="round" strokeWidth={MASCOT_STROKES.ring}>
+        {drawing.arcs.map(arc => (
+          <path key={arc.mode} d={arc.d} stroke={MASCOT_COLORS[arc.mode]} />
+        ))}
+      </g>
+      <g fill={body} stroke={body} strokeLinejoin="round">
+        <polygon points={points(drawing.head)} strokeWidth={MASCOT_STROKES.head} />
+        {drawing.antennas.map((antenna, index) => (
+          <polygon key={index} points={points(antenna)} strokeWidth={MASCOT_STROKES.antenna} />
+        ))}
+      </g>
+      <g fill="none" stroke={MASCOT_FACE} strokeLinecap="round" strokeLinejoin="round">
+        {drawing.face.map((stroke, index) => (
+          <polyline key={index} points={points(stroke.points)} strokeWidth={stroke.width.toFixed(2)} />
+        ))}
+      </g>
     </svg>
   );
 }
