@@ -16,6 +16,12 @@
 // browser (ZendiaWebChatCookies.sys.mjs): signing in with Google offers the
 // browser's Google accounts. A menu on the picked site's name switches them,
 // adds one, or uses the browser's own state of the site instead.
+//
+// Asking (ask()): what a page's menu or keys ask about (ZendiaWebChatAsk) is
+// written into a site's box and sent, in a new chat for each page asked
+// about. The reply is watched while it comes in: a site that finishes out of
+// sight gets a dot on the strip and on the panel's button, and a reply to a
+// field's text can be put back in the field in one press.
 
 import {
   BROWSER,
@@ -38,11 +44,25 @@ const PREF_CUSTOM = "zendia.webchat.custom";
 const ANCHOR_ID = "zendia-webchat-anchor";
 // How long the logo covers a page that has not finished loading.
 const PAINT_AFTER_MS = 6000;
+// Each page asked about gets a chat of its own, unless this is off.
+const PREF_CHAT_PER_PAGE = "zendia.webchat.ask.newChatPerPage";
+// How long a site may take to show its box.
+const READY_TIMEOUT_MS = 30000;
+const LOAD_TIMEOUT_MS = 20000;
+const PROBE_MS = 300;
+const SETTLE_MS = 2000;
+const MAX_DROPPED_FILES = 10;
+const MAX_DROPPED_BYTES = 50 * 1024 * 1024;
+const WATCH_MS = 1000;
+// A reply nobody saw start by then is not coming.
+const NO_REPLY_MS = 90000;
+const REPLY_TIMEOUT_MS = 15 * 60000;
 
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   ZendiaDockFrame: "resource:///modules/zendia/ui/ZendiaDockFrame.sys.mjs",
+  fetchImage: "resource:///modules/zendia/webchat/ZendiaWebChatAsk.sys.mjs",
   ZendiaPicker: "resource:///modules/zendia/ui/ZendiaPicker.sys.mjs",
   ZendiaTheme: "resource:///modules/zendia/ui/ZendiaTheme.sys.mjs",
   chatHosts: "resource:///modules/zendia/webchat/ZendiaWebChats.sys.mjs",
@@ -98,6 +118,12 @@ export class ZendiaWebChatDock {
   // The page takes the keys once the account in use is showing, after the
   // user chose it.
   #focusNext = false;
+  #putBackButton;
+  #dropHint;
+  #dropHintTimer = null;
+  #newChatButton;
+  // Where the reply to a field's text goes back: {browser, frame, chatId}.
+  #putBack = null;
 
   /**
    * @param {Window} window A browser window.
@@ -155,6 +181,14 @@ export class ZendiaWebChatDock {
     this.#root = this.#frame.root;
 
     const header = create("div", "zendia-agent-header", this.#root);
+    this.#newChatButton = iconButton(
+      "new-chat",
+      header,
+      "New chat on every site (<leader>aN)"
+    );
+    this.#newChatButton.addEventListener("click", () =>
+      this.newChat({ all: true })
+    );
     this.#reloadButton = iconButton("reload", header, "Reload");
     this.#reloadButton.addEventListener("click", () => this.reload());
     this.#tabButton = iconButton("open-tab", header, "Open in a tab");
@@ -162,6 +196,13 @@ export class ZendiaWebChatDock {
     this.#menuButton = iconButton("accounts", header, "Accounts");
     this.#menuButton.setAttribute("aria-haspopup", "menu");
     this.#menuButton.addEventListener("click", () => this.toggleAccounts());
+    this.#putBackButton = iconButton(
+      "put-back",
+      header,
+      "Put the reply back in the page (<leader>aR)"
+    );
+    this.#putBackButton.hidden = true;
+    this.#putBackButton.addEventListener("click", () => this.putReply());
     iconButton("to-agent", header, "Your agent (<leader>ap)").addEventListener(
       "click",
       () => this.#onSwitch?.()
@@ -207,6 +248,13 @@ export class ZendiaWebChatDock {
     this.#empty = create("div", "zendia-webchat-empty", this.#stage);
     this.#empty.textContent = "No chat sites. Add one with +.";
     this.#empty.hidden = true;
+    // Files dropped on the page, and images dragged from a tab, are attached
+    // as files: the site would only get an image's address.
+    this.#dropHint = create("div", "zendia-webchat-drop", this.#stage);
+    this.#dropHint.hidden = true;
+    for (const type of ["dragover", "drop", "dragleave"]) {
+      this.#stage.addEventListener(type, event => this.#onDrag(event), true);
+    }
 
     this.#menu = create("div", "zendia-webchat-menu", this.#root);
     this.#menu.hidden = true;
@@ -244,7 +292,10 @@ export class ZendiaWebChatDock {
     return (
       this.#frame.isOpen &&
       [...this.#views.values()].some(
-        view => view.browser == browser && !view.browser.hidden
+        view =>
+          view.browser == browser &&
+          !view.browser.hidden &&
+          !view.browser.hasAttribute("parked")
       )
     );
   }
@@ -292,10 +343,15 @@ export class ZendiaWebChatDock {
    */
   get status() {
     const chat = this.#currentChat();
+    const views = [...this.#views.values()];
+    const unseen = views.find(view => view.unseen);
     return {
       open: this.#frame.isOpen,
       loading: !!this.#viewOf(chat?.id)?.loading,
-      color: this.#colorOf(chat),
+      // A site is writing a reply, or has one nobody saw yet.
+      replying: views.some(view => view.pending),
+      unseen: !!unseen,
+      color: this.#colorOf(unseen?.chat ?? chat),
       name: chat?.name,
     };
   }
@@ -401,6 +457,56 @@ export class ZendiaWebChatDock {
     }
   }
 
+  /**
+   * Start over with a new chat: on the site in front, or on every site that
+   * was opened and is not on its start page already. What was asked there, the reply on its way and the reply to
+   * put back are left behind with the old chat.
+   *
+   * @param {object} [options]
+   * @param {boolean} [options.all]
+   */
+  async newChat({ all = false } = {}) {
+    const front = this.#viewOf(this.#current);
+    // A site never opened has no page to start over, and one on its start
+    // page with nothing on its way and nothing in its box is fresh already.
+    const opened = (all ? [...this.#views.values()] : [front]).filter(
+      view => view?.started
+    );
+    const stale = await Promise.all(
+      opened.map(async view => {
+        if (view.pending || !isSameAddress(view.url, view.chat.url)) {
+          return true;
+        }
+        const probe = await this.#probe(view);
+        return !!(probe?.draft || probe?.files);
+      })
+    );
+    const views = opened.filter((view, index) => stale[index]);
+    for (const view of views) {
+      view.watch++;
+      view.pending = false;
+      view.unseen = false;
+      view.topic = "";
+      view.topicUrl = "";
+      view.browser.loadURI(Services.io.newURI(view.chat.url), {
+        triggeringPrincipal:
+          Services.scriptSecurityManager.getSystemPrincipal(),
+      });
+    }
+    if (
+      this.#putBack &&
+      views.some(view => view.chat.id == this.#putBack.chatId)
+    ) {
+      this.#putBack = null;
+    }
+    this.#syncReplies();
+    if (!front || !this.#frame.isOpen) {
+      await this.open();
+    } else {
+      front.browser.focus();
+    }
+  }
+
   reload() {
     const view = this.#viewOf(this.#current);
     if (view) {
@@ -435,6 +541,419 @@ export class ZendiaWebChatDock {
     this.#window.gZenUIManager?.showToast("zendia-webchat-synced-toast");
     // The page in front has the old logins.
     this.#viewOf(this.#current)?.browser.reload();
+  }
+
+  // Dropping.
+
+  // What a drag brings that the panel attaches itself: files from outside
+  // the browser, or an image dragged from a tab. Text, and links that are not
+  // images, the page takes as it would anyway.
+  #dropped(transfer) {
+    if (!transfer) {
+      return null;
+    }
+    const source = transfer.sourceTopWindowContext?.browsingContext;
+    if (source?.embedderElement && this.contains(source.embedderElement)) {
+      return null;
+    }
+    if (transfer.types.includes("Files") && !source) {
+      return { kind: "files" };
+    }
+    const url = transfer.types.includes("application/x-moz-file-promise-url")
+      ? transfer.getData("application/x-moz-file-promise-url")
+      : "";
+    return url ? { kind: "image", url, source } : null;
+  }
+
+  #onDrag(event) {
+    const view = this.#viewOf(this.#current);
+    const dropped =
+      view && event.target == view.browser && this.#dropped(event.dataTransfer);
+    if (event.type == "dragleave") {
+      this.#hideDropHint(150);
+      return;
+    }
+    if (!dropped) {
+      return;
+    }
+    // Ours from here: the page does not get it.
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.type == "dragover") {
+      event.dataTransfer.dropEffect = "copy";
+      this.#dropHint.textContent =
+        dropped.kind == "image"
+          ? `Drop to attach the image to ${view.chat.name}`
+          : `Drop to attach to ${view.chat.name}`;
+      this.#dropHint.hidden = false;
+      this.#hideDropHint(400);
+      return;
+    }
+    this.#hideDropHint(0);
+    this.#attachDropped(view, dropped, event.dataTransfer).catch(e =>
+      console.error("Zendia: could not attach what was dropped", e)
+    );
+  }
+
+  #hideDropHint(ms) {
+    this.#window.clearTimeout(this.#dropHintTimer);
+    this.#dropHintTimer = this.#window.setTimeout(() => {
+      this.#dropHint.hidden = true;
+    }, ms);
+  }
+
+  async #attachDropped(view, dropped, transfer) {
+    let files = [];
+    if (dropped.kind == "files") {
+      // Read now: the transfer is gone once the drop is over.
+      const list = [...transfer.files].slice(0, MAX_DROPPED_FILES);
+      files = await Promise.all(
+        list
+          .filter(file => file.size <= MAX_DROPPED_BYTES)
+          .map(async file => ({
+            name: file.name,
+            type: file.type || "application/octet-stream",
+            bytes: await file.arrayBuffer(),
+          }))
+      );
+    } else {
+      const principal =
+        dropped.source?.currentWindowGlobal?.documentPrincipal ??
+        this.#window.gBrowser.selectedBrowser.contentPrincipal;
+      const image = await lazy.fetchImage(dropped.url, principal);
+      if (image) {
+        const name =
+          decodeURIComponent(
+            new URL(dropped.url).pathname.split("/").pop() || ""
+          ).replace(/[^\w.-]+/g, "_") || "image";
+        files = [{ name, type: image.type, bytes: image.bytes }];
+      }
+    }
+    const refused = () =>
+      this.#window.gZenUIManager?.showToast(
+        dropped.kind == "image"
+          ? "zendia-webchat-no-attach-toast"
+          : "zendia-webchat-no-file-toast",
+        { l10nArgs: { site: view.chat.name } }
+      );
+    if (!files.length) {
+      refused();
+      return;
+    }
+    const result = await this.ask({
+      chatId: view.chat.id,
+      files,
+      send: false,
+      keepChat: true,
+    });
+    if (result?.reason == "no-attach") {
+      refused();
+    }
+  }
+
+  // Asking.
+
+  /** The chat sites on the strip, in its order. */
+  get chats() {
+    return [...this.#chats];
+  }
+
+  /** The site in front, or the one that will be when the panel opens. */
+  get currentChat() {
+    return this.#currentChat();
+  }
+
+  /**
+   * Write into a chat site's box, and send it.
+   *
+   * @param {object} options
+   * @param {string} [options.chatId] The site; the one in front by default.
+   * @param {string} [options.text]
+   * @param {Array<{name: string, type: string, bytes: ArrayBuffer}>}
+   *   [options.files] Images to attach.
+   * @param {boolean} [options.send] Send it; otherwise it is left in the box
+   *   with the keys there, for the user to finish.
+   * @param {string} [options.topic] What it is about, the page's address: a
+   *   page asked about for the first time gets a new chat.
+   * @param {boolean} [options.background] Leave the site where it is on the
+   *   strip, for a question asked of every site at once.
+   * @param {boolean} [options.keepChat] Stay in the chat that is open, as a
+   *   file dropped on it does.
+   * @returns {Promise<{ok: boolean, sent?: boolean, reason?: string}>}
+   */
+  async ask({
+    chatId,
+    text = "",
+    files = [],
+    send = true,
+    topic = "",
+    background = false,
+    keepChat = false,
+  } = {}) {
+    const chat =
+      this.#chats.find(candidate => candidate.id == chatId) ??
+      this.#currentChat();
+    if (!chat) {
+      return { ok: false, reason: "no-chat" };
+    }
+    if (!background || !this.#frame.isOpen) {
+      await this.open({ id: background ? undefined : chat.id, focus: false });
+    }
+    const view = await this.#startView(chat, { park: background });
+    if (!view) {
+      return { ok: false, reason: "no-view" };
+    }
+    if (!keepChat) {
+      await this.#chatFor(view, topic);
+    }
+    const probe = await this.#waitReady(view);
+    // A page that just loaded shows its box before it is ready to take a
+    // file: several sites asked at once all are.
+    const settle = SETTLE_MS - (Date.now() - view.loadedAt);
+    if (probe && settle > 0) {
+      await sleep(this.#window, settle);
+    }
+    if (!probe) {
+      // Most often the site wants the user signed in first.
+      if (!background) {
+        view.browser.focus();
+      }
+      return { ok: false, reason: "not-ready" };
+    }
+    let result;
+    try {
+      result = await this.#actorOf(view).sendQuery("ZendiaWebChat:Compose", {
+        site: chat.id,
+        text,
+        files,
+        send,
+        // A draft left in the box would go with the question.
+        clear: send,
+        focus: !send,
+      });
+    } catch (e) {
+      console.error("Zendia: could not write to the chat", e);
+      result = { ok: false, reason: "gone" };
+    }
+    if (result?.ok) {
+      view.topic = topic;
+      // Left for the user to finish, it is sent whenever they are done.
+      this.#watchReply(view, probe.replies, { patient: !result.sent });
+      if (!result.sent && !background) {
+        view.browser.focus();
+      }
+    }
+    return result ?? { ok: false };
+  }
+
+  /**
+   * Remember where the reply to a field's text goes back.
+   *
+   * @param {object|null} target
+   * @param {Element} target.browser The tab's browser.
+   * @param {number} target.frame The id of the field's browsing context.
+   * @param {string} target.chatId The site asked.
+   */
+  setPutBack(target) {
+    // Shown once the reply to it is written.
+    this.#putBack = target
+      ? {
+          ...target,
+          browser: Cu.getWeakReference(target.browser),
+          written: false,
+        }
+      : null;
+    this.#syncChrome();
+  }
+
+  /**
+   * @param {Element} browser A tab's browser.
+   * @returns {boolean} Whether a reply can go back into a field of it.
+   */
+  canPutBackInto(browser) {
+    return !!this.#putBack?.written && this.#putBack.browser.get() == browser;
+  }
+
+  /**
+   * Put the last reply of the site asked about a field's text in its place.
+   *
+   * @returns {Promise<boolean>}
+   */
+  async putReply() {
+    const target = this.#putBack;
+    const browser = target?.browser.get();
+    const view = target && this.#viewOf(target.chatId);
+    if (!browser || !view) {
+      return false;
+    }
+    let reply = "";
+    try {
+      ({ text: reply } = await this.#actorOf(view).sendQuery(
+        "ZendiaWebChat:Reply",
+        { site: target.chatId }
+      ));
+    } catch (e) {
+      console.error("Zendia: could not read the reply", e);
+    }
+    reply = unquote(reply);
+    if (!reply) {
+      return false;
+    }
+    const tab = this.#window.gBrowser.getTabForBrowser(browser);
+    if (tab) {
+      this.#window.gBrowser.selectedTab = tab;
+    }
+    browser.focus();
+    try {
+      const frame = BrowsingContext.get(target.frame);
+      const { ok } = await frame.currentWindowGlobal
+        .getActor("ZendiaWebChat")
+        .sendQuery("ZendiaWebChat:Replace", { text: reply });
+      return ok;
+    } catch (e) {
+      console.error("Zendia: could not put the reply back", e);
+      return false;
+    }
+  }
+
+  #actorOf(view) {
+    const global = view.browser.browsingContext?.currentWindowGlobal;
+    if (!global) {
+      throw new Error("The chat page is not loaded");
+    }
+    return global.getActor("ZendiaWebChat");
+  }
+
+  async #probe(view) {
+    try {
+      return await this.#actorOf(view).sendQuery("ZendiaWebChat:Probe", {
+        site: view.chat.id,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  // The page of the site's account in use, loading if it was not. One that
+  // is not in front loads out of sight, but laid out as if it were.
+  async #startView(chat, { park }) {
+    const key = this.#accountsOf(chat.id).active;
+    let view = this.#views.get(this.#viewKey(chat.id, key));
+    if (!view) {
+      const container = await this.#containerFor(chat, key);
+      view =
+        this.#views.get(this.#viewKey(chat.id, key)) ??
+        this.#createView(chat, key, container);
+    }
+    if (!view.started) {
+      if (park && chat.id != this.#current) {
+        view.browser.hidden = false;
+        view.browser.setAttribute("parked", "true");
+      }
+      view.started = true;
+      view.browser.loadURI(Services.io.newURI(chat.url), {
+        triggeringPrincipal:
+          Services.scriptSecurityManager.getSystemPrincipal(),
+      });
+    }
+    return view;
+  }
+
+  // A page asked about for the first time gets a new chat; the same page
+  // asked about again keeps the one it was asked in.
+  async #chatFor(view, topic) {
+    if (!Services.prefs.getBoolPref(PREF_CHAT_PER_PAGE, true)) {
+      return;
+    }
+    if (topic && topic == view.topic && view.url == view.topicUrl) {
+      return;
+    }
+    if (isSameAddress(view.url, view.chat.url) || view.url == "about:blank") {
+      return;
+    }
+    const loads = view.loads;
+    view.browser.loadURI(Services.io.newURI(view.chat.url), {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+    });
+    const started = Date.now();
+    while (view.loads == loads && Date.now() - started < LOAD_TIMEOUT_MS) {
+      await sleep(this.#window, PROBE_MS);
+    }
+  }
+
+  async #waitReady(view) {
+    const started = Date.now();
+    while (Date.now() - started < READY_TIMEOUT_MS) {
+      const probe = await this.#probe(view);
+      if (probe?.ready) {
+        return probe;
+      }
+      await sleep(this.#window, PROBE_MS);
+    }
+    return null;
+  }
+
+  // Watch the reply come in. One the user cannot see when it is done gets
+  // a dot.
+  async #watchReply(view, before, { patient = false } = {}) {
+    const watch = ++view.watch;
+    view.pending = !patient;
+    view.unseen = false;
+    this.#syncReplies();
+    const started = Date.now();
+    let begun = false;
+    let last = null;
+    let still = 0;
+    while (view.watch == watch && this.#views.has(this.#keyOf(view))) {
+      await sleep(this.#window, WATCH_MS);
+      const elapsed = Date.now() - started;
+      if (
+        elapsed > REPLY_TIMEOUT_MS ||
+        (!begun && !patient && elapsed > NO_REPLY_MS)
+      ) {
+        break;
+      }
+      const probe = await this.#probe(view);
+      if (!probe) {
+        continue;
+      }
+      view.topicUrl = probe.url;
+      if (!begun && (probe.generating || probe.replies > before)) {
+        begun = true;
+        view.pending = true;
+        this.#syncReplies();
+      }
+      if (!begun || probe.generating) {
+        still = 0;
+        last = probe.reply;
+        continue;
+      }
+      still = probe.reply == last ? still + 1 : 0;
+      last = probe.reply;
+      if (still >= 2) {
+        if (!this.isShowing(view.browser)) {
+          view.unseen = true;
+        }
+        break;
+      }
+    }
+    if (view.watch == watch) {
+      view.pending = false;
+      if (begun && this.#putBack?.chatId == view.chat.id) {
+        this.#putBack.written = true;
+      }
+      this.#syncReplies();
+    }
+  }
+
+  #keyOf(view) {
+    return this.#viewKey(view.chat.id, view.key);
+  }
+
+  #syncReplies() {
+    this.#syncStrip();
+    this.#syncChrome();
+    this.#onStatus?.();
   }
 
   // The sites.
@@ -567,8 +1086,12 @@ export class ZendiaWebChatDock {
       this.#views.get(this.#viewKey(chat.id, key)) ??
       this.#createView(chat, key, container);
     for (const other of this.#views.values()) {
-      other.browser.hidden = other != view;
+      other.browser.hidden =
+        other != view && !other.browser.hasAttribute("parked");
     }
+    view.browser.removeAttribute("parked");
+    view.unseen = false;
+    this.#onStatus?.();
     this.#refreshPrompts();
     this.#syncChrome();
     if (!view.started) {
@@ -621,6 +1144,16 @@ export class ZendiaWebChatDock {
       paintTimer: null,
       started: false,
       url: chat.url,
+      // Finished loads, for a wait on a new chat.
+      loads: 0,
+      loadedAt: 0,
+      // The page asked about last, and the chat it was asked in.
+      topic: "",
+      topicUrl: "",
+      // A reply is being written, or was and nobody saw it.
+      pending: false,
+      unseen: false,
+      watch: 0,
     };
     view.listener = {
       QueryInterface: ChromeUtils.generateQI([
@@ -645,6 +1178,8 @@ export class ZendiaWebChatDock {
         } else if (flags & Ci.nsIWebProgressListener.STATE_STOP) {
           view.loading = false;
           view.painted = true;
+          view.loads++;
+          view.loadedAt = Date.now();
           this.#window.clearTimeout(view.paintTimer);
         } else {
           return;
@@ -795,6 +1330,17 @@ export class ZendiaWebChatDock {
     for (const tab of this.#strip.querySelectorAll("[data-chat]")) {
       const active = tab.dataset.chat == this.#current;
       tab.setAttribute("aria-selected", String(active));
+      const views = [...this.#views.values()].filter(
+        view => view.chat.id == tab.dataset.chat
+      );
+      tab.toggleAttribute(
+        "replying",
+        views.some(view => view.pending)
+      );
+      tab.toggleAttribute(
+        "unseen",
+        views.some(view => view.unseen)
+      );
       tab.tabIndex = active ? 0 : -1;
       const state = this.#accountsOf(tab.dataset.chat);
       const menuable = active && state.multiple;
@@ -822,7 +1368,13 @@ export class ZendiaWebChatDock {
     this.#stage.toggleAttribute("loading", !!view?.loading);
     this.#stage.toggleAttribute("waiting", !!chat && !view?.painted);
     this.#reloadButton.disabled = !chat;
+    this.#newChatButton.disabled = !chat;
     this.#tabButton.disabled = !chat;
+    const putBack = this.#putBack;
+    this.#putBackButton.hidden =
+      !putBack?.written ||
+      !putBack.browser.get() ||
+      !this.#viewOf(putBack.chatId);
     this.#syncHandle();
   }
 
@@ -837,7 +1389,7 @@ export class ZendiaWebChatDock {
     );
     handle.toggleAttribute(
       "running",
-      [...this.#views.values()].some(v => v.loading)
+      [...this.#views.values()].some(v => v.loading || v.pending)
     );
   }
 
@@ -1147,4 +1699,27 @@ export class ZendiaWebChatDock {
       Services.prefs.clearUserPref(PREF_DEFAULT);
     }
   }
+}
+
+function sleep(window, ms) {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+// The same page of a site, whatever its query or a trailing slash.
+function isSameAddress(a, b) {
+  try {
+    const one = new URL(a);
+    const two = new URL(b);
+    const path = url => url.pathname.replace(/\/+$/, "");
+    return one.host == two.host && path(one) == path(two);
+  } catch {
+    return false;
+  }
+}
+
+// A reply that kept the quotes the question set the text apart with.
+function unquote(text) {
+  const value = String(text ?? "").trim();
+  const match = /^"{3}\n?([\s\S]*?)\n?"{3}$/.exec(value);
+  return (match ? match[1] : value).trim();
 }

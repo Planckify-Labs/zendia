@@ -1208,6 +1208,10 @@
     background-image: url("chrome://browser/skin/zen-icons/sparkles.svg");
   }
 
+  &.put-back {
+    background-image: url("chrome://browser/skin/zen-icons/arrow-corner-down-right.svg");
+  }
+
   &:disabled {
     opacity: 0.4;
     pointer-events: none;
@@ -3996,6 +4000,29 @@
   flex: none;
 }
 
+/* The site is writing a reply, or has one nobody saw yet. */
+.zendia-webchat-tab:is([replying], [unseen]) {
+  position: relative;
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    inset-inline-start: 21px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    /* stylelint-disable-next-line property-no-unknown */
+    corner-shape: round;
+    background-color: var(--zendia-webchat-color);
+    box-shadow: 0 0 0 1.5px var(--zendia-agent-surface);
+  }
+
+  &[replying]::after {
+    animation: zendia-agent-pulse 1.2s ease-in-out infinite;
+  }
+}
+
 .zendia-webchat-tab {
   display: flex;
   flex: none;
@@ -4209,6 +4236,37 @@
   inset: 0;
   width: 100%;
   height: 100%;
+
+  /* Asked a question while another site is in front: laid out and running,
+     out of sight under it. */
+  &[parked] {
+    z-index: -1;
+    opacity: 0.004;
+    pointer-events: none;
+  }
+}
+
+/* A file or an image dragged over the page, which the panel attaches. */
+.zendia-webchat-drop {
+  position: absolute;
+  z-index: 3;
+  inset: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  border: 2px dashed var(--zendia-webchat-color);
+  border-radius: 14px;
+  background-color: color-mix(in srgb, var(--zendia-webchat-color) 14%, transparent);
+  color: var(--zendia-agent-text);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  pointer-events: none;
+
+  &[hidden] {
+    display: none;
+  }
 }
 
 /* The page is loading: a bar over its top edge, in the site's color. */
@@ -4946,4 +5004,83 @@
 #zendia-agents-handle {
   bottom: auto;
   height: 30%;
+}
+
+/* A part of the tab to ask a chat site about (ZendiaRegionPicker). */
+.zendia-region {
+  position: fixed;
+  z-index: 10000;
+  overflow: hidden;
+  cursor: crosshair;
+  background-color: color-mix(in srgb, black 22%, transparent);
+  outline: none;
+
+  &[drawing] {
+    background-color: transparent;
+  }
+}
+
+.zendia-region-box {
+  position: absolute;
+  border-radius: 3px;
+  outline: 2px solid var(--zendia-accent);
+  box-shadow: 0 0 0 100vmax color-mix(in srgb, black 30%, transparent);
+  pointer-events: none;
+}
+
+.zendia-region-hint {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  translate: -50% 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background-color: var(--zendia-agent-surface, Canvas);
+  color: var(--zendia-agent-text, CanvasText);
+  font: menu;
+  font-size: 12px;
+  box-shadow: 0 2px 10px color-mix(in srgb, black 30%, transparent);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* The chat sites at the top of "Ask ChatGPT" (ZendiaWebChatMenu), as the
+   page menu's back and forward row: their logos, the one asked marked. */
+.zendia-ask-sites > .zendia-ask-site {
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  border-radius: 6px;
+
+  > .menu-text {
+    display: none;
+  }
+
+  > .menu-icon {
+    width: 28px;
+    height: 28px;
+    padding: 6px;
+    margin: 0;
+  }
+
+  &.zendia-ask-all {
+    min-height: 28px;
+    flex: none;
+    padding-inline: 8px;
+
+    > .menu-text {
+      display: revert;
+      flex: none;
+    }
+  }
+
+  &[current] {
+    background-color: color-mix(in srgb, currentColor 16%, transparent);
+  }
+}
+
+.zendia-ask-hint {
+  font-size: 0.9em;
 }

@@ -32,6 +32,8 @@ EXTRA_JS_MODULES.zendia.actors += [
     "actors/ZendiaPopupParent.sys.mjs",
     "actors/ZendiaUiChild.sys.mjs",
     "actors/ZendiaUiParent.sys.mjs",
+    "actors/ZendiaWebChatChild.sys.mjs",
+    "actors/ZendiaWebChatParent.sys.mjs",
 ]
 
 EXTRA_JS_MODULES.zendia.captcha += [
@@ -104,9 +106,11 @@ EXTRA_JS_MODULES.zendia.plugins += [
 
 EXTRA_JS_MODULES.zendia.webchat += [
     "webchat/ZendiaWebChatAccounts.sys.mjs",
+    "webchat/ZendiaWebChatAsk.sys.mjs",
     "webchat/ZendiaWebChatCookies.sys.mjs",
     "webchat/ZendiaWebChatDictation.sys.mjs",
     "webchat/ZendiaWebChatIcons.sys.mjs",
+    "webchat/ZendiaWebChatPrompts.sys.mjs",
     "webchat/ZendiaWebChats.sys.mjs",
 ]
 
@@ -132,12 +136,14 @@ EXTRA_JS_MODULES.zendia.ui += [
     "ui/ZendiaMascot.sys.mjs",
     "ui/ZendiaMenuKeys.sys.mjs",
     "ui/ZendiaPicker.sys.mjs",
+    "ui/ZendiaRegionPicker.sys.mjs",
     "ui/ZendiaStatusline.sys.mjs",
     "ui/ZendiaTheme.sys.mjs",
     "ui/ZendiaToolbar.sys.mjs",
     "ui/ZendiaVimModeSwitch.sys.mjs",
     "ui/ZendiaWebChatButton.sys.mjs",
     "ui/ZendiaWebChatDock.sys.mjs",
+    "ui/ZendiaWebChatMenu.sys.mjs",
     "ui/ZendiaWhichKey.sys.mjs",
 ]
 

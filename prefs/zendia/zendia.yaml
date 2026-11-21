@@ -68,6 +68,18 @@
 - name: zendia.webchat.split-fallback
   value: "float" # how a split web chat panel lays out while the tab has no room for it: float or slide
 
+- name: zendia.webchat.ask.menu
+  value: true # "Ask ChatGPT" in the page's and the tabs' context menus: explain, translate or summarize what you right-click in the web chat panel
+
+- name: zendia.webchat.ask.newChatPerPage
+  value: true # each page asked about gets a new chat; asking about the same page again keeps its chat
+
+- name: zendia.webchat.prompts
+  value: "" # JSON array of your own prompts, [{"id": "eli5", "label": "Explain Like I'm Five", "key": "5", "on": ["selection"], "prompt": "Explain simply:\n\n{{quote}}"}]; an entry with a built-in id changes it ({"id": "factcheck", "site": "perplexity"}), "hidden": true hides it. Placeholders: {{text}} {{quote}} {{context}} {{title}} {{url}} {{source}} {{page}} {{lang}} {{tabs}}
+
+- name: zendia.webchat.translate.recent
+  value: "" # the languages picked last in "Ask ChatGPT", newest first, as codes separated by commas; the first one is what answers (summaries, explanations, descriptions) and translations are written in
+
 - name: zendia.theme
   value: "" # JSON overrides for zendia's colors, see ui/ZendiaTheme.sys.mjs
 

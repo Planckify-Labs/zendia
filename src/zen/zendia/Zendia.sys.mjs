@@ -61,6 +61,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   ZendiaWebChatButton:
     "resource:///modules/zendia/ui/ZendiaWebChatButton.sys.mjs",
   ZendiaWebChatBar: "resource:///modules/zendia/ui/ZendiaWebChatButton.sys.mjs",
+  ZendiaWebChatMenu: "resource:///modules/zendia/ui/ZendiaWebChatMenu.sys.mjs",
   ZendiaVimModeSwitch:
     "resource:///modules/zendia/ui/ZendiaVimModeSwitch.sys.mjs",
   ZendiaToolbar: "resource:///modules/zendia/ui/ZendiaToolbar.sys.mjs",
@@ -769,6 +770,12 @@ class ZendiaService {
         this.run("agent.toggle", {}, { window }).catch(console.error),
     });
     this.#windows.set(window.document, ui);
+    // "Ask ChatGPT" in the page's and the tabs' menus, with vim mode off too.
+    try {
+      ui.webChatMenu = new lazy.ZendiaWebChatMenu(window, { dock: ui.webchat });
+    } catch (e) {
+      console.error("Zendia: the web chat menus failed", e);
+    }
     ui.statusline.setVisible(this.#statuslineVisibleIn(window.document));
     // Once the toolbars are restored, which init() runs too early for. A
     // widget that fails must not take the keys down with it.
@@ -1138,6 +1145,24 @@ class ZendiaService {
         },
         messageManagerGroups: ["zendia-dictation"],
         // The parent takes only text from the page, and checks it again.
+        safeForUntrustedWebProcess: true,
+      },
+      // Asking a chat site about a page: the tab's selection, text and
+      // images, and the web chat panel's message box (ZendiaWebChatAsk).
+      // Made only when asked, and with vim mode off too: the page's menu
+      // asks as well.
+      ZendiaWebChat: {
+        parent: {
+          esModuleURI:
+            "resource:///modules/zendia/actors/ZendiaWebChatParent.sys.mjs",
+        },
+        child: {
+          esModuleURI:
+            "resource:///modules/zendia/actors/ZendiaWebChatChild.sys.mjs",
+        },
+        allFrames: true,
+        messageManagerGroups: ["browsers"],
+        // The page only ever answers, and the parent checks every answer.
         safeForUntrustedWebProcess: true,
       },
     });

@@ -45,6 +45,8 @@ firefox-appdir = "browser"
 
 ["test_webchat.js"]
 
+["test_webchat_ask.js"]
+
 ["test_which_key.js"]
 
 ["test_yank_ring.js"]

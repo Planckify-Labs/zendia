@@ -76,6 +76,12 @@ zendia-yank-empty-toast = Nothing yanked yet.
 zendia-yank-copied-toast = Copied to the clipboard.
 zendia-yank-cleared-toast = Yank history cleared.
 zendia-webchat-synced-toast = Browser logins copied to the web chat.
+zendia-webchat-no-selection-toast = Select some text to ask about first.
+zendia-webchat-no-image-toast = No image on screen to ask about.
+zendia-webchat-no-reply-toast = No reply to put back yet.
+zendia-webchat-no-attach-toast = { $site } did not take the image. Sign in to it, or drop the image in yourself.
+zendia-webchat-not-ready-toast = { $site } is not ready. Sign in to it in the panel, then ask again.
+zendia-webchat-no-file-toast = { $site } did not take the file. It may not take this kind of file, or wants you signed in.
 
 zen-toggle-compact-mode-button =
     .label = Compact Mode

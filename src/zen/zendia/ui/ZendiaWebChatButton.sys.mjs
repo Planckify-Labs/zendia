@@ -84,7 +84,8 @@ export class ZendiaWebChatBar {
 
   /**
    * Show the panel's state on the button: pressed while it is open, a dot in
-   * the site's color while a page of it loads with the panel closed.
+   * the site's color while a page of it loads or writes a reply with the
+   * panel closed, and one that stays for a reply nobody saw yet.
    */
   sync() {
     const button = this.#window.document.getElementById(WIDGET_ID);
@@ -94,7 +95,11 @@ export class ZendiaWebChatBar {
     const status = this.#dock.status;
     button.setAttribute("aria-pressed", String(status.open));
     button.setAttribute("tooltiptext", tooltip(status));
-    button.toggleAttribute("running", status.loading && !status.open);
+    button.toggleAttribute(
+      "running",
+      (status.loading || status.replying) && !status.open
+    );
+    button.toggleAttribute("unseen", status.unseen && !status.open);
     button.style.setProperty("--zendia-agent-color", status.color);
   }
 }

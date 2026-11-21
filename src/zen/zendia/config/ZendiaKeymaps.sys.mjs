@@ -191,6 +191,22 @@ export const ZendiaKeymapsSpec = {
     // picks the site, as sidekick.nvim's s picks the agent.
     ["n", "<leader>aw", "webchat.toggle"],
     ["n", "<leader>ac", "webchat.select"],
+    ["n", "<leader>aN", "webchat.newChatAll"],
+    // Asking it about the page, as the page's menu does: the selection in
+    // visual mode, else the page, an image, a part of the screen or tabs.
+    ["n", "<leader>ak", "webchat.ask"],
+    ["n", "<leader>aS", "webchat.summarizePage"],
+    ["n", "<leader>ai", "webchat.askImage"],
+    ["n", "<leader>ar", "webchat.askRegion"],
+    ["n", "<leader>aT", "webchat.askTabs"],
+    ["n", "<leader>aR", "webchat.putReply"],
+    ["v", "<leader>ak", "webchat.ask"],
+    ["v", "<leader>ae", "webchat.explain"],
+    ["v", "<leader>as", "webchat.summarize"],
+    ["v", "<leader>at", "webchat.translate"],
+    ["v", "<leader>ad", "webchat.define"],
+    ["v", "<leader>af", "webchat.factCheck"],
+    ["v", "<leader>aa", "webchat.askAbout"],
 
     // Every extension, uBlock Origin included, through one picker.
     ["n", "<leader>x", "extensions.pick"],
@@ -343,6 +359,7 @@ export const ZendiaKeymapsSpec = {
     ["n", "[", "prev"],
     ["n", "]", "next"],
     ["n", "g", "goto"],
+    ["v", "<leader>a", "ask web chat"],
     ["v", "a", "around"],
     ["v", "i", "inside"],
     ["e", "g", "goto"],
