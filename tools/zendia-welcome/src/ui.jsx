@@ -10,7 +10,7 @@ import {
   MASCOT_COLORS,
   MASCOT_EDGE,
   MASCOT_FACE,
-  MASCOT_STROKES,
+  MASCOT_MORPH_MS,
   MASCOT_VIEWBOX,
   mascotFrame,
   mixColor,
@@ -82,7 +82,7 @@ export function Key({ id }) {
  * way the browser's does: the arcs slide, the color blends and the face bends
  * into the new one.
  */
-const MORPH_MS = 360;
+const MORPH_MS = MASCOT_MORPH_MS;
 
 export function Mascot({ pose, still = false, ...props }) {
   const [frame, setFrame] = useState(() => ({ from: pose, to: pose, t: 1 }));
@@ -110,7 +110,8 @@ export function Mascot({ pose, still = false, ...props }) {
   const { from, to, t } = frame;
   const drawing = mascotFrame(from, to, t);
   const body = mixColor(MASCOT_COLORS[from], MASCOT_COLORS[to], drawing.color);
-  const points = list => list.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const outline = list => "M" + list.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join("L") + "Z";
+  const head = outline(drawing.head);
   const box = MASCOT_VIEWBOX;
   return (
     <svg
@@ -119,31 +120,30 @@ export function Mascot({ pose, still = false, ...props }) {
       aria-hidden="true"
       {...props}
     >
-      <g fill={MASCOT_EDGE.color} stroke={MASCOT_EDGE.color} strokeLinecap="round" strokeLinejoin="round">
-        {drawing.arcs.map(arc => (
-          <path key={arc.mode} d={arc.d} fill="none" strokeWidth={MASCOT_STROKES.ring + MASCOT_EDGE.width} />
+      <g fill={MASCOT_EDGE.color} stroke={MASCOT_EDGE.color} strokeWidth={MASCOT_EDGE.width} strokeLinejoin="round">
+        {drawing.cells.map(cell => (
+          <path key={cell.mode} d={outline(cell.points)} />
         ))}
-        <polygon points={points(drawing.head)} strokeWidth={MASCOT_STROKES.head + MASCOT_EDGE.width} />
-        {drawing.antennas.map((antenna, index) => (
-          <polygon key={index} points={points(antenna)} strokeWidth={MASCOT_STROKES.antenna + MASCOT_EDGE.width} />
+        <path d={head} />
+      </g>
+      {drawing.cells.map(cell => (
+        <path key={cell.mode} d={outline(cell.points)} fill={MASCOT_COLORS[cell.mode]} />
+      ))}
+      <path d={head} fill={body} />
+      <g fill="none" stroke={MASCOT_FACE} strokeLinecap="round">
+        {drawing.eyes.map(({ points: [[x0, y0], [x1, y1]], width }, index) => (
+          <path key={index} d={`M${x0} ${y0}L${x1} ${y1}`} strokeWidth={width} />
         ))}
       </g>
-      <g fill="none" strokeLinecap="round" strokeWidth={MASCOT_STROKES.ring}>
-        {drawing.arcs.map(arc => (
-          <path key={arc.mode} d={arc.d} stroke={MASCOT_COLORS[arc.mode]} />
-        ))}
-      </g>
-      <g fill={body} stroke={body} strokeLinejoin="round">
-        <polygon points={points(drawing.head)} strokeWidth={MASCOT_STROKES.head} />
-        {drawing.antennas.map((antenna, index) => (
-          <polygon key={index} points={points(antenna)} strokeWidth={MASCOT_STROKES.antenna} />
-        ))}
-      </g>
-      <g fill="none" stroke={MASCOT_FACE} strokeLinecap="round" strokeLinejoin="round">
-        {drawing.face.map((stroke, index) => (
-          <polyline key={index} points={points(stroke.points)} strokeWidth={stroke.width.toFixed(2)} />
-        ))}
-      </g>
+      {drawing.letters.map(letter => (
+        <path
+          key={letter.mode}
+          d={letter.d}
+          fill={MASCOT_FACE}
+          fillRule="evenodd"
+          transform={`translate(${letter.x} ${letter.y}) rotate(${letter.lean}) scale(${letter.scale})`}
+        />
+      ))}
     </svg>
   );
 }

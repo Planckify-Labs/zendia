@@ -7,7 +7,7 @@ import {
   MASCOT_EDGE,
   MASCOT_FACE,
   MASCOT_MODES,
-  MASCOT_STROKES,
+  MASCOT_MORPH_MS,
   MASCOT_VIEWBOX,
   mascotFrame,
   mixColor,
@@ -29,7 +29,7 @@ const MODES = {
 };
 
 // How long a switch from one mode to another takes, in milliseconds.
-const MORPH_MS = 360;
+const MORPH_MS = MASCOT_MORPH_MS;
 
 function rgb(hex) {
   return [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
@@ -38,16 +38,16 @@ function rgb(hex) {
 /**
  * The mode indicator in a browser window: the mode of the selected tab's
  * page and whatever has been typed towards a mapping. The mode is shown by
- * Zendia's mascot (ZendiaMascot.sys.mjs) inside its ring of modes, in that
- * mode's color and with that mode's face. A switch morphs it into the next
- * mode's drawing, and now and then it blinks.
+ * Zendia's mascot (ZendiaMascot.sys.mjs) among its six mode cells, with the
+ * mode's cell in the lead, the mode's color and pose, and the mode's letter.
+ * A switch morphs it into the next mode's drawing, and now and then it blinks.
  */
 export class ZendiaStatusline {
   #element;
   #keys;
   #mascot;
-  // The parts of the mascot's drawing that move: the ring's arcs, the body's
-  // group, its head and antennas, and the face's strokes.
+  // The parts of the mascot's drawing that move: the six cells, the head and
+  // antenna, the ink edge under them, the eyes and the mode's letter.
   #parts;
   #drawn;
   // The mode the mascot is in (or on its way to), and its body's color.
@@ -196,74 +196,31 @@ export class ZendiaStatusline {
       parent.append(element);
       return element;
     };
-    // The ink edge, under everything: the ring's arcs and the silhouette again,
-    // a little wider.
+    // The ink edge, under everything: the cells and the mascot again, outlined.
     const edge = make(
       "g",
       {
-        stroke: MASCOT_EDGE.color,
         fill: MASCOT_EDGE.color,
-        "stroke-linecap": "round",
+        stroke: MASCOT_EDGE.color,
+        "stroke-width": MASCOT_EDGE.width,
         "stroke-linejoin": "round",
       },
       this.#mascot
     );
-    const edgeArcs = MASCOT_MODES.map(() =>
-      make(
-        "path",
-        {
-          fill: "none",
-          "stroke-width": MASCOT_STROKES.ring + MASCOT_EDGE.width,
-        },
-        edge
-      )
+    const edgeCells = MASCOT_MODES.map(() => make("path", {}, edge));
+    const edgeHead = make("path", {}, edge);
+    const cells = MASCOT_MODES.map(() =>
+      make("path", { class: "zendia-mascot-cell" }, this.#mascot)
     );
-    const edgeHead = make(
-      "polygon",
-      { "stroke-width": MASCOT_STROKES.head + MASCOT_EDGE.width },
-      edge
-    );
-    const edgeAntennas = [0, 1].map(() =>
-      make(
-        "polygon",
-        { "stroke-width": MASCOT_STROKES.antenna + MASCOT_EDGE.width },
-        edge
-      )
-    );
-    const ring = make(
+    const head = make("path", { class: "zendia-mascot-head" }, this.#mascot);
+    const face = make(
       "g",
-      {
-        fill: "none",
-        "stroke-linecap": "round",
-        "stroke-width": MASCOT_STROKES.ring,
-      },
+      { fill: "none", "stroke-linecap": "round" },
       this.#mascot
     );
-    const arcs = MASCOT_MODES.map(() => make("path", {}, ring));
-    const body = make("g", { "stroke-linejoin": "round" }, this.#mascot);
-    const head = make("polygon", { "stroke-width": MASCOT_STROKES.head }, body);
-    const antennas = [0, 1].map(() =>
-      make("polygon", { "stroke-width": MASCOT_STROKES.antenna }, body)
-    );
-    const faceGroup = make(
-      "g",
-      { fill: "none", "stroke-linecap": "round", "stroke-linejoin": "round" },
-      this.#mascot
-    );
-    const face = mascotFrame("n").face.map(() =>
-      make("polyline", {}, faceGroup)
-    );
-    return {
-      edgeArcs,
-      edgeHead,
-      edgeAntennas,
-      arcs,
-      body,
-      head,
-      antennas,
-      faceGroup,
-      face,
-    };
+    const eyes = [0, 1].map(() => make("path", {}, face));
+    const letters = make("g", {}, this.#mascot);
+    return { edgeCells, edgeHead, cells, head, face, eyes, letters };
   }
 
   /**
@@ -273,43 +230,56 @@ export class ZendiaStatusline {
    * @param {string} from
    * @param {string} to
    * @param {number} t
-   * @param {string} fromColor The body's color in `from`.
-   * @param {string} toColor The body's color in `to`.
+   * @param {string} fromColor The mascot's color in `from`.
+   * @param {string} toColor The mascot's color in `to`.
    * @param {number} [blink]
    */
   #paint(from, to, t, fromColor, toColor, blink = 0) {
     const frame = mascotFrame(from, to, t, { blink });
-    const points = list =>
-      list.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-    frame.arcs.forEach(({ mode, d }, i) => {
-      const arc = this.#parts.arcs[i];
-      arc.setAttribute("d", d);
-      this.#parts.edgeArcs[i].setAttribute("d", d);
-      arc.setAttribute(
-        "stroke",
+    const outline = list =>
+      "M" +
+      list.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join("L") +
+      "Z";
+    frame.cells.forEach(({ mode, points }, i) => {
+      const d = outline(points);
+      this.#parts.cells[i].setAttribute("d", d);
+      this.#parts.cells[i].setAttribute(
+        "fill",
         ZendiaTheme.hex(`mode-${mode}`) ?? MASCOT_COLORS[mode]
       );
+      this.#parts.edgeCells[i].setAttribute("d", d);
     });
-    const color = mixColor(fromColor, toColor, frame.color);
-    this.#parts.body.setAttribute("fill", color);
-    this.#parts.body.setAttribute("stroke", color);
-    const head = points(frame.head);
-    this.#parts.head.setAttribute("points", head);
-    this.#parts.edgeHead.setAttribute("points", head);
-    frame.antennas.forEach((antenna, i) => {
-      const outline = points(antenna);
-      this.#parts.antennas[i].setAttribute("points", outline);
-      this.#parts.edgeAntennas[i].setAttribute("points", outline);
-    });
-    this.#parts.faceGroup.setAttribute(
-      "stroke",
-      ZendiaTheme.hex("statusline-background") ?? MASCOT_FACE
+    const head = outline(frame.head);
+    this.#parts.head.setAttribute("d", head);
+    this.#parts.head.setAttribute(
+      "fill",
+      mixColor(fromColor, toColor, frame.color)
     );
-    frame.face.forEach(({ points: line, width }, i) => {
-      const stroke = this.#parts.face[i];
-      stroke.setAttribute("points", points(line));
-      stroke.setAttribute("stroke-width", width.toFixed(2));
+    this.#parts.edgeHead.setAttribute("d", head);
+    const ink = ZendiaTheme.hex("statusline-background") ?? MASCOT_FACE;
+    this.#parts.face.setAttribute("stroke", ink);
+    frame.eyes.forEach(({ points: [[x0, y0], [x1, y1]], width }, i) => {
+      const eye = this.#parts.eyes[i];
+      eye.setAttribute(
+        "d",
+        `M${x0.toFixed(1)} ${y0.toFixed(1)}L${x1.toFixed(1)} ${y1.toFixed(1)}`
+      );
+      eye.setAttribute("stroke-width", width.toFixed(1));
     });
+    const document = this.#mascot.ownerDocument;
+    this.#parts.letters.replaceChildren(
+      ...frame.letters.map(({ d, x, y, lean, scale }) => {
+        const letter = document.createElementNS(SVG_NS, "path");
+        letter.setAttribute("d", d);
+        letter.setAttribute("fill", ink);
+        letter.setAttribute("fill-rule", "evenodd");
+        letter.setAttribute(
+          "transform",
+          `translate(${x} ${y}) rotate(${lean}) scale(${scale.toFixed(2)})`
+        );
+        return letter;
+      })
+    );
   }
 
   #reducedMotion() {
@@ -317,10 +287,10 @@ export class ZendiaStatusline {
   }
 
   /**
-   * Morphs the mascot into a mode's drawing, in the mode's color: the ring's
-   * arcs slide, the color blends, it leans and swings its antenna, and its
-   * face bends into the new one. From partway through a switch it goes on
-   * from where it is.
+   * Morphs the mascot into a mode's drawing, in the mode's color: the cells
+   * reshape like jelly around the new lead, the color blends, the antenna
+   * bends into its new pose, the eyes follow, and the letter changes. From
+   * partway through a switch it goes on from where it is.
    *
    * @param {string} mode
    * @param {string} color

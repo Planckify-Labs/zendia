@@ -245,15 +245,11 @@ add_task(
     );
     const mascot = indicator.querySelector("svg.zendia-mascot");
     Assert.equal(
-      mascot.querySelectorAll("path").length,
-      12,
-      "The ring has an arc for each mode, each over its ink edge"
+      mascot.querySelectorAll(".zendia-mascot-cell").length,
+      6,
+      "The mascot sits among a cell for each mode"
     );
-    Assert.greater(
-      mascot.querySelectorAll("polygon, polyline").length,
-      5,
-      "The mascot and its face are drawn"
-    );
+    ok(mascot.querySelector(".zendia-mascot-head"), "with its head drawn");
     Assert.greater(
       mascot.getBoundingClientRect().width,
       20,
