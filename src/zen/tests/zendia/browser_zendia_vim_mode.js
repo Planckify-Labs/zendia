@@ -296,8 +296,99 @@ add_task(async function test_the_mode_indicator_steps_aside_from_the_pointer() {
     () => !indicator.hasAttribute("aside"),
     "and comes back once the pointer has left"
   );
+  // It may come back larger or smaller than it left: it grows from, and
+  // shrinks into, its corner.
   await TestUtils.waitForCondition(() => {
     const now = indicator.getBoundingClientRect();
-    return Math.abs(now.x - home.x) < 2;
+    return (
+      Math.abs(now.left - home.left) < 2 &&
+      Math.abs(now.bottom - home.bottom) < 2
+    );
   }, "to the corner it came from");
+});
+
+const SHOW = "zendia.statusline.show";
+
+add_task(async function test_the_mode_indicator_rests_after_a_change() {
+  const indicator = statusline();
+  // A change of the setting wakes it.
+  await SpecialPowers.pushPrefEnv({ set: [[SHOW, "always"]] });
+  await SpecialPowers.pushPrefEnv({ set: [[SHOW, "shrink"]] });
+  Assert.equal(indicator.getAttribute("presence"), "active", "It comes up");
+  await TestUtils.waitForCondition(
+    () =>
+      indicator.getAttribute("presence") == "resting" &&
+      indicator.style.scale == "0.4",
+    "and once things are quiet, shrinks to a badge in its corner"
+  );
+
+  Zendia.updateState(gBrowser.selectedBrowser, { mode: "i" });
+  Assert.equal(
+    indicator.getAttribute("presence"),
+    "active",
+    "A switch raises it"
+  );
+  Assert.equal(
+    indicator.querySelector(".zendia-statusline-announce").textContent,
+    "INSERT",
+    "and says the new mode once to screen readers"
+  );
+  Zendia.updateState(gBrowser.selectedBrowser, { mode: "n", tokens: ["g"] });
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  Assert.equal(
+    indicator.getAttribute("presence"),
+    "active",
+    "It stays up while a mapping is half typed"
+  );
+  Zendia.updateState(gBrowser.selectedBrowser, { mode: "n" });
+
+  await SpecialPowers.pushPrefEnv({ set: [[SHOW, "change"]] });
+  await TestUtils.waitForCondition(
+    () =>
+      indicator.getAttribute("presence") == "gone" &&
+      indicator.hasAttribute("away"),
+    "Only on change, it goes once things are quiet"
+  );
+  await SpecialPowers.pushPrefEnv({ set: [[SHOW, "always"]] });
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  Assert.equal(
+    indicator.getAttribute("presence"),
+    "active",
+    "Always, it stays up"
+  );
+
+  document.documentElement.setAttribute("inDOMFullscreen", "true");
+  await TestUtils.waitForCondition(
+    () => indicator.getAttribute("presence") == "gone",
+    "It leaves a fullscreen video alone"
+  );
+  document.documentElement.removeAttribute("inDOMFullscreen");
+  await TestUtils.waitForCondition(
+    () => indicator.getAttribute("presence") == "active",
+    "and comes back after"
+  );
+  await SpecialPowers.popPrefEnv();
+  await SpecialPowers.popPrefEnv();
+  await SpecialPowers.popPrefEnv();
+  await SpecialPowers.popPrefEnv();
+});
+
+add_task(async function test_the_mode_indicator_ducks_while_the_page_scrolls() {
+  const indicator = statusline();
+  await BrowserTestUtils.withNewTab(
+    "data:text/html,<p style='height:6000px'>long</p>",
+    async browser => {
+      await SpecialPowers.spawn(browser, [], () =>
+        content.window.scrollBy(0, 300)
+      );
+      await TestUtils.waitForCondition(
+        () => indicator.getAttribute("presence") == "tucked",
+        "It ducks out of sight while the page scrolls"
+      );
+      await TestUtils.waitForCondition(
+        () => indicator.getAttribute("presence") != "tucked",
+        "and comes back once the scrolling stops"
+      );
+    }
+  );
 });

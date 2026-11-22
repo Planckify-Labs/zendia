@@ -28,6 +28,7 @@ const MAX_REFUSED_FOCUS = 3;
 
 // How often the user's own input in a page is reported to the parent.
 const USER_INPUT_THROTTLE_MS = 300;
+const SCROLL_THROTTLE_MS = 150;
 
 // Content actions that work on the field the keys went to, so they stay in
 // its frame; the others act on the page. `i` chooses among the fields of the
@@ -67,6 +68,7 @@ export class ZendiaKeysChild extends JSWindowActorChild {
   // When the user's own input was last reported to the parent, which an
   // agent working this tab waits out (Zendia:UserInput).
   #userInputSent = 0;
+  #scrollSent = 0;
   // Whether a page field has focus. The parent needs it to take reserved
   // browser shortcuts, like Ctrl+W, only while the user is typing.
   #inField = false;
@@ -126,6 +128,9 @@ export class ZendiaKeysChild extends JSWindowActorChild {
       case "pointerdown":
       case "wheel":
         this.#noteUserInput(event);
+        break;
+      case "scroll":
+        this.#noteScroll(event);
         break;
       case "focusin":
       case "focusout":
@@ -314,6 +319,31 @@ export class ZendiaKeysChild extends JSWindowActorChild {
     this.#userInputSent = now;
     try {
       this.sendAsyncMessage("Zendia:UserInput");
+    } catch {
+      // The page is gone.
+    }
+  }
+
+  // The page itself scrolling, or a scroller that fills most of it (as an
+  // app's main column does), throttled: the mode indicator ducks out of the
+  // way. A carousel, a code block or a frame scrolling does not count.
+  #noteScroll(event) {
+    const target = event.target;
+    const window = this.contentWindow;
+    if (!window || this.browsingContext.parent) {
+      return;
+    }
+    const isPage =
+      target == this.document ||
+      target == this.document?.documentElement ||
+      (target?.clientHeight ?? 0) >= window.innerHeight / 2;
+    const now = Date.now();
+    if (!isPage || now - this.#scrollSent < SCROLL_THROTTLE_MS) {
+      return;
+    }
+    this.#scrollSent = now;
+    try {
+      this.sendAsyncMessage("Zendia:Scrolled");
     } catch {
       // The page is gone.
     }

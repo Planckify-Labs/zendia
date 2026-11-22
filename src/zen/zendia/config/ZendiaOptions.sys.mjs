@@ -9,6 +9,7 @@ export const ZendiaOptions = {
   PREF_LEADER: "zendia.leader",
   PREF_TIMEOUTLEN: "zendia.timeoutlen",
   PREF_STATUSLINE: "zendia.statusline.enabled",
+  PREF_STATUSLINE_SHOW: "zendia.statusline.show",
 
   get enabled() {
     return Services.prefs.getBoolPref(this.PREF_ENABLED, true);
@@ -34,5 +35,15 @@ export const ZendiaOptions = {
 
   get statusline() {
     return Services.prefs.getBoolPref(this.PREF_STATUSLINE, true);
+  },
+
+  // How the mode indicator rests once things are quiet: "shrink" to a small
+  // badge, "always" up, or gone until the next "change".
+  get statuslineShow() {
+    const show = Services.prefs.getStringPref(
+      this.PREF_STATUSLINE_SHOW,
+      "shrink"
+    );
+    return ["shrink", "always", "change"].includes(show) ? show : "shrink";
   },
 };

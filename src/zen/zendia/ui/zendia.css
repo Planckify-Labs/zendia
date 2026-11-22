@@ -113,7 +113,13 @@
   list-style-image: url("chrome://browser/skin/zen-icons/selectable/chat.svg");
 }
 
-:is(#zendia-chat-button[cui-areatype="toolbar"], #zendia-chat-topbar, #zendia-webchat-button[cui-areatype="toolbar"], #zendia-agents-button[cui-areatype="toolbar"], #zendia-agents-topbar) {
+:is(
+  #zendia-chat-button[cui-areatype="toolbar"],
+  #zendia-chat-topbar,
+  #zendia-webchat-button[cui-areatype="toolbar"],
+  #zendia-agents-button[cui-areatype="toolbar"],
+  #zendia-agents-topbar
+) {
   position: relative;
   display: flex;
   flex: none;
@@ -224,7 +230,9 @@
     background-color: var(--zendia-accent);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
     color: light-dark(#ffffff, var(--zendia-ink));
-    font: 700 9px/15px ui-monospace, monospace;
+    font:
+      700 9px/15px ui-monospace,
+      monospace;
     text-align: center;
   }
 
@@ -320,7 +328,9 @@
     border-radius: 4px;
     background: var(--zendia-hint);
     color: var(--zendia-hint-text);
-    font: 700 11px/16px ui-monospace, monospace;
+    font:
+      700 11px/16px ui-monospace,
+      monospace;
     pointer-events: none;
   }
 }
@@ -335,16 +345,11 @@
   --zendia-float-tint: light-dark(rgba(255, 255, 255, 0.55), rgba(22, 22, 26, 0.62));
   --zendia-float-filter: var(--zen-backdrop-underlay) blur(40px) saturate(180%) contrast(60%);
   /* The light falling on the top of the pane. */
-  --zendia-float-sheen: linear-gradient(
-    to bottom,
-    light-dark(rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.06)),
-    transparent 96px
-  );
+  --zendia-float-sheen: linear-gradient(to bottom, light-dark(rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.06)), transparent 96px);
   --zendia-float-outline: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.12));
   --zendia-float-shadow:
     inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.14)),
-    inset 0 0 0 0.5px light-dark(rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.05)),
-    0 2px 6px light-dark(rgba(20, 22, 40, 0.1), rgba(0, 0, 0, 0.3)),
+    inset 0 0 0 0.5px light-dark(rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.05)), 0 2px 6px light-dark(rgba(20, 22, 40, 0.1), rgba(0, 0, 0, 0.3)),
     0 24px 64px -16px light-dark(rgba(20, 22, 40, 0.38), rgba(0, 0, 0, 0.6));
   /* Dimmed text: anything fainter falls under 4:1 over a page of the
      opposite brightness. */
@@ -357,7 +362,31 @@
   --zendia-model-filter: blur(11px) saturate(190%);
 
   /* The agent panel's spring (ZendiaAgentDock.sys.mjs). */
-  --zendia-spring: linear(0, 0.0388 4%, 0.1313 8%, 0.2498 12%, 0.3757 16%, 0.497 20%, 0.6068 24%, 0.7018 28%, 0.781 32%, 0.8448 36%, 0.8948 40%, 0.9327 44%, 0.9603 48%, 0.9804 52%, 0.994 56%, 1.0025 60%, 1.0075 64%, 1.0101 68%, 1.0109 72%, 1.0104 76%, 1.0084 84%, 1.0045 95%, 1);
+  --zendia-spring: linear(
+    0,
+    0.0388 4%,
+    0.1313 8%,
+    0.2498 12%,
+    0.3757 16%,
+    0.497 20%,
+    0.6068 24%,
+    0.7018 28%,
+    0.781 32%,
+    0.8448 36%,
+    0.8948 40%,
+    0.9327 44%,
+    0.9603 48%,
+    0.9804 52%,
+    0.994 56%,
+    1.0025 60%,
+    1.0075 64%,
+    1.0101 68%,
+    1.0109 72%,
+    1.0104 76%,
+    1.0084 84%,
+    1.0045 95%,
+    1
+  );
   --zendia-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --zendia-ease-in: cubic-bezier(0.4, 0, 1, 1);
 }
@@ -507,11 +536,11 @@
 }
 
 /* which-key's "helix" preset, which LazyVim uses: one column in the bottom
-   right corner, 30 to 60 columns wide, above the statusline. It grows out of
-   that corner. */
+   right corner, 30 to 60 columns wide. It grows out of that corner, and the
+   mode indicator steps out of its way (ZendiaStatusline.sys.mjs). */
 #zendia-which-key {
   right: 12px;
-  bottom: 122px;
+  bottom: 12px;
   min-width: 30ch;
   max-width: min(60ch, 90vw);
   max-height: 75vh;
@@ -542,14 +571,7 @@
 
 /* Scrollbars in zendia's own panels: thin, in its pink over no track,
    brighter while the mouse is on them. */
-:is(
-    .zendia-which-key-list,
-    .zendia-picker-list,
-    .zendia-agent-log,
-    .zendia-md pre,
-    .zendia-md-table,
-    .zendia-ui-scroll
-  ) {
+:is(.zendia-which-key-list, .zendia-picker-list, .zendia-agent-log, .zendia-md pre, .zendia-md-table, .zendia-ui-scroll) {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--zendia-scrollbar) 45%, transparent) transparent;
 
@@ -566,13 +588,23 @@
   align-items: flex-end;
   gap: 6px;
   pointer-events: none;
+  /* Where it stands from its corner (ZendiaStatusline.sys.mjs): clear of
+     Zendia's own panels and, with the pointer on it, of the pointer. */
+  translate: var(--zendia-statusline-x, 0) var(--zendia-statusline-y, 0);
   transition: translate 340ms var(--zendia-spring);
+  /* It shrinks to a badge and grows back from its corner; its own springs
+     set the scale. */
+  transform-origin: right bottom;
+}
 
-  /* The pointer came over it: it waits at the page's other side until the
-     pointer has left (ZendiaStatusline.sys.mjs). */
-  &[aside] {
-    translate: var(--zendia-statusline-aside) 0;
-  }
+/* Said once to screen readers on each switch, and never seen. */
+.zendia-statusline-announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* What has been typed toward a mapping, beside the mascot. */
@@ -583,11 +615,18 @@
   border-radius: 8px;
   background: var(--zendia-statusline-background);
   color: var(--zendia-statusline-text);
-  font: 700 12px/18px ui-monospace, monospace;
+  font:
+    700 12px/18px ui-monospace,
+    monospace;
   white-space: pre;
 
   &:empty {
     display: none;
+  }
+
+  /* Out of sight with the mascot. */
+  #zendia-statusline[away] > & {
+    visibility: hidden;
   }
 }
 
@@ -595,10 +634,9 @@
    it and morphs it from mode to mode (ZendiaMascot.sys.mjs); here is only its
    size and how it rises. It is never mirrored: its face carries letters. */
 .zendia-mascot {
-  /* Half its first size: large enough to read its face, small enough not to
-     cover the page. */
-  width: 44px;
-  height: 44px;
+  /* Large enough to read its face, its letter and its antenna at a glance. */
+  width: 132px;
+  height: 132px;
   overflow: visible;
   transition: translate 160ms var(--zendia-ease-out);
 
@@ -629,6 +667,7 @@
 /* The mascot keeps the corner; what is typed stands on its inner side. */
 :root[zen-right-side] #zendia-statusline {
   flex-direction: row-reverse;
+  transform-origin: left bottom;
 }
 
 .zendia-which-key-title {
@@ -653,7 +692,9 @@
 .zendia-which-key-key {
   justify-self: end;
   color: var(--zendia-which-key-key);
-  font: 700 12px/18px ui-monospace, monospace;
+  font:
+    700 12px/18px ui-monospace,
+    monospace;
 }
 
 .zendia-which-key-separator {
@@ -735,7 +776,9 @@
   background-color: color-mix(in srgb, var(--zendia-hint) 20%, transparent);
   box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--zendia-hint) 50%, transparent);
   color: color-mix(in srgb, var(--zendia-hint) 55%, light-dark(black, white));
-  font: 700 12px/18px ui-monospace, monospace;
+  font:
+    700 12px/18px ui-monospace,
+    monospace;
   text-align: center;
   transition:
     background-color 140ms ease-out,
@@ -1531,7 +1574,9 @@
     border-radius: 5px;
     background-color: color-mix(in srgb, var(--zendia-md-code-background) 85%, transparent);
     color: var(--zendia-md-code);
-    font: 0.92em/1.4 ui-monospace, monospace;
+    font:
+      0.92em/1.4 ui-monospace,
+      monospace;
   }
 
   & pre {
@@ -1546,7 +1591,9 @@
       display: block;
       margin-bottom: 6px;
       color: var(--zendia-agent-muted);
-      font: 600 10px/1 ui-monospace, monospace;
+      font:
+        600 10px/1 ui-monospace,
+        monospace;
       letter-spacing: 0.06em;
       text-transform: uppercase;
     }
@@ -1683,7 +1730,6 @@
   &:focus-within {
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--zendia-accent) 70%, transparent);
   }
-
 }
 
 /* Files held over the panel, to be dropped on it. */
@@ -1732,7 +1778,10 @@
   -moz-context-properties: fill;
   fill: var(--zendia-agent-text);
   color: inherit;
-  transition: background-color 120ms, fill 120ms, opacity 120ms;
+  transition:
+    background-color 120ms,
+    fill 120ms,
+    opacity 120ms;
 
   &:hover:not(:disabled) {
     background-color: color-mix(in srgb, var(--zendia-agent-text) 18%, transparent);
@@ -1754,7 +1803,8 @@
       width: 18px;
       height: 18px;
       background-color: currentColor;
-      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21 11-8.9 8.9a6 6 0 0 1-8.5-8.5l8.9-8.9a4 4 0 0 1 5.7 5.7l-8.9 8.9a2 2 0 0 1-2.8-2.8l8.2-8.2'/%3E%3C/svg%3E") center / contain no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21 11-8.9 8.9a6 6 0 0 1-8.5-8.5l8.9-8.9a4 4 0 0 1 5.7 5.7l-8.9 8.9a2 2 0 0 1-2.8-2.8l8.2-8.2'/%3E%3C/svg%3E")
+        center / contain no-repeat;
     }
 
     &:hover {
@@ -1774,7 +1824,8 @@
       width: 18px;
       height: 18px;
       background-color: currentColor;
-      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='2' width='6' height='12' rx='3'/%3E%3Cpath d='M5 11a7 7 0 0 0 14 0M12 18v4'/%3E%3C/svg%3E") center / contain no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='2' width='6' height='12' rx='3'/%3E%3Cpath d='M5 11a7 7 0 0 0 14 0M12 18v4'/%3E%3C/svg%3E")
+        center / contain no-repeat;
     }
 
     &:hover {
@@ -1948,7 +1999,9 @@
     overflow: hidden;
     background-color: var(--zendia-accent);
     color: light-dark(#ffffff, var(--zendia-ink));
-    font: 600 11px/16px system-ui, sans-serif;
+    font:
+      600 11px/16px system-ui,
+      sans-serif;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -2227,7 +2280,9 @@
     corner-shape: round;
     background-color: light-dark(#ffffff, var(--zendia-agent-text));
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-    transition: transform 220ms cubic-bezier(0.34, 1.4, 0.64, 1), background-color 160ms;
+    transition:
+      transform 220ms cubic-bezier(0.34, 1.4, 0.64, 1),
+      background-color 160ms;
   }
 
   &[aria-checked="true"] {
@@ -2293,7 +2348,10 @@
   background-size: 18px;
   -moz-context-properties: fill;
   fill: var(--zendia-agent-muted);
-  transition: border-color 120ms, background-color 120ms, fill 120ms;
+  transition:
+    border-color 120ms,
+    background-color 120ms,
+    fill 120ms;
 
   &:hover {
     border-color: var(--zendia-accent);
@@ -3157,12 +3215,7 @@
 
   /* One band of light crossing what it is doing now. */
   .zendia-agent-group[live] & {
-    background-image: linear-gradient(
-      90deg,
-      var(--zendia-agent-muted) 38%,
-      var(--zendia-agent-text) 50%,
-      var(--zendia-agent-muted) 62%
-    );
+    background-image: linear-gradient(90deg, var(--zendia-agent-muted) 38%, var(--zendia-agent-text) 50%, var(--zendia-agent-muted) 62%);
     background-size: 300% 100%;
     background-clip: text;
     color: transparent;
@@ -3369,7 +3422,8 @@
   width: 14px;
   height: 14px;
   background-color: var(--zendia-agent-confirm);
-  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2 4 5v6c0 5.25 3.4 10.15 8 11.5 4.6-1.35 8-6.25 8-11.5V5l-8-3Zm-1 6h2v6h-2V8Zm0 8h2v2h-2v-2Z'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2 4 5v6c0 5.25 3.4 10.15 8 11.5 4.6-1.35 8-6.25 8-11.5V5l-8-3Zm-1 6h2v6h-2V8Zm0 8h2v2h-2v-2Z'/></svg>")
+    center / contain no-repeat;
   animation: zendia-agent-pulse 1.8s ease-in-out infinite;
 }
 
@@ -3424,7 +3478,9 @@
   padding: 0 5px;
   border-radius: 4px;
   background-color: color-mix(in srgb, currentColor 16%, transparent);
-  font: 600 10px/16px ui-monospace, monospace;
+  font:
+    600 10px/16px ui-monospace,
+    monospace;
 }
 
 .zendia-agent-confirm-mark {
@@ -4101,7 +4157,8 @@
   padding: 0;
   border: none;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--zendia-agent-text) 22%, var(--zendia-agent-surface)) url("chrome://browser/skin/zen-icons/close.svg") center / 8px no-repeat;
+  background: color-mix(in srgb, var(--zendia-agent-text) 22%, var(--zendia-agent-surface)) url("chrome://browser/skin/zen-icons/close.svg") center / 8px
+    no-repeat;
   -moz-context-properties: fill;
   fill: var(--zendia-agent-text);
   opacity: 0;

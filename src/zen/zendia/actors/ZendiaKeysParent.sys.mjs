@@ -96,6 +96,9 @@ export class ZendiaKeysParent extends JSWindowActorParent {
       case "Zendia:UserInput":
         gUserInput.set(browser, Date.now());
         break;
+      case "Zendia:Scrolled":
+        lazy.Zendia.pageScrolled(browser);
+        break;
       // The user took the keys back from an agent's labels on this tab.
       case "Zendia:AgentCaptureDismissed":
         Services.obs.notifyObservers(browser, "zendia-agent-capture-dismissed");

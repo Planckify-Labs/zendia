@@ -14,6 +14,9 @@
 - name: zendia.statusline.enabled
   value: true
 
+- name: zendia.statusline.show
+  value: "shrink" # once things are quiet, the mode indicator shrinks to a small badge ("shrink"), stays up ("always"), or hides until the next change ("change"); zendia.statusline.enabled turns it off
+
 - name: zendia.ublock.enabled
   value: true # install uBlock Origin from AMO when it is missing; turned off when the user removes it
 

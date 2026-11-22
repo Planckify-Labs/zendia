@@ -221,6 +221,7 @@ class ZendiaService {
       ZendiaOptions.PREF_LEADER,
       ZendiaOptions.PREF_TIMEOUTLEN,
       ZendiaOptions.PREF_STATUSLINE,
+      ZendiaOptions.PREF_STATUSLINE_SHOW,
     ]) {
       Services.prefs.addObserver(pref, this);
     }
@@ -241,6 +242,11 @@ class ZendiaService {
           ui.engine = null;
         }
         this.#publish();
+        break;
+      case ZendiaOptions.PREF_STATUSLINE_SHOW:
+        for (const ui of this.#windows.values()) {
+          ui.statusline.setShow(ZendiaOptions.statuslineShow);
+        }
         break;
       case ZendiaOptions.PREF_ENABLED:
       case ZendiaOptions.PREF_STATUSLINE:
@@ -416,6 +422,20 @@ class ZendiaService {
    * @param {string|null} state.group
    * @param {boolean} state.field Whether a page field has focus.
    */
+  /**
+   * A page scrolled: the mode indicator of its window ducks out of sight, if
+   * the page is the one it shows the mode of.
+   *
+   * @param {Element} browser
+   */
+  pageScrolled(browser) {
+    const window = windowOf(browser);
+    const ui = this.#windows.get(browser.ownerDocument);
+    if (window?.gBrowser && ui && this.#keyedBrowser(window, ui) == browser) {
+      ui.statusline.scrolled();
+    }
+  }
+
   updateState(browser, { mode, tokens, count, group, field } = {}) {
     const text = (value, max) =>
       typeof value == "string" ? value.slice(0, max) : null;
@@ -770,6 +790,7 @@ class ZendiaService {
         this.run("agent.toggle", {}, { window }).catch(console.error),
     });
     this.#windows.set(window.document, ui);
+    ui.statusline.setShow(ZendiaOptions.statuslineShow);
     // "Ask ChatGPT" in the page's and the tabs' menus, with vim mode off too.
     try {
       ui.webChatMenu = new lazy.ZendiaWebChatMenu(window, { dock: ui.webchat });
@@ -1080,6 +1101,8 @@ class ZendiaService {
             // the tab waits out.
             pointerdown: { capture: true, passive: true, createActor: false },
             wheel: { capture: true, passive: true, createActor: false },
+            // Its scrolling, which puts the mode indicator out of the way.
+            scroll: { capture: true, passive: true, createActor: false },
           },
         },
         allFrames: true,
