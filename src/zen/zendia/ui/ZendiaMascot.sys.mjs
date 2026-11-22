@@ -3,7 +3,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 // Zendia's mascot, as shapes: the creature from the logo inside its ring of
-// modes (configs/branding/source). The ring is Zen's, cut into the six modes
+// modes (tools/branding). The ring is Zen's, cut into the six modes
 // in the colors the window takes for each. Every mode keeps its place on it,
 // NORMAL at the top and the rest clockwise, and the current mode's arc grows
 // where it sits while the others shorten away from it down to a dot. Inside
