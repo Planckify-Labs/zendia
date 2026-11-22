@@ -20,7 +20,7 @@
       "brandShortName": "Zendia",
       "brandFullName": "Zendia",
       "release": {
-        "displayVersion": "1.24.2b",
+        "displayVersion": "0.1.0b",
         "github": {
           "repo": "Planckify-Labs/zendia"
         },
