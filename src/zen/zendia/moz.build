@@ -139,6 +139,7 @@ EXTRA_JS_MODULES.zendia.ui += [
     "ui/ZendiaPicker.sys.mjs",
     "ui/ZendiaRegionPicker.sys.mjs",
     "ui/ZendiaStatusline.sys.mjs",
+    "ui/ZendiaTabMotion.sys.mjs",
     "ui/ZendiaTheme.sys.mjs",
     "ui/ZendiaToolbar.sys.mjs",
     "ui/ZendiaVimModeSwitch.sys.mjs",

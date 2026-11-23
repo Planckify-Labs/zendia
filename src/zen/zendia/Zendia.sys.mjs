@@ -71,6 +71,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   ZendiaToolbar: "resource:///modules/zendia/ui/ZendiaToolbar.sys.mjs",
   ZendiaWindowMode: "resource:///modules/zendia/ui/ZendiaWindowMode.sys.mjs",
   ZendiaStatusline: "resource:///modules/zendia/ui/ZendiaStatusline.sys.mjs",
+  ZendiaTabMotion: "resource:///modules/zendia/ui/ZendiaTabMotion.sys.mjs",
   ZendiaWhichKey: "resource:///modules/zendia/ui/ZendiaWhichKey.sys.mjs",
 });
 
@@ -746,6 +747,7 @@ class ZendiaService {
       statusline: new lazy.ZendiaStatusline(window),
       whichKey: new lazy.ZendiaWhichKey(window),
       menuKeys: new lazy.ZendiaMenuKeys(window),
+      tabMotion: new lazy.ZendiaTabMotion(window),
       explorer: null,
       toolbar: null,
       library: null,
