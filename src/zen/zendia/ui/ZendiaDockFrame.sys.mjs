@@ -21,7 +21,9 @@
 // What goes inside the root, and what the pill and handle say, is the
 // owner's. The prefs are <branch>layout, side, width and split-fallback
 // (zendia.agent. and zendia.webchat.). The look is zendia.css's, which
-// styles the ids <id>-dock, <id>-pill and <id>-handle.
+// styles the ids <id>-dock, <id>-pill and <id>-handle. While the panel shows,
+// the box beside the tab carries <id>-open, and <id>-focused while the keys
+// go to it, so the page can say whether it has them.
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
@@ -47,6 +49,7 @@ const SPRING =
 
 export class ZendiaDockFrame {
   #window;
+  #id;
   #branch;
   #minWidth;
   #defaultSide;
@@ -116,6 +119,7 @@ export class ZendiaDockFrame {
     }
   ) {
     this.#window = window;
+    this.#id = id;
     this.#branch = branch;
     this.#minWidth = minWidth;
     this.#defaultSide = side == "left" ? "left" : "right";
@@ -277,6 +281,10 @@ export class ZendiaDockFrame {
       this.#hovered = false;
       this.#scheduleHide();
     });
+    this.#root.addEventListener("focusin", () => this.#setFocused(true));
+    this.#root.addEventListener("focusout", event =>
+      this.#setFocused(this.#root.contains(event.relatedTarget))
+    );
 
     // Beside the tab box, where Zen's split view panes and sidebar sit.
     this.#host =
@@ -440,6 +448,10 @@ export class ZendiaDockFrame {
       element.setAttribute("layout", layout);
       element.setAttribute("side", side);
     }
+    this.#host?.toggleAttribute(`${this.#id}-open`, !this.#root.hidden);
+    if (this.#root.hidden) {
+      this.#setFocused(false);
+    }
     // Beside the tab the panel gives up its width, down to its narrowest,
     // before the tab gets too narrow.
     const width =
@@ -481,6 +493,10 @@ export class ZendiaDockFrame {
       this.cancelHide();
     }
     this.#onLayout();
+  }
+
+  #setFocused(focused) {
+    this.#host?.toggleAttribute(`${this.#id}-focused`, focused);
   }
 
   // Dragging the edge on the page's side widens or narrows the panel; the

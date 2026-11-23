@@ -1005,6 +1005,34 @@
   }
 }
 
+/* Where the keys go: while a panel is open, whichever of the panels or the
+   page holds the focus is ringed in the accent, as Zen rings the active pane
+   of a split view. A panel's ring is inside its edge, where nothing beside it
+   can clip it; the page's is outside, in the gap, as Zen's is, since the page
+   paints over anything inside. */
+:is(#zendia-agent-dock, #zendia-webchat-dock, #zendia-agents-dock) {
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  transition: outline-color 0.15s ease-out;
+
+  &:focus-within {
+    outline-color: var(--zendia-accent);
+  }
+}
+
+#zen-tabbox-wrapper:is([zendia-agent-open], [zendia-webchat-open], [zendia-agents-open])
+  #tabbrowser-tabpanels
+  .browserSidebarContainer.deck-selected:focus-within {
+  outline: 2px solid var(--zendia-accent) !important;
+}
+
+/* Zen's ring on the split view's active pane would say the keys go to the
+   page while they go to the panel. The box beside the tab says which are
+   open and which has the keys (ZendiaDockFrame.sys.mjs). */
+#zen-tabbox-wrapper:is([zendia-agent-focused], [zendia-webchat-focused], [zendia-agents-focused]) #tabbrowser-tabpanels .browserSidebarContainer.deck-selected {
+  outline-color: transparent !important;
+}
+
 /* The panel's edge on the page's side: dragging it resizes the panel. */
 .zendia-agent-grip {
   position: absolute;
