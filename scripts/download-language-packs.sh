@@ -24,10 +24,17 @@ LAST_FIREFOX_L10N_COMMIT=$(cat ./build/firefox-cache/l10n-last-commit-hash)
 
 cd ./locales
 rm -rf firefox-l10n
-# clone only from LAST_FIREFOX_L10N_COMMIT
-git clone https://github.com/mozilla-l10n/firefox-l10n
+# Fetch only LAST_FIREFOX_L10N_COMMIT, not the whole history. A connection
+# slower than 1 KB/s for a minute aborts and retries instead of hanging.
+git init -q firefox-l10n
 cd firefox-l10n
-git checkout $LAST_FIREFOX_L10N_COMMIT
+git remote add origin https://github.com/mozilla-l10n/firefox-l10n
+for attempt in 1 2 3; do
+  git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 \
+    fetch --depth 1 origin $LAST_FIREFOX_L10N_COMMIT && break
+  [ $attempt = 3 ] && exit 1
+done
+git checkout -q FETCH_HEAD
 cd $CURRENT_DIR
 
 rsyncExists=$(command -v rsync)
