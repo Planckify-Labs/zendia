@@ -1112,7 +1112,8 @@ class ZendiaService {
         // The parent checks everything a page sends: runFromKey only runs
         // mapped actions and updateState sanitizes the state.
         safeForUntrustedWebProcess: true,
-        enablePreference: ZendiaOptions.PREF_ENABLED,
+        // Not tied to vim mode: agents read and work pages through it, and
+        // its child leaves the page's keys alone while vim mode is off.
       },
       // The popups of extensions, whose browsers are in their own message
       // manager group: jump labels on their controls.

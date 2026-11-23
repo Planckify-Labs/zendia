@@ -107,6 +107,45 @@ add_task(async function test_observe_lists_controls_but_not_passwords() {
   BrowserTestUtils.removeTab(tab);
 });
 
+// Agents work pages through the ZendiaKeys actor, which once came and went
+// with vim mode: with it off, every page tool failed with "No such
+// JSWindowActor 'ZendiaKeys'".
+add_task(async function test_agents_work_pages_with_vim_mode_off() {
+  await SpecialPowers.pushPrefEnv({ set: [["zendia.enabled", false]] });
+  const tab = await openPage();
+  const browser = tab.linkedBrowser;
+  const { box } = toolbox(tab);
+  const { text, isError } = await box.callTool("page_observe", {});
+  ok(!isError, text);
+  const result = await box.callTool("page_act", {
+    action: "fill",
+    element: idOf(text, 'textbox "Name"'),
+    text: "Ada",
+  });
+  ok(!result.isError, result.text);
+  Assert.equal(await content(browser, "#name", "value"), "Ada");
+  const click = await box.callTool("page_act", {
+    action: "click",
+    element: idOf(result.text, 'button "Go"'),
+  });
+  ok(!click.isError, click.text);
+  Assert.equal(await content(browser, "#out"), "went");
+
+  // The page's own keys stay the page's.
+  const keys = SpecialPowers.spawn(browser, [], () => {
+    content.document.activeElement?.blur();
+    return new Promise(resolve =>
+      content.addEventListener("keydown", e => resolve(e.key), { once: true })
+    );
+  });
+  await SpecialPowers.spawn(browser, [], () => {});
+  browser.focus();
+  EventUtils.synthesizeKey("j", {}, window);
+  Assert.equal(await keys, "j", "vim mode off leaves the page its keys");
+  BrowserTestUtils.removeTab(tab);
+  await SpecialPowers.popPrefEnv();
+});
+
 add_task(async function test_act_fills_clicks_selects_and_presses() {
   const tab = await openPage();
   const browser = tab.linkedBrowser;

@@ -11,6 +11,35 @@ import {
   ZENDIA_SHARED_KEY,
   buildKeymap,
 } from "resource:///modules/zendia/core/ZendiaShared.sys.mjs";
+import { ZendiaOptions } from "resource:///modules/zendia/config/ZendiaOptions.sys.mjs";
+import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
+
+// The actor is there with vim mode off too, since agents read and work the
+// page through it; it then leaves the page's keys, focus and copies alone.
+// Turning vim mode off used to destroy the actor, which reset its keys; the
+// live ones are told instead.
+const gActors = new Set();
+const lazy = {};
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "vimMode",
+  ZendiaOptions.PREF_ENABLED,
+  true,
+  (pref, before, now) => {
+    for (const actor of gActors) {
+      actor.vimModeChanged(now);
+    }
+  }
+);
+
+// What the parent sends only for vim mode's keys.
+const VIM_MESSAGES = new Set([
+  "Zendia:Key",
+  "Zendia:LeaveField",
+  "Zendia:TakeFocus",
+  "Zendia:CaptureKey",
+  "Zendia:ResendState",
+]);
 
 // One keymap per content process, rebuilt when the parent publishes a new
 // version.
@@ -88,26 +117,61 @@ export class ZendiaKeysChild extends JSWindowActorChild {
   };
 
   actorCreated() {
-    this.contentWindow?.addEventListener(
-      "keydown",
-      this.#deferApzScrolling,
-      true,
-      true
-    );
-    this.contentWindow?.addEventListener("keyup", this.#onKeyUp, true);
+    gActors.add(this);
+    if (lazy.vimMode) {
+      this.#listenForKeys(true);
+    }
   }
 
   didDestroy() {
+    gActors.delete(this);
+    this.#listenForKeys(false);
+  }
+
+  #listenForKeys(on) {
     try {
-      this.contentWindow?.removeEventListener(
-        "keydown",
-        this.#deferApzScrolling,
-        true
-      );
-      this.contentWindow?.removeEventListener("keyup", this.#onKeyUp, true);
+      if (on) {
+        this.contentWindow?.addEventListener(
+          "keydown",
+          this.#deferApzScrolling,
+          true,
+          true
+        );
+        this.contentWindow?.addEventListener("keyup", this.#onKeyUp, true);
+      } else {
+        this.contentWindow?.removeEventListener(
+          "keydown",
+          this.#deferApzScrolling,
+          true
+        );
+        this.contentWindow?.removeEventListener("keyup", this.#onKeyUp, true);
+      }
     } catch {
       // The window is already gone.
     }
+  }
+
+  /**
+   * @param {boolean} on Whether vim mode is on now.
+   */
+  vimModeChanged(on) {
+    this.#listenForKeys(on);
+    if (on) {
+      if (!this.browsingContext.parent) {
+        const engine = this.#ensureEngine();
+        if (engine) {
+          this.#reportState(engine);
+        }
+      }
+      return;
+    }
+    const capture = this.#capture;
+    this.#capture = null;
+    capture?.finish?.();
+    this.#engine?.reset();
+    this.#engine = null;
+    this.#explicitInsert = false;
+    this.#swallowed.clear();
   }
 
   #swallow(event) {
@@ -118,6 +182,13 @@ export class ZendiaKeysChild extends JSWindowActorChild {
 
   handleEvent(event) {
     if (!event.isTrusted) {
+      return;
+    }
+    if (!lazy.vimMode) {
+      // An agent working the tab still waits for the user to pause.
+      if (["keydown", "pointerdown", "wheel"].includes(event.type)) {
+        this.#noteUserInput(event);
+      }
       return;
     }
     switch (event.type) {
@@ -153,6 +224,9 @@ export class ZendiaKeysChild extends JSWindowActorChild {
   }
 
   receiveMessage(message) {
+    if (!lazy.vimMode && VIM_MESSAGES.has(message.name)) {
+      return undefined;
+    }
     switch (message.name) {
       case "Zendia:RunContent":
         return this.runAction(message.data.id, message.data.args ?? {});
