@@ -86,6 +86,7 @@ EXTRA_JS_MODULES.zendia.plugins += [
     "plugins/ZendiaJumpContent.sys.mjs",
     "plugins/ZendiaLibrary.sys.mjs",
     "plugins/ZendiaNavigation.sys.mjs",
+    "plugins/ZendiaPanes.sys.mjs",
     "plugins/ZendiaPointerContent.sys.mjs",
     "plugins/ZendiaScroll.sys.mjs",
     "plugins/ZendiaScrollContent.sys.mjs",

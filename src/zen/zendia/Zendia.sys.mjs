@@ -26,6 +26,10 @@ import { ZendiaInputsSpec } from "resource:///modules/zendia/plugins/ZendiaInput
 import { ZendiaJumpSpec } from "resource:///modules/zendia/plugins/ZendiaJump.sys.mjs";
 import { ZendiaLibrarySpec } from "resource:///modules/zendia/plugins/ZendiaLibrary.sys.mjs";
 import { ZendiaNavigationSpec } from "resource:///modules/zendia/plugins/ZendiaNavigation.sys.mjs";
+import {
+  ZendiaPaneFocus,
+  ZendiaPanesSpec,
+} from "resource:///modules/zendia/plugins/ZendiaPanes.sys.mjs";
 import { ZendiaScrollSpec } from "resource:///modules/zendia/plugins/ZendiaScroll.sys.mjs";
 import { ZendiaSessionSpec } from "resource:///modules/zendia/plugins/ZendiaSession.sys.mjs";
 import { ZendiaTabsSpec } from "resource:///modules/zendia/plugins/ZendiaTabs.sys.mjs";
@@ -87,6 +91,7 @@ export const ZENDIA_SPECS = [
   ZendiaYankSpec,
   ZendiaFindSpec,
   ZendiaWindowsSpec,
+  ZendiaPanesSpec,
   ZendiaExplorerSpec,
   ZendiaToolbarSpec,
   ZendiaLibrarySpec,
@@ -438,6 +443,24 @@ class ZendiaService {
     }
   }
 
+  /**
+   * An <Esc> on a page left a field, or nothing had a use for it in normal
+   * mode. The web chat's page then leaves at once, as the agent's chat box
+   * does on <Esc>.
+   *
+   * @param {Element} browser
+   */
+  pageEscaped(browser) {
+    const window = windowOf(browser);
+    if (!ZendiaOptions.enabled || !window?.gBrowser) {
+      return;
+    }
+    const dock = this.webChatDockFor(window);
+    if (dock?.isShowing(browser)) {
+      dock.escape();
+    }
+  }
+
   updateState(browser, { mode, tokens, count, group, field } = {}) {
     const text = (value, max) =>
       typeof value == "string" ? value.slice(0, max) : null;
@@ -532,6 +555,15 @@ class ZendiaService {
    */
   webChatDockFor(window) {
     return this.#windows.get(window.document)?.webchat ?? null;
+  }
+
+  /**
+   * @param {Window} window
+   * @returns {ZendiaPaneFocus|null} Where the keys go between the window's
+   *   panels and the page.
+   */
+  panesFor(window) {
+    return this.#windows.get(window.document)?.panes ?? null;
   }
 
   // The browser UI buffer the keys go to, if one is open.
@@ -815,6 +847,7 @@ class ZendiaService {
       onSwitch: () =>
         this.run("agent.toggle", {}, { window }).catch(console.error),
     });
+    ui.panes = new ZendiaPaneFocus(window, [ui.agents, ui.agent, ui.webchat]);
     this.#windows.set(window.document, ui);
     ui.statusline.setShow(ZendiaOptions.statuslineShow);
     // "Ask ChatGPT" in the page's and the tabs' menus, with vim mode off too.
@@ -885,6 +918,11 @@ class ZendiaService {
         if (ui.whichKey.pinned) {
           ui.whichKey.hide();
         }
+        // The keys between the panels and the page, before a panel sees
+        // them: the browser's Ctrl+L would take them to the address bar.
+        if (this.#paneKey(window, ui, event)) {
+          return;
+        }
         // What is typed into the agent dock, or the agents panel, is theirs.
         if (
           ui.agent.contains(event.target) ||
@@ -937,6 +975,57 @@ class ZendiaService {
       },
       { once: true }
     );
+  }
+
+  /**
+   * Run a key of the panes (ZendiaPanes.sys.mjs) pressed in a panel, which
+   * the page's keys never see. In the web chat's page a key its mode maps
+   * is the page's (<C-l> in normal mode runs there, <C-h> in a field
+   * deletes); the rest would go to the browser's shortcuts before the page.
+   *
+   * @param {Window} window
+   * @param {object} ui
+   * @param {KeyboardEvent} event
+   * @returns {boolean} Whether the key was taken.
+   */
+  #paneKey(window, ui, event) {
+    const target = event.target;
+    const place = ui.panes.placeOf(target);
+    if (
+      !event.isTrusted ||
+      event.defaultPrevented ||
+      !ZendiaOptions.enabled ||
+      !place ||
+      place == "page"
+    ) {
+      return false;
+    }
+    const token = ZendiaKeys.fromEvent(event);
+    if (!token) {
+      return false;
+    }
+    if (target.localName == "browser") {
+      const state = this.stateFor(target);
+      if (state.tokens.length || this.keymap.get(state.mode, token)) {
+        return false;
+      }
+    } else if (
+      token == "<C-h>" &&
+      ZendiaDom.isEditable(ZendiaDom.deepActiveElement(window.document))
+    ) {
+      // In the chat box <C-h> deletes a character, as in insert mode.
+      return false;
+    }
+    const rhs = this.keymap.get("n", token)?.rhs;
+    if (typeof rhs != "string" || !rhs.startsWith("panes.")) {
+      return false;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    this.run(rhs, {}, { window }).catch(e =>
+      console.error(`Zendia: "${rhs}" failed`, e)
+    );
+    return true;
   }
 
   // Nothing of the page has focus after a picker or a dialog closes, or with

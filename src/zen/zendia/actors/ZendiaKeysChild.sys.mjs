@@ -646,8 +646,22 @@ export class ZendiaKeysChild extends JSWindowActorChild {
     ) {
       return;
     }
-    if (engine.feed(ZendiaKeys.fromEvent(event))) {
+    const token = ZendiaKeys.fromEvent(event);
+    const typing = engine.mode == "i";
+    if (engine.feed(token)) {
       this.#swallow(event);
+      // Out of a field: a panel showing the page may close on it too.
+      if (token == "<Esc>" && typing) {
+        this.sendAsyncMessage("Zendia:Escape");
+      }
+    } else if (token == "<Esc>" && engine.mode == "n") {
+      // An <Esc> nothing had a use for, the page's own handlers included
+      // (they run after this): a panel showing the page may close on it.
+      this.contentWindow?.setTimeout(() => {
+        if (!event.defaultPrevented) {
+          this.sendAsyncMessage("Zendia:Escape");
+        }
+      });
     }
   }
 

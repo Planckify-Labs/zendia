@@ -365,6 +365,27 @@ export class ZendiaWebChatDock {
   }
 
   /**
+   * <Esc> on the panel's page, as in the agent's chat box: beside the tab
+   * the keys go back to the page and the panel stays; over it, it closes.
+   */
+  escape() {
+    if (this.#frame.layout == "split") {
+      this.#window.gBrowser.selectedBrowser.focus();
+    } else {
+      this.close();
+    }
+  }
+
+  /** Give the open panel the keys, in the chat site's page. */
+  focus() {
+    (this.#viewOf(this.#current)?.browser ?? this.#root).focus();
+  }
+
+  getBoundingClientRect() {
+    return this.#root.getBoundingClientRect();
+  }
+
+  /**
    * Another buffer of the browser UI takes the keys. A panel beside the tab
    * stays, as a split view pane would; one over the page goes.
    */

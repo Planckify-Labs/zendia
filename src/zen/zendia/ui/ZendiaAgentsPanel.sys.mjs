@@ -242,6 +242,15 @@ export class ZendiaAgentsPanel {
     return this.#frame.contains(node);
   }
 
+  /** Give the open panel the keys, in its list. */
+  focus() {
+    this.#list.focus();
+  }
+
+  getBoundingClientRect() {
+    return this.#root.getBoundingClientRect();
+  }
+
   /**
    * @param {object} [options]
    * @param {boolean} [options.focus] Give the list the keys.

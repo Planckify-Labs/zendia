@@ -160,10 +160,13 @@ export const ZendiaKeymapsSpec = {
     ["n", "gt", "spaces.next"],
     ["n", "gT", "spaces.prev"],
 
-    ["n", "<C-h>", "splits.focusLeft"],
-    ["n", "<C-j>", "splits.focusDown"],
-    ["n", "<C-k>", "splits.focusUp"],
-    ["n", "<C-l>", "splits.focusRight"],
+    // The split view's panes, and Zendia's panels beside the page.
+    ["n", "<C-h>", "panes.focusLeft"],
+    ["n", "<C-j>", "panes.focusDown"],
+    ["n", "<C-k>", "panes.focusUp"],
+    ["n", "<C-l>", "panes.focusRight"],
+    ["n", "<C-\\>", "panes.last"],
+    ["i", "<C-\\>", "panes.last"],
     ["n", "<C-Up>", "splits.growHeight"],
     ["n", "<C-Down>", "splits.shrinkHeight"],
     ["n", "<C-Right>", "splits.growWidth"],

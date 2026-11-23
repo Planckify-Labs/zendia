@@ -480,8 +480,8 @@ export class ZendiaAgentDock {
       this.open(this.#window.gBrowser.selectedBrowser)
     );
 
-    this.#window.gBrowser.tabContainer.addEventListener("TabSelect", () =>
-      this.#onTabSelect()
+    this.#window.gBrowser.tabContainer.addEventListener("TabSelect", event =>
+      this.#onTabSelect(event.detail?.previousTab)
     );
     const offTheme = lazy.ZendiaTheme.onChange(() => {
       this.#queueRender();
@@ -604,6 +604,15 @@ export class ZendiaAgentDock {
    */
   contains(node) {
     return this.#frame.contains(node);
+  }
+
+  /** Give the open dock the keys, in its chat box. */
+  focus() {
+    this.#input.focus();
+  }
+
+  getBoundingClientRect() {
+    return this.#root.getBoundingClientRect();
   }
 
   /**
@@ -977,14 +986,23 @@ export class ZendiaAgentDock {
     this.#syncPill();
   }
 
-  #onTabSelect() {
-    const browser = this.#window.gBrowser.selectedBrowser;
+  #onTabSelect(previousTab) {
+    const { gBrowser, gZenViewSplitter: splitter } = this.#window;
+    const browser = gBrowser.selectedBrowser;
     if (this.#open) {
       // Beside the tab the panel follows it without taking the keys, and so
       // it does while the agent works: the tab may be one it brought to the
-      // front to type in.
+      // front to type in. Going to another pane of the split view (<C-l>)
+      // is going to that page, not to the panel.
       const running = lazy.ZendiaAgents.conversationFor(browser)?.running;
-      this.open(browser, { focus: this.#frame.layout != "split" && !running });
+      const panes = splitter?.splitViewActive
+        ? (splitter._data[splitter.currentView]?.tabs ?? [])
+        : [];
+      const samePanes =
+        panes.includes(gBrowser.selectedTab) && panes.includes(previousTab);
+      this.open(browser, {
+        focus: this.#frame.layout != "split" && !running && !samePanes,
+      });
     } else {
       this.#bind(lazy.ZendiaAgents.conversationFor(browser));
       this.#syncPill();
