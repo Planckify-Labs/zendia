@@ -82,15 +82,26 @@ function showsExtensionPage(popup) {
   ].some(browser => browser.checkVisibility());
 }
 
+// How long after the page offers a translation its panel may open and still
+// be the offer's: the panel opens once the page's language is looked up.
+const OFFER_MS = 3000;
+
 /**
  * vim keys in the window's open menus and panels: the main menu, context
  * menus, a toolbar button's dropdown. While one is open, keys belong to it;
  * j and k move like the arrow keys, l opens a submenu and h leaves it.
+ *
+ * A panel that opened on its own, like the translation a page offers, leaves
+ * the keys with the page until the focus goes into it. <Esc> closes it, as
+ * it closes any panel.
  */
 export class ZendiaMenuKeys {
   #window;
   /** @type {Set<Element>} */
   #open = new Set();
+  /** @type {WeakSet<Element>} */
+  #unasked = new WeakSet();
+  #offeredAt = -Infinity;
 
   /**
    * @param {Window} window A browser window.
@@ -98,10 +109,28 @@ export class ZendiaMenuKeys {
   constructor(window) {
     this.#window = window;
     window.addEventListener(
+      "TranslationsParent:OfferTranslation",
+      () => {
+        this.#offeredAt = ChromeUtils.now();
+      },
+      true
+    );
+    window.addEventListener(
       "popupshown",
       event => {
-        if (isKeyNavigable(event.target)) {
-          this.#open.add(event.target);
+        const popup = event.target;
+        if (!isKeyNavigable(popup)) {
+          return;
+        }
+        this.#open.add(popup);
+        if (
+          popup.id == "full-page-translations-panel" &&
+          ChromeUtils.now() - this.#offeredAt < OFFER_MS
+        ) {
+          this.#offeredAt = -Infinity;
+          this.#unasked.add(popup);
+        } else {
+          this.#unasked.delete(popup);
         }
       },
       true
@@ -122,7 +151,12 @@ export class ZendiaMenuKeys {
         this.#open.delete(popup);
       }
     }
-    return [...this.#open].some(popup => !showsExtensionPage(popup));
+    const focused = this.#window.document.activeElement;
+    return [...this.#open].some(
+      popup =>
+        !showsExtensionPage(popup) &&
+        (!this.#unasked.has(popup) || popup.contains(focused))
+    );
   }
 
   /**
