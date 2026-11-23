@@ -65,6 +65,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   ZendiaVimModeSwitch:
     "resource:///modules/zendia/ui/ZendiaVimModeSwitch.sys.mjs",
   ZendiaToolbar: "resource:///modules/zendia/ui/ZendiaToolbar.sys.mjs",
+  ZendiaWindowMode: "resource:///modules/zendia/ui/ZendiaWindowMode.sys.mjs",
   ZendiaStatusline: "resource:///modules/zendia/ui/ZendiaStatusline.sys.mjs",
   ZendiaWhichKey: "resource:///modules/zendia/ui/ZendiaWhichKey.sys.mjs",
 });
@@ -114,9 +115,9 @@ const VIM_MODE_DEFAULTS = {
 };
 
 // The modes of the browser UI's own buffers, the sidebar's explorer, the
-// top bar and the library, which run in the parent: their keys are typed in
-// the browser UI, not in a page.
-const CHROME_MODES = ["e", "t", "l"];
+// top bar, the library and the split view's panes, which run in the parent:
+// their keys are typed in the browser UI, not in a page.
+const CHROME_MODES = ["e", "t", "l", "w"];
 // The owner of the normal mode <leader> keys copied into those modes.
 const INHERITED_OWNER = "chrome-leader";
 
@@ -260,6 +261,7 @@ class ZendiaService {
           if (!ZendiaOptions.enabled) {
             ui.explorer.close();
             ui.toolbar.close();
+            ui.windowMode.close();
             ui.library.release();
             ui.whichKey.hide();
           }
@@ -502,6 +504,14 @@ class ZendiaService {
 
   /**
    * @param {Window} window
+   * @returns {object|null} The window's ZendiaWindowMode.
+   */
+  windowModeFor(window) {
+    return this.#windows.get(window.document)?.windowMode ?? null;
+  }
+
+  /**
+   * @param {Window} window
    * @returns {object|null} The window's ZendiaAgentDock.
    */
   agentDockFor(window) {
@@ -527,8 +537,9 @@ class ZendiaService {
   // The browser UI buffer the keys go to, if one is open.
   #activeBuffer(ui) {
     return (
-      [ui.explorer, ui.toolbar, ui.library].find(buffer => buffer?.isOpen) ??
-      null
+      [ui.explorer, ui.toolbar, ui.library, ui.windowMode].find(
+        buffer => buffer?.isOpen
+      ) ?? null
     );
   }
 
@@ -591,9 +602,15 @@ class ZendiaService {
     if (route == "handled" || route == "other") {
       return;
     }
-    if (this.#chromeEngine(window, ui).feed(ZendiaKeys.fromEvent(event))) {
+    const token = ZendiaKeys.fromEvent(event);
+    if (this.#chromeEngine(window, ui).feed(token)) {
       event.preventDefault();
       event.stopPropagation();
+    } else if (token && buffer.leavesOnUnmapped) {
+      // A key the mode has no use for ends it and does its usual job, the
+      // way a key outside LazyVim's window hydra does.
+      buffer.close();
+      this.#sendKeyToPage(window, event);
     }
   }
 
@@ -700,6 +717,7 @@ class ZendiaService {
       explorer: null,
       toolbar: null,
       library: null,
+      windowMode: null,
       agent: null,
       agents: null,
       webchat: null,
@@ -713,7 +731,12 @@ class ZendiaService {
     // takes the keys from all of them.
     const onChange = buffer => {
       if (buffer.isOpen) {
-        for (const other of [ui.explorer, ui.toolbar, ui.library]) {
+        for (const other of [
+          ui.explorer,
+          ui.toolbar,
+          ui.library,
+          ui.windowMode,
+        ]) {
           if (other != buffer) {
             other.close();
           }
@@ -763,6 +786,9 @@ class ZendiaService {
     });
     ui.library = new lazy.ZendiaLibraryView(window, {
       onChange: () => onChange(ui.library),
+    });
+    ui.windowMode = new lazy.ZendiaWindowMode(window, {
+      onChange: () => onChange(ui.windowMode),
     });
     ui.agent = new lazy.ZendiaAgentDock(window, {
       onChange: () => onChange(ui.agent),

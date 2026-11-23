@@ -113,8 +113,18 @@ add_task(function test_lazyvim_defaults() {
     "<C-l>": "splits.focusRight",
     "<leader>-": "splits.horizontal",
     "<leader>|": "splits.vertical",
-    "<leader>wd": "splits.close",
+    "<leader>wt": "splits.close",
     "<leader>wo": "splits.only",
+    "<leader>wm": "splits.zoom",
+    "<leader>w=": "splits.equalize",
+    "<leader>wx": "splits.swap",
+    "<leader>wH": "splits.edgeLeft",
+    "<leader>w<lt>": "splits.shrinkWidth",
+    "<leader>wg": "splits.grab",
+    "<leader>wa": "splits.add",
+    "<leader>wf": "splits.pick",
+    "<leader>w<Space>": "window.mode",
+    "<C-Up>": "splits.growHeight",
     "<leader>oo": "library.toggle",
     "<leader>oh": "library.history",
     "<leader>od": "library.downloads",
@@ -215,6 +225,19 @@ add_task(function test_lazyvim_defaults() {
   };
   for (const [lhs, rhs] of Object.entries(toolbar)) {
     Assert.equal(keymap.get("t", lhs)?.rhs, rhs, `${lhs} in the toolbar`);
+  }
+  const windowMode = {
+    h: "splits.focusLeft",
+    H: "splits.edgeLeft",
+    x: "splits.swap",
+    g: "splits.grab",
+    f: "splits.pick",
+    "<CR>": "window.drop",
+    "<Esc>": "window.escape",
+    "<leader>wm": "splits.zoom",
+  };
+  for (const [lhs, rhs] of Object.entries(windowMode)) {
+    Assert.equal(keymap.get("w", lhs)?.rhs, rhs, `${lhs} in the window mode`);
   }
   Assert.equal(keymap.get("i", "<Esc>")?.rhs, "mode.normal");
   Assert.equal(keymap.get("i", "<C-j>")?.rhs, "input.next");

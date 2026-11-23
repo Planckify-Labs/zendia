@@ -305,7 +305,8 @@
 
 #zendia-explorer-focus,
 #zendia-toolbar-focus,
-#zendia-library-focus {
+#zendia-library-focus,
+#zendia-window-focus {
   position: fixed;
   width: 0;
   height: 0;
@@ -332,6 +333,33 @@
       700 11px/16px ui-monospace,
       monospace;
     pointer-events: none;
+  }
+}
+
+/* The window picker labels the split view's pane chips. The label leads the
+   chip, before the pane's name, and the chip keeps its own place. */
+.zen-view-splitter-header[zendia-hint] {
+  position: absolute;
+
+  &::after {
+    content: none;
+  }
+
+  &::before {
+    content: attr(zendia-hint);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    margin-inline: 2px 4px;
+    padding: 0 4px;
+    border-radius: 5px;
+    background: var(--zendia-hint);
+    color: var(--zendia-hint-text);
+    font:
+      700 13px/20px ui-monospace,
+      monospace;
   }
 }
 

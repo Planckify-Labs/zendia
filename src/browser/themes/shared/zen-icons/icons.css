@@ -289,9 +289,26 @@
 #restore-button,
 #fullscreen-button,
 .zen-glance-sidebar-open,
-#appMenu-fullscreen-button2,
-.zen-tab-unsplit-button {
+#appMenu-fullscreen-button2 {
   list-style-image: url("fullscreen.svg") !important;
+}
+
+/* Split view pane chip: move the pane to its own tab, fill the view with it
+   or bring the other panes back, and close its tab. */
+.zen-tab-unsplit-button {
+  list-style-image: url("open.svg") !important;
+}
+
+.zen-split-pane-zoom {
+  list-style-image: url("fullscreen.svg") !important;
+
+  [zen-split-zoomed] > .zen-view-splitter-header-container & {
+    list-style-image: url("fullscreen-exit.svg") !important;
+  }
+}
+
+.zen-split-pane-close {
+  list-style-image: url("close.svg") !important;
 }
 
 #restore-button[checked],

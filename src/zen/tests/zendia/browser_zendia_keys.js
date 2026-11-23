@@ -501,10 +501,10 @@ add_task(async function test_split_picker_offers_url_and_tabs() {
 
   EventUtils.synthesizeKey(" ");
   EventUtils.synthesizeKey("w");
-  EventUtils.synthesizeKey("d");
+  EventUtils.synthesizeKey("t");
   await TestUtils.waitForCondition(
     () => !first.splitView && !second.splitView,
-    "<leader>wd closes the pane, which unsplits a two-pane split"
+    "<leader>wt moves the pane to its own tab, which unsplits a two-pane split"
   );
   ok(
     gBrowser.tabs.includes(first) && gBrowser.tabs.includes(second),

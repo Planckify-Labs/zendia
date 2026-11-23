@@ -36,6 +36,14 @@ class nsSplitLeafNode {
   }
 }
 
+// What a tab dropped at each edge of the page does.
+const SPLIT_DROP_LABELS = {
+  left: "Split left",
+  right: "Split right",
+  top: "Split above",
+  bottom: "Split below",
+};
+
 class nsSplitNode extends nsSplitLeafNode {
   /**
    * @type {string}
@@ -194,6 +202,16 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
     if (previousTab && !previousTab.hasAttribute("zen-empty-tab")) {
       this._lastOpenedTab = previousTab;
     }
+    // Picking another pane of a zoomed split brings the others back.
+    const group = this._data[this.currentView];
+    if (
+      group?.zoomedTab &&
+      group.zoomedTab !== gBrowser.selectedTab &&
+      group.tabs.includes(gBrowser.selectedTab)
+    ) {
+      group.zoomedTab = null;
+      this.#syncPaneZoom();
+    }
     this.onLocationChange(event.target.linkedBrowser);
   }
 
@@ -261,6 +279,33 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
       if (gBrowser.selectedTab === tab) {
         gBrowser.selectedTab = group.tabs[0];
       }
+    }
+  }
+
+  /**
+   * Put a short label in the middle of a drop target, saying what a drop
+   * there does, with the favicon of the tab that would land there.
+   *
+   * @param {Element} target - The slot or drop zone.
+   * @param {string} text - What the drop does.
+   * @param {MozTabbrowserTab} [tab] - The tab being dragged.
+   */
+  #setDropLabel(target, text, tab) {
+    let label = target.querySelector(":scope > .zen-split-drop-label");
+    if (!label) {
+      label = document.createElement("div");
+      label.className = "zen-split-drop-label";
+      const icon = document.createXULElement("image");
+      icon.className = "zen-split-drop-label-icon";
+      const textNode = document.createElement("span");
+      label.append(icon, textNode);
+      target.append(label);
+    }
+    label.lastChild.textContent = text;
+    const image = tab?.getAttribute("image");
+    label.firstChild.hidden = !image;
+    if (image && label.firstChild.getAttribute("src") !== image) {
+      label.firstChild.setAttribute("src", image);
     }
   }
 
@@ -370,9 +415,7 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
     const currentView = this._data.find(group =>
       group.tabs.includes(this._lastOpenedTab)
     );
-    if (currentView?.tabs.length >= this.MAX_TABS) {
-      return;
-    }
+    const isFull = currentView?.tabs.length >= this.MAX_TABS;
     const panelsRect = gBrowser.tabbox.getBoundingClientRect();
     const panelsWidth = panelsRect.width;
     const panelsHeight = panelsRect.height;
@@ -395,6 +438,14 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
       event.clientY < panelsRect.top + panelsHeight / 4 ||
       event.clientY > panelsRect.top + (panelsHeight / 4) * 3
     )) {
+      return;
+    }
+    if (isFull) {
+      // The tab reached an edge where it would split: say why nothing opens.
+      if (Date.now() - (this._fullSplitToastAt ?? 0) > 4000) {
+        this._fullSplitToastAt = Date.now();
+        gZenUIManager.showToast("zen-split-view-limit-toast");
+      }
       return;
     }
     dt.mozCursor = "default";
@@ -462,6 +513,7 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
     }
     gBrowser.tabbox.appendChild(this.fakeBrowser);
     this.fakeBrowser.setAttribute("side", side);
+    this.#setDropLabel(this.fakeBrowser, SPLIT_DROP_LABELS[side], draggedTab);
     let animateTabBox = null;
     let animateFakeBrowser = null;
     switch (side) {
@@ -939,6 +991,11 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
       event.clientY,
       browserRect
     );
+    this.#setDropLabel(
+      this.dropZone,
+      hoverSide === "center" ? "Swap" : "Move here",
+      this._draggingTab
+    );
 
     if (hoverSide !== "center") {
       const isVertical = hoverSide === "top" || hoverSide === "bottom";
@@ -1123,6 +1180,7 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
     tab.linkedBrowser.zenModeActive = false;
     const container = tab.linkedBrowser.closest(".browserSidebarContainer");
     container.removeAttribute("is-zen-split");
+    container.removeAttribute("zen-split-zoomed");
     container.style.inset = "";
     this._removeHeader(container);
     this.resetContainerStyle(container);
@@ -1188,6 +1246,16 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
     });
     document.getElementById("context_zenShareSplitView").hidden =
       !gZenShareManager.enabled || !isExistingSplitView;
+    // Fill View, as on the pane's chip: only for one pane of the split on
+    // screen, since the others have nothing to fill.
+    const fillView = document.getElementById("context_zenSplitFillView");
+    const shownGroup = this._data[this.currentView];
+    fillView.hidden =
+      contextTab.multiselected || !shownGroup?.tabs.includes(contextTab);
+    fillView.setAttribute(
+      "label",
+      shownGroup?.zoomedTab === contextTab ? "Show All Panes" : "Fill View"
+    );
     if (isExistingSplitView) {
       splitTabCommand.removeAttribute("hidden");
       return;
@@ -1212,7 +1280,15 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
                 data-lazy-l10n-id="zen-share-split-view"
                 hidden="true"
                 command="cmd_zenCtxShareSplitView"/>
+      <menuitem id="context_zenSplitFillView"
+                label="Fill View"
+                hidden="true"/>
     `);
+    element
+      .getElementById("context_zenSplitFillView")
+      .addEventListener("command", () =>
+        this.togglePaneZoom(TabContextMenu.contextTab)
+      );
     document.getElementById("context_moveTabToSplitView").before(element);
   }
 
@@ -1577,6 +1653,7 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
     }
     this.removeSplitters();
     this.tabBrowserPanel.removeAttribute("zen-split-view");
+    this.tabBrowserPanel.removeAttribute("zen-split-zoomed");
     document
       .getElementById("tabbrowser-tabbox")
       .removeAttribute("zen-split-view");
@@ -1702,21 +1779,462 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
    * @private
    */
   _createHeader(container) {
+    // Nothing shows while the pointer is elsewhere. Over a pane, a short bar
+    // marks the top edge; resting on that bar opens the pane's chip, which
+    // names the tab and holds its actions. The chip hangs over the page only
+    // while it is open, so the page is never covered unless it was asked for.
     const headerContainer = document.createElement("div");
     headerContainer.classList.add("zen-view-splitter-header-container");
+    const nub = document.createElement("div");
+    nub.classList.add("zen-split-pane-nub");
     const header = document.createElement("div");
     header.classList.add("zen-view-splitter-header");
-    const removeButton = document.createXULElement("toolbarbutton");
-    removeButton.classList.add("zen-tab-unsplit-button");
-    removeButton.addEventListener("click", event => {
-      this.removeTabFromSplit(event, container);
+
+    const button = (className, tooltip, onClick) => {
+      const element = document.createXULElement("toolbarbutton");
+      element.classList.add(className);
+      element.setAttribute("tooltiptext", tooltip);
+      if (onClick) {
+        element.addEventListener("click", event => {
+          if (event.button === 0) {
+            onClick(event);
+          }
+        });
+      }
+      return element;
+    };
+    const tabOf = () =>
+      gBrowser.getTabForBrowser(container.querySelector("browser"));
+
+    const rearrangeButton = button(
+      "zen-tab-rearrange-button",
+      "Drag to move this pane"
+    );
+    const icon = document.createXULElement("image");
+    icon.classList.add("zen-split-pane-icon");
+    const title = document.createElement("span");
+    title.classList.add("zen-split-pane-title");
+    const zoomButton = button("zen-split-pane-zoom", "", () =>
+      this.togglePaneZoom(tabOf())
+    );
+    const removeButton = button(
+      "zen-tab-unsplit-button",
+      "Move to its own tab",
+      event => this.removeTabFromSplit(event, container)
+    );
+    const closeButton = button("zen-split-pane-close", "Close tab", () => {
+      const tab = tabOf();
+      if (tab) {
+        gBrowser.removeTab(tab, { animate: true });
+      }
     });
-    const rearrangeButton = document.createXULElement("toolbarbutton");
-    rearrangeButton.classList.add("zen-tab-rearrange-button");
-    header.appendChild(rearrangeButton);
-    header.appendChild(removeButton);
-    headerContainer.appendChild(header);
+    header.append(
+      rearrangeButton,
+      icon,
+      title,
+      zoomButton,
+      removeButton,
+      closeButton
+    );
+
+    // The tab may have moved on since the chip last opened.
+    headerContainer.addEventListener("mouseenter", () => {
+      const tab = tabOf();
+      if (!tab) {
+        return;
+      }
+      title.textContent = tab.label;
+      icon.setAttribute(
+        "src",
+        tab.getAttribute("image") ||
+          "chrome://global/skin/icons/defaultFavicon.svg"
+      );
+      const zoomed = this._data[this.currentView]?.zoomedTab === tab;
+      zoomButton.setAttribute(
+        "tooltiptext",
+        zoomed ? "Show all panes" : "Fill the view with this pane"
+      );
+    });
+
+    headerContainer.append(nub, header);
     return headerContainer;
+  }
+
+  /**
+   * Fill the view with one pane of the split, or bring the others back.
+   * The split stays as it was underneath: the other panes keep their place
+   * and size, and come back as soon as another pane is picked.
+   *
+   * @param {MozTabbrowserTab} [tab] - The pane, the selected tab by default.
+   */
+  togglePaneZoom(tab = gBrowser.selectedTab) {
+    const group = this._data[this.currentView];
+    if (!tab || !group?.tabs.includes(tab)) {
+      return;
+    }
+    if (group.zoomedTab === tab) {
+      group.zoomedTab = null;
+    } else {
+      // Select first: picking another pane is what brings the others back.
+      gBrowser.selectedTab = tab;
+      group.zoomedTab = tab;
+    }
+    this.#syncPaneZoom();
+  }
+
+  #syncPaneZoom() {
+    const group = this._data[this.currentView];
+    if (group?.zoomedTab && !group.tabs.includes(group.zoomedTab)) {
+      group.zoomedTab = null;
+    }
+    const zoomed = group?.zoomedTab ?? null;
+    this.tabBrowserPanel.toggleAttribute("zen-split-zoomed", !!zoomed);
+    for (const tab of group?.tabs ?? []) {
+      tab.linkedBrowser
+        ?.closest(".browserSidebarContainer")
+        ?.toggleAttribute("zen-split-zoomed", tab === zoomed);
+    }
+  }
+
+  /**
+   * Give the panes under a node of the layout an equal share, and those
+   * under its children too.
+   *
+   * @param {nsSplitNode} [node] - The root of the current split by default.
+   */
+  equalizePanes(node = this._data[this.currentView]?.layoutTree) {
+    if (!node?.children) {
+      return;
+    }
+    const equalize = splitNode => {
+      for (const child of splitNode.children) {
+        child.sizeInParent = 100 / splitNode.children.length;
+        if (child.children) {
+          equalize(child);
+        }
+      }
+    };
+    equalize(node);
+    this.applyGridLayout(node);
+  }
+
+  // The leaves of a layout, in the tree's order.
+  #leavesOf(node) {
+    return node.children
+      ? node.children.flatMap(child => this.#leavesOf(child))
+      : [node];
+  }
+
+  /**
+   * The panes of the split on screen in reading order: by rows from the
+   * top, each from the left. This is the order the numbers on their chips
+   * follow.
+   *
+   * @returns {MozTabbrowserTab[]}
+   */
+  panesInOrder() {
+    const group = this._data[this.currentView];
+    if (!group) {
+      return [];
+    }
+    const at = leaf => leaf.positionToRoot ?? { top: 0, left: 0 };
+    return this.#leavesOf(group.layoutTree)
+      .sort(
+        (a, b) =>
+          Math.round(at(a).top) - Math.round(at(b).top) ||
+          at(a).left - at(b).left
+      )
+      .map(leaf => leaf.tab);
+  }
+
+  /**
+   * Swap two panes of the split on screen, each taking the other's place
+   * and size.
+   *
+   * @param {MozTabbrowserTab} tab
+   * @param {MozTabbrowserTab} otherTab
+   * @returns {boolean} Whether they swapped.
+   */
+  swapPanes(tab, otherTab) {
+    const group = this._data[this.currentView];
+    const node = this.getSplitNodeFromTab(tab);
+    const other = this.getSplitNodeFromTab(otherTab);
+    if (
+      !group?.tabs.includes(tab) ||
+      !group.tabs.includes(otherTab) ||
+      !node ||
+      !other ||
+      node == other
+    ) {
+      return false;
+    }
+    this.swapNodes(node, other);
+    this.applyGridLayout(group.layoutTree);
+    return true;
+  }
+
+  /**
+   * Move every pane one place on, in the layout's order, like <C-w>r; the
+   * places keep their sizes.
+   *
+   * @param {boolean} [backward] - One place back instead, like <C-w>R.
+   * @returns {boolean}
+   */
+  rotatePanes(backward = false) {
+    const group = this._data[this.currentView];
+    if (!group) {
+      return false;
+    }
+    const leaves = this.#leavesOf(group.layoutTree);
+    const tabs = leaves.map(leaf => leaf.tab);
+    leaves.forEach((leaf, i) => {
+      const from = backward ? i + 1 : i - 1;
+      leaf.tab = tabs[(from + tabs.length) % tabs.length];
+    });
+    this.applyGridLayout(group.layoutTree);
+    return true;
+  }
+
+  /**
+   * Move a pane next to another, or swap the two, as a drop at that side
+   * of it does.
+   *
+   * @param {MozTabbrowserTab} tab
+   * @param {MozTabbrowserTab} targetTab
+   * @param {"left"|"right"|"top"|"bottom"|"center"} side
+   * @returns {boolean}
+   */
+  movePane(tab, targetTab, side) {
+    if (side == "center") {
+      return this.swapPanes(tab, targetTab);
+    }
+    const group = this._data[this.currentView];
+    const node = this.getSplitNodeFromTab(tab);
+    const target = this.getSplitNodeFromTab(targetTab);
+    if (
+      !group?.tabs.includes(tab) ||
+      !group.tabs.includes(targetTab) ||
+      !node ||
+      !target ||
+      node == target
+    ) {
+      return false;
+    }
+    this.removeNode(node);
+    this.splitIntoNode(target, node, side, 0.5);
+    this.activateSplitView(group, true);
+    return true;
+  }
+
+  /**
+   * Move a pane to an edge of the split, the whole height or width of it,
+   * like <C-w>H, J, K and L.
+   *
+   * @param {MozTabbrowserTab} tab
+   * @param {"left"|"right"|"top"|"bottom"} side
+   * @returns {boolean}
+   */
+  movePaneToEdge(tab, side) {
+    const group = this._data[this.currentView];
+    const node = this.getSplitNodeFromTab(tab);
+    if (!group?.tabs.includes(tab) || !node) {
+      return false;
+    }
+    this.removeNode(node);
+    const root = group.layoutTree;
+    const direction = side == "left" || side == "right" ? "row" : "column";
+    if (root.children && root.direction == direction) {
+      // A row or column already: the pane joins it at that end.
+      const count = root.children.length + 1;
+      root.children.forEach(
+        child => (child.sizeInParent *= (count - 1) / count)
+      );
+      node.sizeInParent = 100 / count;
+      node.parent = root;
+      if (side == "left" || side == "top") {
+        root.children.unshift(node);
+      } else {
+        root.children.push(node);
+      }
+    } else {
+      this.splitIntoNode(root, node, side, 0.5);
+    }
+    this.activateSplitView(group, true);
+    return true;
+  }
+
+  /**
+   * The share of the split a pane would take at an edge, as movePaneToEdge
+   * would leave it: one more of the row or column there is, or half.
+   *
+   * @param {MozTabbrowserTab} tab
+   * @param {"left"|"right"|"top"|"bottom"} side
+   * @returns {number} Between 0 and 1.
+   */
+  edgeShare(tab, side) {
+    const group = this._data[this.currentView];
+    const node = this.getSplitNodeFromTab(tab);
+    const root = group?.layoutTree;
+    const direction = side == "left" || side == "right" ? "row" : "column";
+    if (!root?.children || root.direction != direction) {
+      return 1 / 2;
+    }
+    const count = root.children.length + (node?.parent == root ? 0 : 1);
+    return 1 / Math.max(2, count);
+  }
+
+  /**
+   * Make a pane wider or taller, from the pane beside it, like <C-w>> and
+   * <C-w>+. A pane in a row has no height of its own to change, and the
+   * other way around.
+   *
+   * @param {MozTabbrowserTab} tab
+   * @param {"width"|"height"} dimension
+   * @param {number} delta - In percent of the whole split; negative shrinks.
+   * @returns {boolean} Whether anything changed.
+   */
+  resizePane(tab, dimension, delta) {
+    const direction = dimension == "width" ? "row" : "column";
+    let child = this.getSplitNodeFromTab(tab);
+    while (child?.parent && child.parent.direction != direction) {
+      child = child.parent;
+    }
+    const owner = child?.parent;
+    if (!owner) {
+      return false;
+    }
+    const siblings = owner.children;
+    const index = siblings.indexOf(child);
+    const neighbor = siblings[index + 1] ?? siblings[index - 1];
+    const at = owner.positionToRoot ?? {
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+    };
+    const extent =
+      direction == "row" ? 100 - at.left - at.right : 100 - at.top - at.bottom;
+    const min = this.minResizeWidth;
+    const change = Math.max(
+      min - child.sizeInParent,
+      Math.min((delta * 100) / extent, neighbor.sizeInParent - min)
+    );
+    if (Math.abs(change) < 0.01) {
+      return false;
+    }
+    child.sizeInParent += change;
+    neighbor.sizeInParent -= change;
+    this.applyGridLayout(owner);
+    return true;
+  }
+
+  #headerOf(tab) {
+    return tab?.linkedBrowser
+      ?.closest(".browserSidebarContainer")
+      ?.querySelector(":scope > .zen-view-splitter-header-container");
+  }
+
+  #chipFlashTimers = new WeakMap();
+
+  /**
+   * Open a pane's chip for a moment, so a change made with the keys shows
+   * where it went as the pointer would.
+   *
+   * @param {MozTabbrowserTab} tab
+   * @param {number} [duration] - In milliseconds.
+   */
+  flashPaneChip(tab, duration = 1200) {
+    const header = this.#headerOf(tab);
+    if (!header) {
+      return;
+    }
+    const container = header.parentNode;
+    header.dispatchEvent(new MouseEvent("mouseenter"));
+    container.setAttribute("zen-split-chip-flash", "true");
+    clearTimeout(this.#chipFlashTimers.get(container));
+    this.#chipFlashTimers.set(
+      container,
+      setTimeout(
+        () => container.removeAttribute("zen-split-chip-flash"),
+        duration
+      )
+    );
+  }
+
+  /**
+   * Keep every pane's chip open, or let them fold away again.
+   *
+   * @param {boolean} shown
+   */
+  setPaneChipsShown(shown) {
+    const panes = this.panesInOrder();
+    this.tabBrowserPanel.toggleAttribute(
+      "zen-split-chips-shown",
+      shown && !!panes.length
+    );
+    if (shown) {
+      for (const tab of panes) {
+        this.#headerOf(tab)?.dispatchEvent(new MouseEvent("mouseenter"));
+      }
+    }
+  }
+
+  /**
+   * @param {MozTabbrowserTab} tab
+   * @returns {Element|null} The chip of a pane, which a window picker labels.
+   */
+  paneChipOf(tab) {
+    return (
+      this.#headerOf(tab)?.querySelector(".zen-view-splitter-header") ?? null
+    );
+  }
+
+  /**
+   * Dim a pane as a drag does while it is carried with the keys.
+   *
+   * @param {MozTabbrowserTab|null} tab - The pane, or null for none.
+   */
+  setCarriedPane(tab) {
+    for (const container of this.tabBrowserPanel.querySelectorAll(
+      ".browserSidebarContainer[zen-split-carried]"
+    )) {
+      container.removeAttribute("zen-split-carried");
+    }
+    tab?.linkedBrowser
+      ?.closest(".browserSidebarContainer")
+      ?.setAttribute("zen-split-carried", "true");
+  }
+
+  #previewShowsWrapper = false;
+
+  /**
+   * Show where a drop chosen with the keys would land, as the drop zone of
+   * a drag does, with its label.
+   *
+   * @param {{top: number, right: number, bottom: number, left: number}} inset
+   *   In percent of the split view, or of the page when there is no split.
+   * @param {string} text - What the drop does.
+   * @param {MozTabbrowserTab} [tab] - The tab that would land there.
+   */
+  showDropPreview(inset, text, tab) {
+    const wrapper = this.overlay?.parentNode;
+    if (wrapper?.hasAttribute("hidden")) {
+      this.toggleWrapperDisplay(true);
+      this.#previewShowsWrapper = true;
+    }
+    this.dropZone.style.inset = `${inset.top}% ${inset.right}% ${inset.bottom}% ${inset.left}%`;
+    this.dropZone.setAttribute("enabled", "true");
+    this.#setDropLabel(this.dropZone, text, tab);
+  }
+
+  hideDropPreview() {
+    this.dropZone?.removeAttribute("enabled");
+    if (this.#previewShowsWrapper) {
+      this.#previewShowsWrapper = false;
+      if (this.currentView < 0) {
+        this.toggleWrapperDisplay(false);
+      }
+    }
   }
 
   _removeHeader(container) {
@@ -1784,6 +2302,7 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
         }
       }
     });
+    this.#syncPaneZoom();
     this.maybeDisableOpeningTabOnSplitView();
   }
 
@@ -1801,6 +2320,9 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
     this.overlay.insertAdjacentElement("afterbegin", splitter);
 
     splitter.addEventListener("mousedown", this.handleSplitterMouseDown);
+    splitter.addEventListener("dblclick", () =>
+      this.equalizePanes(splitter.parentSplitNode)
+    );
     return splitter;
   }
 
@@ -1896,6 +2418,34 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
     }
     const originalSizes = splitNode.children.map(c => c.sizeInParent);
 
+    // The gap settles at a third, a half or two thirds of the two panes
+    // beside it when it comes near; holding Shift moves it freely.
+    const SNAP_PX = 10;
+    let snappedTo = null;
+    const snapGap = dEvent => {
+      const [before, after] = splitNode.children.slice(gridIdx, gridIdx + 2);
+      const pair = before.sizeInParent + after.sizeInParent;
+      const pairPx =
+        (pair / 100) *
+        (this.tabBrowserPanel.getBoundingClientRect()[dimension] /
+          rootToNodeSize);
+      const share = before.sizeInParent / pair;
+      const target = dEvent.shiftKey
+        ? null
+        : [1 / 3, 1 / 2, 2 / 3].find(
+            t => Math.abs(share - t) * pairPx < SNAP_PX
+          );
+      if (target) {
+        before.sizeInParent = pair * target;
+        after.sizeInParent = pair - before.sizeInParent;
+        if (snappedTo !== target) {
+          // eslint-disable-next-line mozilla/valid-services
+          Services.zen.playHapticFeedback();
+        }
+      }
+      snappedTo = target ?? null;
+    };
+
     const dragFunc = dEvent => {
       requestAnimationFrame(() => {
         originalSizes.forEach(
@@ -1931,6 +2481,7 @@ class nsZenViewSplitter extends nsZenDOMOperatedFeature {
         const increaseIndex = gridIdx + (movementPercent < 0 ? 1 : 0);
         splitNode.children[increaseIndex].sizeInParent =
           originalSizes[increaseIndex] + increasingMovement;
+        snapGap(dEvent);
         this.applyGridLayout(splitNode);
       });
     };

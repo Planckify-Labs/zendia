@@ -47,6 +47,27 @@ function showLimitToast(window) {
   window.gZenUIManager.showToast("zen-split-view-limit-toast");
 }
 
+// The tabs that can go into a new pane next to `current`. A tab shows in one
+// pane at most, so the tabs of any split are left out.
+function paneCandidates(window, current) {
+  const { gBrowser, gZenViewSplitter: splitter } = window;
+  return gBrowser.visibleTabs.filter(
+    tab =>
+      tab != current &&
+      !tab.closing &&
+      !tab.hasAttribute("zen-empty-tab") &&
+      !groupOf(splitter, tab)
+  );
+}
+
+function pickerItem(tab) {
+  return {
+    label: tab.label,
+    detail: hostOf(tab),
+    icon: tab.getAttribute("image") || undefined,
+  };
+}
+
 /**
  * Split the current tab like :vsplit or :split. The new pane shows a tab
  * picked from the space, or, with "Open URL" or when there is nothing to
@@ -68,14 +89,7 @@ async function split(window, gridType) {
     showLimitToast(window);
     return;
   }
-  // A tab shows in one pane at most, so the tabs of any split are left out.
-  const candidates = gBrowser.visibleTabs.filter(
-    tab =>
-      tab != current &&
-      !tab.closing &&
-      !tab.hasAttribute("zen-empty-tab") &&
-      !groupOf(splitter, tab)
-  );
+  const candidates = paneCandidates(window, current);
   const { title, side } = SPLITS[gridType];
 
   if (!candidates.length) {
@@ -83,11 +97,7 @@ async function split(window, gridType) {
     return;
   }
 
-  const items = candidates.map(tab => ({
-    label: tab.label,
-    detail: hostOf(tab),
-    icon: tab.getAttribute("image") || undefined,
-  }));
+  const items = candidates.map(pickerItem);
   items.unshift({ label: "Open URL…", detail: "any website", key: "/" });
   const index = await lazy.ZendiaPicker.open(window, { title, items });
   // The picker leaves the page alone, so only a mouse click or the agent can
@@ -357,6 +367,179 @@ function closePane(window) {
   }
 }
 
+// The window mode of the window an action runs in.
+function windowModeOf({ zendia, window }) {
+  return zendia?.windowModeFor?.(window) ?? null;
+}
+
+/**
+ * Show what a key just did to the panes: the window mode's numbers follow,
+ * or, outside it, the pane's chip opens for a moment.
+ *
+ * @param {object} context
+ * @param {Element} tab The pane that changed.
+ */
+function showChange(context, tab) {
+  const mode = windowModeOf(context);
+  if (mode?.isOpen) {
+    mode.refresh();
+  } else {
+    context.window.gZenViewSplitter.flashPaneChip(tab);
+  }
+}
+
+/**
+ * An action on the selected pane of the split on screen, that does nothing
+ * outside a split and shows the change it made.
+ *
+ * @param {string} desc
+ * @param {(context: object, tab: Element, args: object) => boolean|Element|void} change
+ *   Returns false if nothing changed, or the pane to show.
+ * @param {object} [definition]
+ */
+function onPane(desc, change, definition = {}) {
+  return {
+    desc,
+    agent: "act",
+    ...definition,
+    run(context, args = {}) {
+      const { gBrowser, gZenViewSplitter: splitter } = context.window;
+      const tab = gBrowser.selectedTab;
+      const group = splitter?._data[splitter.currentView];
+      if (!group?.tabs.includes(tab)) {
+        return;
+      }
+      const result = change(context, tab, args);
+      if (result !== false) {
+        showChange(context, result?.localName ? result : gBrowser.selectedTab);
+      }
+    },
+  };
+}
+
+// Move the focus a way, or, while something is carried in the window mode,
+// the place it would land.
+function focusOrTarget(context, dx, dy) {
+  const mode = windowModeOf(context);
+  if (mode?.carrying) {
+    mode.moveTarget(dx, dy);
+  } else {
+    focusPane(context.window, dx, dy);
+  }
+}
+
+// Show the pane at an edge of the split, or move what is carried there:
+// <CR> puts it there, <Esc> leaves it where it was.
+function toEdge(desc, side) {
+  return {
+    desc,
+    agent: false,
+    run(context) {
+      const mode = windowModeOf(context);
+      if (mode?.carrying) {
+        mode.targetEdge(side);
+      } else {
+        mode?.grab({ edge: side });
+      }
+    },
+  };
+}
+
+// How much one press of a resize key changes a pane, in percent of the split.
+const RESIZE_STEP = 5;
+
+function resize(desc, dimension, sign) {
+  return onPane(
+    desc,
+    (context, tab, { count = 1 }) =>
+      context.window.gZenViewSplitter.resizePane(
+        tab,
+        dimension,
+        sign * RESIZE_STEP * count
+      ),
+    { params: { count: "number?" } }
+  );
+}
+
+/**
+ * Pick a tab of the space and carry it into the split with the keys, to a
+ * side of any pane, the way a tab is dragged onto the page.
+ *
+ * @param {object} context
+ */
+async function addPane(context) {
+  const { window } = context;
+  const { gBrowser, gZenViewSplitter: splitter } = window;
+  const current = gBrowser.selectedTab;
+  if (current.hasAttribute("zen-empty-tab")) {
+    return;
+  }
+  const group = groupOf(splitter, current);
+  if (group && group.tabs.length >= splitter.MAX_TABS) {
+    showLimitToast(window);
+    return;
+  }
+  const candidates = paneCandidates(window, current);
+  if (!candidates.length) {
+    return;
+  }
+  const index = await lazy.ZendiaPicker.open(window, {
+    title: "Add to Split",
+    items: candidates.map(pickerItem),
+  });
+  if (index === null || gBrowser.selectedTab != current) {
+    return;
+  }
+  const picked = candidates[index];
+  windowModeOf(context)?.carryIn(picked, (targetTab, side, edge) =>
+    placePane(window, picked, targetTab, side, edge)
+  );
+}
+
+/**
+ * Show a tab in a new pane at a side of a pane, or of the lone tab.
+ *
+ * @param {Window} window
+ * @param {Element} picked
+ * @param {Element} targetTab
+ * @param {"left"|"right"|"top"|"bottom"} side
+ * @param {"left"|"right"|"top"|"bottom"|null} [edge] An edge of the split
+ *   to put it at instead.
+ */
+function placePane(window, picked, targetTab, side, edge = null) {
+  const { gBrowser, gZenViewSplitter: splitter } = window;
+  const before = new Set(groupOf(splitter, targetTab)?.tabs ?? [targetTab]);
+  gBrowser.selectedTab = targetTab;
+  splitWith(
+    window,
+    picked,
+    side == "left" || side == "right" ? "vsep" : "hsep"
+  );
+  // A pinned tab may have joined as a duplicate.
+  const added = groupOf(splitter, targetTab)?.tabs.find(
+    tab => !before.has(tab)
+  );
+  if (!added) {
+    return;
+  }
+  gBrowser.selectedTab = added;
+  if (edge) {
+    // It went in beside the target pane, taking half of it: give that back,
+    // so the panes it leaves keep their sizes once it moves to the edge.
+    const node = splitter.getSplitNodeFromTab(added);
+    const target = splitter.getSplitNodeFromTab(targetTab);
+    if (node && target && node.parent == target.parent) {
+      target.sizeInParent += node.sizeInParent;
+      node.sizeInParent = 0;
+    }
+    splitter.movePaneToEdge(added, edge);
+    return;
+  }
+  if (side == "left" || side == "top") {
+    splitter.movePane(added, targetTab, side);
+  }
+}
+
 function changeSpace(window, pick) {
   const spaces = window.gZenWorkspaces.getWorkspaces();
   const space = pick(spaces);
@@ -387,22 +570,22 @@ export const ZendiaWindowsSpec = {
     "splits.focusLeft": {
       desc: "Go to Left Window",
       agent: "act",
-      run: ({ window }) => focusPane(window, -1, 0),
+      run: context => focusOrTarget(context, -1, 0),
     },
     "splits.focusDown": {
       desc: "Go to Lower Window",
       agent: "act",
-      run: ({ window }) => focusPane(window, 0, 1),
+      run: context => focusOrTarget(context, 0, 1),
     },
     "splits.focusUp": {
       desc: "Go to Upper Window",
       agent: "act",
-      run: ({ window }) => focusPane(window, 0, -1),
+      run: context => focusOrTarget(context, 0, -1),
     },
     "splits.focusRight": {
       desc: "Go to Right Window",
       agent: "act",
-      run: ({ window }) => focusPane(window, 1, 0),
+      run: context => focusOrTarget(context, 1, 0),
     },
     "splits.vertical": {
       desc: "Split Window Right",
@@ -414,10 +597,111 @@ export const ZendiaWindowsSpec = {
       agent: false,
       run: ({ window }) => split(window, "hsep"),
     },
+    // LazyVim's "Delete Window" (<leader>wd), but the tab stays open, so it
+    // is <leader>wt here and says so.
     "splits.close": {
-      desc: "Delete Window",
+      desc: "Move Window to Its Own Tab",
       agent: "act",
-      run: ({ window }) => closePane(window),
+      run(context) {
+        // Whatever was being carried goes back first.
+        windowModeOf(context)?.cancel();
+        closePane(context.window);
+      },
+    },
+    "splits.zoom": onPane("Fill View with Window", ({ window }) =>
+      window.gZenViewSplitter.togglePaneZoom()
+    ),
+    "splits.equalize": onPane("Make Windows Equal", ({ window }) =>
+      window.gZenViewSplitter.equalizePanes()
+    ),
+    "splits.next": onPane("Go to Next Window", ({ window }, tab) => {
+      const panes = window.gZenViewSplitter.panesInOrder();
+      window.gBrowser.selectedTab =
+        panes[(panes.indexOf(tab) + 1) % panes.length];
+    }),
+    "splits.last": onPane("Go to Last Used Window", ({ window }, tab) => {
+      const panes = window.gZenViewSplitter.panesInOrder();
+      const last = lastUsed(panes.filter(pane => pane != tab));
+      if (!last) {
+        return false;
+      }
+      window.gBrowser.selectedTab = last;
+      return undefined;
+    }),
+    // A label on every pane; typing one goes there.
+    "splits.pick": {
+      desc: "Pick Window",
+      agent: false,
+      run(context) {
+        windowModeOf(context)?.pick();
+      },
+    },
+    // Shows the swap with the pane used last; <CR> makes it.
+    "splits.swap": {
+      desc: "Swap with Last Used Window",
+      agent: false,
+      run(context) {
+        windowModeOf(context)?.grab();
+      },
+    },
+    "splits.rotate": onPane("Rotate Windows", ({ window }) =>
+      window.gZenViewSplitter.rotatePanes()
+    ),
+    "splits.rotateBack": onPane("Rotate Windows Back", ({ window }) =>
+      window.gZenViewSplitter.rotatePanes(true)
+    ),
+    "splits.edgeLeft": toEdge("Move Window to Far Left", "left"),
+    "splits.edgeDown": toEdge("Move Window to Bottom", "bottom"),
+    "splits.edgeUp": toEdge("Move Window to Top", "top"),
+    "splits.edgeRight": toEdge("Move Window to Far Right", "right"),
+    "splits.growHeight": resize("Increase Window Height", "height", 1),
+    "splits.shrinkHeight": resize("Decrease Window Height", "height", -1),
+    "splits.growWidth": resize("Increase Window Width", "width", 1),
+    "splits.shrinkWidth": resize("Decrease Window Width", "width", -1),
+    "splits.grab": {
+      desc: "Move Window…",
+      agent: false,
+      run(context) {
+        windowModeOf(context)?.grab();
+      },
+    },
+    "splits.add": {
+      desc: "Add Tab to Split…",
+      agent: false,
+      run: addPane,
+    },
+    "window.mode": {
+      desc: "Window Mode",
+      agent: false,
+      run(context) {
+        windowModeOf(context)?.open();
+      },
+    },
+    "window.drop": {
+      desc: "Drop Here",
+      agent: false,
+      run(context) {
+        windowModeOf(context)?.drop();
+      },
+    },
+    "window.escape": {
+      desc: "Cancel / Leave Window Mode",
+      agent: false,
+      run(context) {
+        const mode = windowModeOf(context);
+        if (mode?.carrying) {
+          mode.cancel();
+        } else {
+          mode?.close();
+        }
+      },
+    },
+    "window.quit": {
+      desc: "Leave Window Mode",
+      agent: false,
+      run(context) {
+        windowModeOf(context)?.close();
+      },
     },
     "splits.only": {
       desc: "Close Other Windows",

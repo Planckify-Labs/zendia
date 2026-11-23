@@ -26,6 +26,7 @@ const MODES = {
   e: "EXPLORER",
   t: "TOOLBAR",
   l: "LIBRARY",
+  w: "WINDOW",
 };
 
 // Zendia's own panels and popups. The indicator keeps clear of any of them

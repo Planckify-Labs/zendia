@@ -145,6 +145,7 @@ EXTRA_JS_MODULES.zendia.ui += [
     "ui/ZendiaWebChatDock.sys.mjs",
     "ui/ZendiaWebChatMenu.sys.mjs",
     "ui/ZendiaWhichKey.sys.mjs",
+    "ui/ZendiaWindowMode.sys.mjs",
 ]
 
 FINAL_TARGET_FILES.modules.zendia.ui += [

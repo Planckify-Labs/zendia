@@ -54,13 +54,15 @@ export const ZENDIA_ROLES = {
   accent: "pink",
   // The modes, as lualine draws tokyonight's, with NORMAL in pink instead
   // of blue, the explorer taking the blue, the toolbar the command line's
-  // yellow and the library the terminal's teal.
+  // yellow, the library the terminal's teal and the window mode orange. The
+  // window mode has no mascot of its own and wears NORMAL's in its color.
   "mode-n": "pink",
   "mode-i": "green",
   "mode-v": "purple",
   "mode-e": "blue",
   "mode-t": "yellow",
   "mode-l": "teal",
+  "mode-w": "orange",
   "statusline-background": "night",
   "statusline-text": "snow",
   // Jump labels, in the colors of the user's LazyVim setup.

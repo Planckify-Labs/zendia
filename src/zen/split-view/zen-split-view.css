@@ -19,11 +19,19 @@
   margin: 0;
 }
 
+/* Where a drop would land and what it does, in Zendia's accent. */
+:root {
+  --zen-split-preview-color: var(--zendia-accent, var(--button-background-color-primary));
+  --zen-split-preview-text: light-dark(#ffffff, var(--zendia-ink, #1b1d2b));
+}
+
 #zen-splitview-dropzone {
   border-radius: var(--zen-native-inner-radius);
   transition: inset ease-out 0.08s;
   display: none;
-  background-color: color-mix(in srgb, var(--zen-colors-secondary) 30%, transparent 70%);
+  background-color: color-mix(in srgb, var(--zen-split-preview-color) 22%, transparent);
+  outline: 2px solid var(--zen-split-preview-color);
+  outline-offset: -2px;
 }
 #zen-splitview-dropzone[enabled="true"] {
   display: initial;
@@ -136,78 +144,242 @@
   cursor: ns-resize;
 }
 
+/* Pane chip. At rest nothing shows. Over a pane, a small "•••" handle sits
+   at the top edge, on a backing of its own so it reads on any page, its dots
+   in the accent on the pane with the keys; resting on it opens a chip that
+   names the tab and holds its actions. The handle sits just inside the
+   pane: the gap above belongs to the splitter. The chips also open by
+   themselves: all of them, numbered, in Zendia's window mode, and one for a
+   moment after a key changed its pane. */
 .zen-view-splitter-header-container {
+  --zen-split-chip-accent: var(--zen-active-split-outline-color, var(--zen-primary-color));
+
   position: absolute;
-  top: calc(var(--zen-split-column-gap) / -2);
+  top: 0;
   left: 50%;
-  opacity: 0;
-  transition: opacity 0.1s;
-  z-index: 100;
+  width: 120px;
+  height: 20px;
   transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  justify-content: center;
   pointer-events: none;
+
+  :root:not([inDOMFullscreen="true"]) .browserSidebarContainer[zen-split="true"]:hover > &,
+  :root:not([inDOMFullscreen="true"]) #tabbrowser-tabpanels[zen-split-zoomed] > [zen-split-zoomed] > & {
+    pointer-events: auto;
+  }
+
+  #tabbrowser-tabpanels:not([zen-split-view="true"]) &,
+  #tabbrowser-tabpanels[dragging-split] &,
+  #tabbrowser-tabpanels[zen-split-resizing] & {
+    display: none;
+  }
+}
+
+.zen-split-pane-nub {
+  --zen-split-nub-dots: color-mix(in srgb, var(--arrowpanel-color) 70%, transparent);
+
+  margin-top: 4px;
+  width: 30px;
+  height: 11px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--arrowpanel-background) 88%, transparent);
+  border: 1px solid var(--arrowpanel-border-color);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.85);
+  transition:
+    opacity 0.12s ease-out,
+    transform 0.12s ease-out;
+
+  /* Three dots, the way a handle is drawn on a tablet's split screen. */
+  &::before {
+    content: "";
+    width: 18px;
+    height: 4px;
+    background: radial-gradient(circle, var(--zen-split-nub-dots) 0 1.6px, transparent 2.1px) center / 6px 4px repeat-x;
+  }
+
+  .browserSidebarContainer.deck-selected > .zen-view-splitter-header-container > & {
+    --zen-split-nub-dots: var(--zen-split-chip-accent);
+  }
+
+  :root:not([inDOMFullscreen="true"]) .browserSidebarContainer[zen-split="true"]:hover > .zen-view-splitter-header-container > &,
+  /* A pane filling the view keeps its handle, so it never passes for a
+     plain tab with the other panes out of sight. */
+  :root:not([inDOMFullscreen="true"]) #tabbrowser-tabpanels[zen-split-zoomed] > [zen-split-zoomed] > .zen-view-splitter-header-container > & {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .zen-view-splitter-header-container:hover > & {
+    transform: scale(1.15);
+  }
+
+  .zen-view-splitter-header-container:hover > &,
+  #tabbrowser-tabpanels[zen-split-chips-shown] &,
+  [zen-split-chip-flash] > .zen-view-splitter-header-container > & {
+    opacity: 0 !important;
+  }
 }
 
 .zen-view-splitter-header {
+  position: absolute;
+  top: 4px;
+  left: 50%;
   display: flex;
   align-items: center;
-  position: fixed;
-  padding: 0.4rem 0.6rem 0.2rem 0.6rem;
-  border-radius: 6px;
-  background-color: var(--zen-active-split-outline-color);
-  box-shadow: 0 0 0 1px var(--button-primary-border-color);
-  gap: 0.8rem;
-  transform: translateX(-50%);
-  box-shadow: 0 0 5px 1px rgba(0, 0, 0, 0.1);
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
+  gap: 1px;
+  padding: 3px;
+  max-width: 340px;
+  border-radius: 9px;
+  background: var(--arrowpanel-background);
+  color: var(--arrowpanel-color);
+  border: 1px solid var(--arrowpanel-border-color);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
+  opacity: 0;
+  transform: translate(-50%, -4px) scale(0.96);
+  transform-origin: top center;
+  transition:
+    opacity 0.12s ease-out,
+    transform 0.12s ease-out;
+  pointer-events: none;
+
+  /* A short wait, so passing over the top of a pane does not flash it. */
+  .zen-view-splitter-header-container:hover > & {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+    pointer-events: auto;
+    transition-delay: 0.15s;
+  }
+
+  #tabbrowser-tabpanels[zen-split-chips-shown] &,
+  [zen-split-chip-flash] > .zen-view-splitter-header-container > & {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+    pointer-events: auto;
+    transition-delay: 0s;
+  }
 }
 
-:root:not([inDOMFullscreen="true"]) .browserSidebarContainer:hover .zen-view-splitter-header-container,
-.zen-view-splitter-header-container:hover {
-  pointer-events: all;
-  opacity: 1;
-  transition-delay: 0.1s;
+/* A pane carried with the keys dims as a dragged one does. */
+.browserSidebarContainer[zen-split-carried] browser {
+  opacity: 0.35;
 }
 
-.zen-view-splitter-header-container toolbarbutton {
-  display: flex;
-  -moz-context-properties: fill, fill-opacity;
-  border-radius: var(--tab-border-radius);
-  color: contrast-color(var(--zen-active-split-outline-color));
-  opacity: 0.8;
-  fill: currentColor;
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
+.zen-split-pane-icon {
+  width: 14px;
+  height: 14px;
+  margin-inline: 2px 4px;
+  flex-shrink: 0;
+}
+
+.zen-split-pane-title {
+  min-width: 0;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  margin-inline-end: 6px;
+  opacity: 0.85;
+}
+
+.zen-view-splitter-header toolbarbutton {
   appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: 0;
+  border-radius: 6px;
+  color: inherit;
+  fill: currentColor;
+  -moz-context-properties: fill, fill-opacity;
+  opacity: 0.75;
+  cursor: pointer;
   outline: none;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
+
+  &:hover {
+    opacity: 1;
+    background: var(--toolbarbutton-hover-background);
+  }
+
+  &:hover:active {
+    background: var(--toolbarbutton-active-background);
+  }
 
   & image {
     width: 14px;
     height: 14px;
   }
 
-  &.zen-tab-unsplit-button image {
-    height: 10px;
-    width: 10px;
-  }
-
   &.zen-tab-rearrange-button {
-    cursor: move;
+    cursor: grab;
+    width: 18px;
 
     & image {
       transform: rotate(90deg);
     }
+  }
+
+  &.zen-split-pane-close:hover {
+    color: light-dark(rgb(190, 30, 30), rgb(255, 120, 120));
+  }
+}
+
+/* A zoomed pane fills the view; the others keep their place underneath. */
+#tabbrowser-tabpanels[zen-split-zoomed] {
+  & > .browserSidebarContainer[zen-split="true"][zen-split-zoomed] {
+    inset: 0 !important;
+    z-index: 1;
+  }
+
+  & > .browserSidebarContainer[zen-split="true"]:not([zen-split-zoomed]) {
+    visibility: hidden;
+  }
+
+  & .zen-split-view-splitter {
+    display: none !important;
+  }
+}
+
+/* The gap between side-by-side panes shows a grabber too, like the one
+   between stacked panes. Double-click a gap to share it out evenly. */
+.zen-split-view-splitter[orient="vertical"] {
+  &::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 50px;
+    border-radius: 2px;
+    /* stylelint-disable-next-line stylelint-plugin-mozilla/use-paired-color-tokens */
+    background: var(--button-background-color-primary);
+    opacity: 0;
+    transform: translate(-50%, -50%);
+    transition: opacity 0.1s ease-in-out;
+    pointer-events: none;
+  }
+
+  &:hover::before {
+    opacity: 1;
   }
 }
 
 #zen-split-view-fake-browser {
   position: absolute;
   height: 100%;
-  border: 2px solid var(--zen-primary-color);
-  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid var(--zen-split-preview-color);
+  background: color-mix(in srgb, var(--zen-split-preview-color) 18%, transparent);
   border-radius: var(--zen-native-inner-radius);
   box-shadow: var(--zen-big-shadow);
   overflow: hidden;
@@ -231,6 +403,41 @@
 
   &[side="bottom"] {
     bottom: 0;
+  }
+}
+
+/* What a drop does, in the middle of where it would land: the slot a tab
+   dragged to an edge of the page opens, and the zone a pane moved by its
+   chip would take. */
+.zen-split-drop-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--zen-split-preview-color);
+  color: var(--zen-split-preview-text);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  animation: zen-split-drop-label-in 0.15s ease-out 0.05s both;
+}
+
+.zen-split-drop-label-icon {
+  width: 14px;
+  height: 14px;
+}
+
+@keyframes zen-split-drop-label-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.92);
   }
 }
 
