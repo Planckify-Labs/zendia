@@ -8,6 +8,8 @@ const {
   candidatesIn,
   expand,
   isWindowsAbsolute,
+  newestCursorVersion,
+  parseBatchShim,
   parseManagerDir,
   parseShellPath,
   parseVersion,
@@ -28,6 +30,8 @@ const {
   STDIO_PROXY,
   TOKEN_ENV,
   URL_ENV,
+  WINDOWS_STDIO_PROXY,
+  stdioProxyCommand,
 } = ChromeUtils.importESModule(
   "resource:///modules/zendia/agent/ZendiaAgentHarness.sys.mjs"
 );
@@ -147,6 +151,52 @@ add_task(function test_windows_path_handling() {
     "a real executable before an npm shim"
   );
   Assert.deepEqual(candidatesIn("/bin", "claude", false), ["/bin/claude"]);
+
+  // The shims npm (cmd-shim 7) and pnpm write, read for what they start.
+  Assert.deepEqual(
+    parseBatchShim(
+      [
+        "@ECHO off",
+        "GOTO start",
+        ":find_dp0",
+        "SET dp0=%~dp0",
+        "EXIT /b",
+        ":start",
+        "SETLOCAL",
+        "CALL :find_dp0",
+        "",
+        'IF EXIST "%dp0%\\node.exe" (',
+        '  SET "_prog=%dp0%\\node.exe"',
+        ") ELSE (",
+        '  SET "_prog=node"',
+        "  SET PATHEXT=%PATHEXT:;.JS;=;%",
+        ")",
+        "",
+        'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*',
+      ].join("\r\n")
+    ),
+    [["%_prog%", "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js"]],
+    "npm's shim runs %_prog% on the script"
+  );
+  Assert.deepEqual(
+    parseBatchShim(
+      [
+        '@IF EXIST "%~dp0\\node.exe" (',
+        '  "%~dp0\\node.exe"  "%~dp0\\..\\pkg\\cli.js" %*',
+        ") ELSE (",
+        "  @SETLOCAL",
+        "  @SET PATHEXT=%PATHEXT:;.JS;=;%",
+        '  node  "%~dp0\\..\\pkg\\cli.js" %*',
+        ")",
+      ].join("\r\n")
+    ),
+    [
+      ["%~dp0\\node.exe", "%~dp0\\..\\pkg\\cli.js"],
+      ["node", "%~dp0\\..\\pkg\\cli.js"],
+    ],
+    "pnpm's shim: node.exe beside it, then node from PATH"
+  );
+  Assert.deepEqual(parseBatchShim("@echo off\r\nset X=1\r\n"), []);
 
   // Every agent says where its Windows installer puts it and how to run it.
   for (const agent of ZENDIA_AGENTS) {
@@ -895,6 +945,57 @@ add_task(async function test_antigravity_drops_the_lazyvimium_server() {
   };
   ok(await ZENDIA_DRIVERS.antigravity.ensureConnected(own));
   Assert.equal(calls.length, 1, "a lazyvimium server of the user's stays");
+});
+
+add_task(async function test_stdio_proxy_per_system() {
+  Assert.deepEqual(stdioProxyCommand(false), ["/bin/sh", "-c", STDIO_PROXY]);
+  const windows = stdioProxyCommand(true);
+  ok(windows[0].endsWith("\\WindowsPowerShell\\v1.0\\powershell.exe"));
+  Assert.equal(windows.at(-2), "-EncodedCommand");
+  Assert.equal(
+    new TextDecoder("utf-16le").decode(
+      Uint8Array.from(atob(windows.at(-1)), c => c.charCodeAt(0))
+    ),
+    WINDOWS_STDIO_PROXY,
+    "the script survives as base64 UTF-16"
+  );
+
+  // The other system's proxy, from a profile carried over, is replaced.
+  const calls = [];
+  const agy = async args => {
+    calls.push(args);
+    return {
+      stdout:
+        args[1] == "list"
+          ? "NAME  TYPE  STATUS  COMMAND/URL\nzendia  stdio  enabled  C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile\n"
+          : "",
+      exitCode: 0,
+    };
+  };
+  ok(await ZENDIA_DRIVERS.antigravity.ensureConnected(agy));
+  Assert.deepEqual(
+    calls.map(args => args.slice(0, 5)),
+    [
+      ["mcp", "list"],
+      ["mcp", "remove", "zendia"],
+      ["mcp", "add", "zendia", "--", "/bin/sh"],
+    ]
+  );
+});
+
+add_task(function test_newest_cursor_version() {
+  Assert.equal(
+    newestCursorVersion([
+      "2026.9.3-abc123",
+      "2026.11.22-e9042b2",
+      "2026.11.5-aaa",
+      "2026.12.02-abc.new",
+      "promote-staged.cmd",
+    ]),
+    "2026.11.22-e9042b2",
+    "by the date, as cursor-agent.ps1 sorts"
+  );
+  Assert.equal(newestCursorVersion(["x"]), null);
 });
 
 add_task(function test_opencode_and_cursor_drivers() {

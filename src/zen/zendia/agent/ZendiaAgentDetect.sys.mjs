@@ -364,6 +364,17 @@ export async function runForOutput(
 ) {
   let proc;
   try {
+    if (/\.(bat|cmd)$/i.test(command)) {
+      const shim = await unwrapBatchShim(
+        command,
+        environment.PATH ?? Services.env.get("PATH")
+      );
+      if (shim) {
+        args = [...shim.args, ...args];
+        command = shim.command;
+        environment = { ...environment, ...shim.env };
+      }
+    }
     proc = await lazy.Subprocess.call({
       command,
       arguments: args,
@@ -486,6 +497,199 @@ async function isExecutable(path) {
   } catch {
     return false;
   }
+}
+
+/**
+ * The commands a batch file that only starts another program may run: the
+ * shims npm, pnpm and yarn write for a package's executable. A batch file
+ * can only be started through cmd.exe, which ends its command line at the
+ * first line break and reads " & | < > ^ % in it as its own syntax, so an
+ * agent's prompt reached it cut short and every argument after it was lost,
+ * the MCP config among them.
+ *
+ * @param {string} text The batch file.
+ * @returns {string[][]} The words of each command that passes the batch
+ *   file's arguments on (%*), without the %*, in the order of the file.
+ *   %dp0% and %~dp0 (the batch file's directory) and %_prog% are left in.
+ */
+export function parseBatchShim(text) {
+  const commands = [];
+  for (const line of text.split(/\r?\n/)) {
+    const end = line.lastIndexOf("%*");
+    if (end == -1) {
+      continue;
+    }
+    // npm's command follows "endLocal & goto #_undefined_# 2>NUL || title
+    // %COMSPEC% &".
+    const command = line
+      .slice(0, end)
+      .slice(line.lastIndexOf("&", end) + 1)
+      .trim()
+      .replace(/^@/, "");
+    const words = [...command.matchAll(/"([^"]*)"|([^\s"]+)/g)].map(
+      match => match[1] ?? match[2]
+    );
+    if (words.length) {
+      commands.push(words);
+    }
+  }
+  return commands;
+}
+
+// The program npm's shim keeps in %_prog% when there is no copy of it beside
+// the shim: node, or the interpreter a script's #! line names.
+function shimProgram(text) {
+  const programs = [...text.matchAll(/SET\s+"_prog=([^"]+)"/gi)];
+  return programs.findLast(([, name]) => !name.includes("%"))?.[1] ?? "node";
+}
+
+async function findExe(bin, searchPath, dirs = []) {
+  for (const dir of [...dirs, ...parseWindowsPath(searchPath)]) {
+    const path = `${dir.replace(/[\\/]+$/, "")}\\${bin}.exe`;
+    if (await IOUtils.exists(path)) {
+      return path;
+    }
+  }
+  return null;
+}
+
+// Cursor's version directories, named YYYY.M.D-commit or
+// YYYY.M.D-HH-MM-SS-commit.
+const CURSOR_VERSION =
+  /^(\d{4})\.(\d{1,2})\.(\d{1,2})(-\d{2}-\d{2}-\d{2})?-[a-f0-9]+$/;
+
+/**
+ * The newest of Cursor's version directories, as cursor-agent.ps1 picks it:
+ * by the date in the name.
+ *
+ * @param {string[]} names
+ * @returns {string|null}
+ */
+export function newestCursorVersion(names) {
+  const dated = names.flatMap(name => {
+    const match = CURSOR_VERSION.exec(name);
+    return match
+      ? [
+          {
+            name,
+            date: Number(
+              match[1] + match[2].padStart(2, "0") + match[3].padStart(2, "0")
+            ),
+          },
+        ]
+      : [];
+  });
+  dated.sort((a, b) => b.date - a.date || (a.name < b.name ? 1 : -1));
+  return dated[0]?.name ?? null;
+}
+
+// Cursor's cursor-agent.cmd hands its arguments to PowerShell, which picks
+// the newest version and runs its node.exe on its index.js. Both cmd.exe and
+// Windows PowerShell's passing of arguments to a program break a prompt, so
+// this does what the script does.
+async function unwrapCursorLauncher(file, text) {
+  if (!/-File\s+"%SCRIPT_DIR%\\cursor-agent\.ps1"\s+%\*/i.test(text)) {
+    return null;
+  }
+  const dir = PathUtils.parent(file);
+  let root = dir;
+  if (!(await IOUtils.exists(`${dir}\\node.exe`))) {
+    let names = [];
+    try {
+      names = (await IOUtils.getChildren(`${dir}\\versions`)).map(path =>
+        PathUtils.filename(path)
+      );
+    } catch {
+      return null;
+    }
+    const newest = newestCursorVersion(names);
+    if (!newest) {
+      return null;
+    }
+    root = `${dir}\\versions\\${newest}`;
+  }
+  const command = `${root}\\node.exe`;
+  const script = `${root}\\index.js`;
+  if (!(await IOUtils.exists(command)) || !(await IOUtils.exists(script))) {
+    return null;
+  }
+  const local = Services.env.get("LOCALAPPDATA");
+  return {
+    command,
+    args: [script],
+    env: {
+      CURSOR_INVOKED_AS: PathUtils.filename(file),
+      ...(!Services.env.get("NODE_COMPILE_CACHE") &&
+        local && { NODE_COMPILE_CACHE: `${local}\\cursor-compile-cache` }),
+    },
+  };
+}
+
+/**
+ * What a batch shim runs, to start it without cmd.exe.
+ *
+ * @param {string} file The .cmd or .bat file.
+ * @param {string} searchPath The PATH the agent runs with.
+ * @param {number} [depth] Shims that start other shims (yarn's) are followed
+ *   this many times more.
+ * @returns {Promise<{command: string, args: string[], env?: Record<string, string>}|null>}
+ *   The program, the arguments that go before the agent's own and any
+ *   environment the shim sets, or null when the file is not a shim this can
+ *   read.
+ */
+export async function unwrapBatchShim(file, searchPath, depth = 2) {
+  let text;
+  try {
+    text = await IOUtils.readUTF8(file);
+  } catch {
+    return null;
+  }
+  const cursor = await unwrapCursorLauncher(file, text);
+  if (cursor) {
+    return cursor;
+  }
+  const dir = PathUtils.parent(file);
+  const program = shimProgram(text);
+  for (const words of parseBatchShim(text)) {
+    const resolved = [];
+    for (const word of words) {
+      let value = word.replace(/%dp0%|%~dp0/gi, `${dir}\\`);
+      if (/^%_prog%$/i.test(value)) {
+        value = program;
+      }
+      if (value.includes("%")) {
+        resolved.length = 0;
+        break;
+      }
+      if (/^[\w.-]+$/.test(value) && !resolved.length) {
+        // A bare program name, looked up as cmd.exe would.
+        value = await findExe(value.replace(/\.exe$/i, ""), searchPath, [dir]);
+        if (!value) {
+          resolved.length = 0;
+          break;
+        }
+      } else if (/[\\/]/.test(value)) {
+        // "%dp0%\node_modules" doubles the separator; a share keeps its own.
+        value = PathUtils.normalize(value.replace(/(?<=.)[\\/]+/g, "\\"));
+      }
+      resolved.push(value);
+    }
+    if (!resolved.length || !(await IOUtils.exists(resolved[0]))) {
+      continue;
+    }
+    const [command, ...args] = resolved;
+    if (/\.(bat|cmd)$/i.test(command)) {
+      if (depth <= 0) {
+        return null;
+      }
+      const inner = await unwrapBatchShim(command, searchPath, depth - 1);
+      return (
+        inner && { command: inner.command, args: [...inner.args, ...args] }
+      );
+    }
+    return { command, args };
+  }
+  return null;
 }
 
 // The agent's entry with the install command of this system.

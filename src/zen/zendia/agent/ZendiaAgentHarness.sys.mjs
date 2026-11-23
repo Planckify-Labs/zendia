@@ -9,7 +9,10 @@
 // own. A driver only knows its CLI's command line and event shapes; the run
 // below is the same for every agent.
 
-import { pathEnvironment } from "resource:///modules/zendia/agent/ZendiaAgentDetect.sys.mjs";
+import {
+  pathEnvironment,
+  unwrapBatchShim,
+} from "resource:///modules/zendia/agent/ZendiaAgentDetect.sys.mjs";
 import {
   WORK_INSTRUCTIONS,
   WORK_TOOLS,
@@ -45,6 +48,75 @@ EOF
 )
   [ -n "$out" ] && printf '%s\\n' "$out"
 done`;
+
+// The same in Windows PowerShell 5.1, which every Windows has: no /bin/sh
+// there, and no curl before Windows 10. Streams of its own carry UTF-8, as a
+// process without a console cannot set the console's encoding.
+export const WINDOWS_STDIO_PROXY = `$url = $env:${URL_ENV}
+$token = $env:${TOKEN_ENV}
+if (-not $url -or -not $token) { exit 0 }
+[System.Net.ServicePointManager]::Expect100Continue = $false
+$utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
+$stdin = New-Object System.IO.StreamReader -ArgumentList ([Console]::OpenStandardInput()), $utf8
+$stdout = New-Object System.IO.StreamWriter -ArgumentList ([Console]::OpenStandardOutput()), $utf8
+$stdout.AutoFlush = $true
+while ($null -ne ($line = $stdin.ReadLine())) {
+  if (-not $line.Trim()) { continue }
+  try {
+    $request = [System.Net.HttpWebRequest]::Create($url)
+    $request.Method = 'POST'
+    $request.Proxy = $null
+    $request.Timeout = 900000
+    $request.ReadWriteTimeout = 900000
+    $request.ContentType = 'application/json'
+    $request.Accept = 'application/json, text/event-stream'
+    $request.Headers.Add('Authorization', "Bearer $token")
+    $body = $utf8.GetBytes($line)
+    $request.ContentLength = $body.Length
+    $stream = $request.GetRequestStream()
+    $stream.Write($body, 0, $body.Length)
+    $stream.Close()
+    $response = $request.GetResponse()
+  } catch [System.Net.WebException] {
+    $response = $_.Exception.Response
+    if (-not $response) {
+      [Console]::Error.WriteLine($_.Exception.Message)
+      continue
+    }
+  }
+  $reader = New-Object System.IO.StreamReader -ArgumentList $response.GetResponseStream(), $utf8
+  $out = $reader.ReadToEnd()
+  $reader.Close()
+  $response.Close()
+  if ($out) { $stdout.WriteLine($out) }
+}`;
+
+/**
+ * The command that runs the stdio proxy on this system. PowerShell takes its
+ * script as base64 UTF-16, which no agent's quoting of arguments can change.
+ *
+ * @param {boolean} [windows]
+ * @returns {string[]}
+ */
+export function stdioProxyCommand(windows = Services.appinfo.OS == "WINNT") {
+  if (!windows) {
+    return ["/bin/sh", "-c", STDIO_PROXY];
+  }
+  const units = new Uint8Array(WINDOWS_STDIO_PROXY.length * 2);
+  for (let i = 0; i < WINDOWS_STDIO_PROXY.length; i++) {
+    const code = WINDOWS_STDIO_PROXY.charCodeAt(i);
+    units[2 * i] = code & 0xff;
+    units[2 * i + 1] = code >> 8;
+  }
+  const root = Services.env.get("SystemRoot") || "C:\\Windows";
+  return [
+    `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    btoa(String.fromCharCode(...units)),
+  ];
+}
 
 // The browser tools, whose calls the panel shows itself from the server's
 // side; the agents' own reports of them are skipped.
@@ -734,17 +806,23 @@ export const ZENDIA_DRIVERS = {
       if (/^lazyvimium\s.*LAZYVIMIUM_MCP_/m.test(stdout)) {
         await agy(["mcp", "remove", "lazyvimium"]);
       }
-      if (new RegExp(`^${MCP_SERVER_NAME}\\s`, "m").test(stdout)) {
-        return true;
+      const windows = Services.appinfo.OS == "WINNT";
+      const entry = new RegExp(`^${MCP_SERVER_NAME}\\s.*$`, "m").exec(stdout);
+      if (entry) {
+        // Builds before the Windows proxy added the /bin/sh one there too,
+        // which never starts.
+        const foreign = windows ? "/bin/sh" : "powershell.exe";
+        if (!entry[0].toLowerCase().includes(foreign)) {
+          return true;
+        }
+        await agy(["mcp", "remove", MCP_SERVER_NAME]);
       }
       const { exitCode } = await agy([
         "mcp",
         "add",
         MCP_SERVER_NAME,
         "--",
-        "/bin/sh",
-        "-c",
-        STDIO_PROXY,
+        ...stdioProxyCommand(windows),
       ]);
       return exitCode === 0;
     },
@@ -1090,9 +1168,22 @@ export class ZendiaAgentRun {
         [TOKEN_ENV]: this.turn.mcp.token,
         NO_COLOR: "1",
       });
+      let command = this.executable;
+      let leading = [];
+      if (/\.(bat|cmd)$/i.test(command)) {
+        const shim = await unwrapBatchShim(command, this.path);
+        if (!shim) {
+          throw new Error(
+            "it is a batch file that does more than start a program, and cmd.exe would cut the prompt short. Install the agent's own executable instead."
+          );
+        }
+        ({ command, args: leading } = shim);
+        Object.assign(environment, shim.env);
+        this.#log?.write("shim", { command, args: leading });
+      }
       this.#proc = await lazy.Subprocess.call({
-        command: this.executable,
-        arguments: args,
+        command,
+        arguments: [...leading, ...args],
         environment,
         environmentAppend: false,
         workdir: this.turn.dir,
