@@ -55,6 +55,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
   ZendiaExplorer: "resource:///modules/zendia/ui/ZendiaExplorer.sys.mjs",
   ZendiaLibraryView: "resource:///modules/zendia/ui/ZendiaLibraryView.sys.mjs",
   ZendiaMenuKeys: "resource:///modules/zendia/ui/ZendiaMenuKeys.sys.mjs",
+  ZendiaPageKeys: "resource:///modules/zendia/core/ZendiaPageKeys.sys.mjs",
+  noteUserInput: "resource:///modules/zendia/actors/ZendiaKeysParent.sys.mjs",
   ZendiaTheme: "resource:///modules/zendia/ui/ZendiaTheme.sys.mjs",
   ZendiaChatButton: "resource:///modules/zendia/ui/ZendiaChatButton.sys.mjs",
   ZendiaAgentsBar: "resource:///modules/zendia/ui/ZendiaAgentsButton.sys.mjs",
@@ -135,6 +137,21 @@ const NORMAL_STATE = Object.freeze({
   field: false,
 });
 
+// A page's mode as a page reports it, which the parent cannot trust.
+function sanitizeState({ mode, tokens, count, group, field } = {}) {
+  const text = (value, max) =>
+    typeof value == "string" ? value.slice(0, max) : null;
+  return {
+    mode: text(mode, 16) ?? "n",
+    tokens: Array.isArray(tokens)
+      ? tokens.slice(0, 16).map(token => text(token, 16) ?? "")
+      : [],
+    count: Number.isSafeInteger(count) && count > 0 ? count : null,
+    group: text(group, 32),
+    field: field === true,
+  };
+}
+
 // Browser shortcuts marked reserved="true" never reach the page, so the
 // content actor cannot take them; the parent does when the page's mode maps
 // them. Ctrl+W, for one, would otherwise close the tab while typing.
@@ -196,6 +213,7 @@ class ZendiaService {
   #zenCommands = [];
   /** @type {WeakMap<Element, object>} */
   #states = new WeakMap();
+  #pageKeysInstance = null;
   /**
    * The statusline, which-key popup, explorer, toolbar and menu keys of each
    * browser window, with the key engine of its explorer and toolbar modes,
@@ -462,18 +480,35 @@ class ZendiaService {
     }
   }
 
-  updateState(browser, { mode, tokens, count, group, field } = {}) {
-    const text = (value, max) =>
-      typeof value == "string" ? value.slice(0, max) : null;
-    const state = {
-      mode: text(mode, 16) ?? "n",
-      tokens: Array.isArray(tokens)
-        ? tokens.slice(0, 16).map(token => text(token, 16) ?? "")
-        : [],
-      count: Number.isSafeInteger(count) && count > 0 ? count : null,
-      group: text(group, 32),
-      field: field === true,
-    };
+  /**
+   * A page reported its mode.
+   *
+   * @param {Element} browser
+   * @param {object} data
+   */
+  pageState(browser, data) {
+    const state = sanitizeState(data);
+    if (this.#pageKeys.pageState(browser, state)) {
+      this.updateState(browser, state);
+    }
+  }
+
+  get #pageKeys() {
+    this.#pageKeysInstance ??= new lazy.ZendiaPageKeys({
+      keymap: () => this.keymap,
+      whereOf: id => this.actions.get(id)?.where,
+      run: (browser, id) => this.runFromKey(browser, id, {}),
+      report: (browser, state) => this.updateState(browser, state),
+      options: () => ({
+        timeoutlen: ZendiaOptions.timeoutlen,
+        waitForPrefix: !!this.plugins.get("which-key")?.loaded,
+      }),
+    });
+    return this.#pageKeysInstance;
+  }
+
+  updateState(browser, data = {}) {
+    const state = sanitizeState(data);
     this.#states.set(browser, state);
     const window = windowOf(browser);
     const ui = this.#windows.get(browser.ownerDocument);
@@ -747,6 +782,8 @@ class ZendiaService {
       statusline: new lazy.ZendiaStatusline(window),
       whichKey: new lazy.ZendiaWhichKey(window),
       menuKeys: new lazy.ZendiaMenuKeys(window),
+      // The codes of keys the browser took for a page, whose keyup it takes.
+      takenKeys: new Set(),
       tabMotion: new lazy.ZendiaTabMotion(window),
       explorer: null,
       toolbar: null,
@@ -956,11 +993,44 @@ class ZendiaService {
           this.#bufferKey(window, ui, buffer, event);
         } else {
           this.#takeReservedKey(window, event);
+          if (!event.defaultPrevented && this.#pageKey(window, ui, event)) {
+            return;
+          }
           unclaimed = event;
         }
       },
       true
     );
+    // The keyup of a key the browser took for the page is not the page's
+    // either: a widget that acts on keyup, as reCAPTCHA's checkbox does on
+    // Space, would take <Space> (the leader) for a press.
+    window.addEventListener(
+      "keyup",
+      event => {
+        if (event.isTrusted && ui.takenKeys.delete(event.code || event.key)) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      },
+      true
+    );
+    // A press in a page may put a field in focus: the page has the keys
+    // until it says it is in normal mode again.
+    for (const type of ["mousedown", "mouseup"]) {
+      window.addEventListener(
+        type,
+        event => {
+          const browser = event.target;
+          if (
+            browser?.localName == "browser" &&
+            window.gBrowser.getTabForBrowser(browser)
+          ) {
+            this.#pageKeys.pointerDown(browser);
+          }
+        },
+        true
+      );
+    }
     // After whatever has the focus, so this only sees keys the browser UI had
     // no use for. Who owns a key is settled above: a key that closes a buffer
     // or opens a menu must not look like nobody's once it gets here.
@@ -1037,12 +1107,13 @@ class ZendiaService {
   #sendKeyToPage(window, event) {
     const { document, gBrowser } = window;
     const target = event.target;
+    const placeholder = this.#placeholderOf(window, target);
     if (
       !event.isTrusted ||
       event.defaultPrevented ||
       !ZendiaOptions.enabled ||
       (target.ownerDocument ?? target) != document ||
-      ["browser", "iframe"].includes(target.localName) ||
+      (["browser", "iframe"].includes(target.localName) && !placeholder) ||
       document.documentElement.hasAttribute("customizing") ||
       window.gDialogBox?.isOpen
     ) {
@@ -1053,18 +1124,22 @@ class ZendiaService {
     // <Space> presses the control the keyboard moved to.
     if (
       !token ||
-      ZendiaDom.isEditable(active) ||
-      (token == "<Space>" && active?.matches(":focus-visible"))
+      (!placeholder &&
+        (ZendiaDom.isEditable(active) ||
+          (token == "<Space>" && active?.matches(":focus-visible"))))
     ) {
       return;
     }
-    const browser = gBrowser.selectedBrowser;
+    const browser = placeholder ?? gBrowser.selectedBrowser;
     const { mode, tokens, count } = this.stateFor(browser);
+    // The blank page has no other way to its keys, and the state it reports
+    // lags keys typed in a row.
     if (
-      mode == "i" ||
-      (!tokens.length &&
-        !ZendiaKeys.isCountDigit(token, count !== null) &&
-        !this.keymap.trie(mode).node([token]))
+      !placeholder &&
+      (mode == "i" ||
+        (!tokens.length &&
+          !ZendiaKeys.isCountDigit(token, count !== null) &&
+          !this.keymap.trie(mode).node([token])))
     ) {
       return;
     }
@@ -1078,6 +1153,57 @@ class ZendiaService {
     } catch {
       // A tab with nothing loaded yet has no keys to hear this one.
     }
+  }
+
+  /**
+   * Run a normal mode key of the tab's page in the browser, when the page is
+   * idle in normal mode: a busy page, still loading, does not hold it up.
+   *
+   * @param {Window} window
+   * @param {object} ui
+   * @param {KeyboardEvent} event
+   * @returns {boolean} Whether the key was taken.
+   */
+  #pageKey(window, ui, event) {
+    const browser = event.target;
+    if (
+      !event.isTrusted ||
+      !ZendiaOptions.enabled ||
+      browser?.localName != "browser" ||
+      !window.gBrowser.getTabForBrowser(browser) ||
+      this.#placeholderOf(window, browser) ||
+      window.gDialogBox?.isOpen
+    ) {
+      return false;
+    }
+    if (!this.#pageKeys.handleKey(window, browser, event)) {
+      return false;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    ui.takenKeys.add(event.code || event.key);
+    lazy.noteUserInput(browser);
+    return true;
+  }
+
+  /**
+   * The tab whose browser has the focus while it still shows the blank page
+   * a new tab starts with, until the first of its page comes in. Gecko gives
+   * that page no keys, so they are sent to it from here.
+   *
+   * @param {Window} window
+   * @param {EventTarget} target
+   * @returns {Element|null} Its browser.
+   */
+  #placeholderOf(window, target) {
+    if (
+      target?.localName != "browser" ||
+      !window.gBrowser.getTabForBrowser(target) ||
+      !target.browsingContext?.currentWindowGlobal?.isUncommittedInitialDocument
+    ) {
+      return null;
+    }
+    return target;
   }
 
   /**

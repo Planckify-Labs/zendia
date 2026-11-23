@@ -62,6 +62,7 @@ EXTRA_JS_MODULES.zendia.core += [
     "core/ZendiaKeyEngine.sys.mjs",
     "core/ZendiaKeymap.sys.mjs",
     "core/ZendiaKeys.sys.mjs",
+    "core/ZendiaPageKeys.sys.mjs",
     "core/ZendiaPageText.sys.mjs",
     "core/ZendiaPlugins.sys.mjs",
     "core/ZendiaPopupHints.sys.mjs",

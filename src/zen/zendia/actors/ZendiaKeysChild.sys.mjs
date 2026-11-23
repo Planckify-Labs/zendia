@@ -34,6 +34,7 @@ XPCOMUtils.defineLazyPreferenceGetter(
 
 // What the parent sends only for vim mode's keys.
 const VIM_MESSAGES = new Set([
+  "Zendia:Idle",
   "Zendia:Key",
   "Zendia:LeaveField",
   "Zendia:TakeFocus",
@@ -300,6 +301,10 @@ export class ZendiaKeysChild extends JSWindowActorChild {
         this.#onFrameKey(message.data);
         break;
       // A frame has nothing to say any more; the page speaks again.
+      // Whether the browser may run normal mode's keys for this page: it is
+      // in normal mode, with nothing half typed, no field and no jump.
+      case "Zendia:Idle":
+        return this.#isIdle();
       case "Zendia:ResendState": {
         const engine = this.#ensureEngine();
         if (engine) {
@@ -568,6 +573,27 @@ export class ZendiaKeysChild extends JSWindowActorChild {
     } else if (fieldChanged) {
       this.#reportState(engine);
     }
+  }
+
+  #isIdle() {
+    const engine = this.#ensureEngine();
+    if (!engine || !this.document || this.browsingContext.parent) {
+      return false;
+    }
+    if (this.#capture?.done) {
+      this.#capture = null;
+    }
+    const { tokens, count } = engine.pending;
+    return (
+      engine.mode == "n" &&
+      !tokens.length &&
+      count === null &&
+      !this.#explicitInsert &&
+      !this.#capture &&
+      !this.#pageCaptures() &&
+      !ZendiaDom.agentTyping &&
+      !ZendiaDom.isEditable(ZendiaDom.deepActiveElement(this.document))
+    );
   }
 
   #isStolenFocus() {

@@ -64,6 +64,16 @@ export function lastUserInput(browser) {
   return gUserInput.get(browser) ?? 0;
 }
 
+/**
+ * The user's own key reached the tab without going to its page, which then
+ * cannot report it.
+ *
+ * @param {Element} browser
+ */
+export function noteUserInput(browser) {
+  gUserInput.set(browser, Date.now());
+}
+
 export class ZendiaKeysParent extends JSWindowActorParent {
   receiveMessage({ name, data }) {
     const browser = this.browsingContext.top.embedderElement;
@@ -74,7 +84,7 @@ export class ZendiaKeysParent extends JSWindowActorParent {
       case "Zendia:Run":
         return lazy.Zendia.runFromKey(browser, data.id, data.args);
       case "Zendia:State":
-        lazy.Zendia.updateState(browser, data);
+        lazy.Zendia.pageState(browser, data);
         break;
       case "Zendia:Yank":
         return lazy.recordYank(lazy.Zendia, browser, data);
