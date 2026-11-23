@@ -19,8 +19,11 @@
   margin: 0;
 }
 
-/* Where a drop would land and what it does, in Zendia's accent. */
+/* Where a drop would land and what it does, and the ring on the pane with
+   the keys, in Zendia's accent. The ring is set here, not only while the
+   panes may glide, so it keeps its colour while they are resized. */
 :root {
+  --zen-active-split-outline-color: var(--zendia-accent, light-dark(hsl(from var(--zen-primary-color) h s calc(l - 20)), var(--button-background-color-primary)));
   --zen-split-preview-color: var(--zendia-accent, var(--button-background-color-primary));
   --zen-split-preview-text: light-dark(#ffffff, var(--zendia-ink, #1b1d2b));
 }
@@ -77,8 +80,6 @@
 }
 
 #tabbrowser-tabpanels[zen-split-view="true"]:not(.zen-split-view-no-transition):not([zen-split-resizing]) > [zen-split="true"] {
-  --zen-active-split-outline-color: light-dark(hsl(from var(--zen-primary-color) h s calc(l - 20)), var(--button-background-color-primary));
-
   transition: inset 0.09s ease-out !important;
   & browser {
     transition: opacity 0.2s ease-out !important;
@@ -152,7 +153,7 @@
    themselves: all of them, numbered, in Zendia's window mode, and one for a
    moment after a key changed its pane. */
 .zen-view-splitter-header-container {
-  --zen-split-chip-accent: var(--zen-active-split-outline-color, var(--zen-primary-color));
+  --zen-split-chip-accent: var(--zen-active-split-outline-color);
 
   position: absolute;
   top: 0;
