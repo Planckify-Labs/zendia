@@ -516,7 +516,7 @@ export function toolDefinitions(registry) {
     {
       name: "tabs_list",
       description:
-        "List the tabs open in the window, each with an id like t3, its title and address, which one the user has in front and which one you work on.",
+        "List the tabs open in the window, each with an id like t3, its title and address, which one the user has in front and which one you work on. A tab noted as another agent's holds that agent's work with the user: act on it only when the user asks for that tab, and it is then yours. One another agent is working on now cannot be acted on until it is done.",
       inputSchema: {
         type: "object",
         properties: {},
@@ -777,6 +777,15 @@ export class ZendiaAgentToolbox {
    * @param {(browser: Element) => string|null} [options.claim] Takes a tab
    *   for this conversation's agent to act on; returns why not when another
    *   agent is working it now. Without it any tab may be acted on.
+   * @param {() => string} [options.steering] What a tool result tells the
+   *   agent of what the user said while the turn runs, or "": the next
+   *   tool boundary is where it reaches the agent, as Claude Code hands a
+   *   queued message to the model with its next tool result.
+   * @param {(browser: Element) => string} [options.owner] What tabs_list
+   *   says of a tab another agent's chat holds, or "".
+   * @param {(browser: Element) => {pending: boolean, left: boolean, at: number}|null} [options.leaving]
+   *   The tab's last page that asked to confirm being left while the agent
+   *   acted, and the user's answer: navigations wait for it.
    */
   constructor({
     zendia,
@@ -791,6 +800,9 @@ export class ZendiaAgentToolbox {
     onWork = null,
     agentColor = null,
     claim = null,
+    owner = null,
+    leaving = null,
+    steering = null,
   }) {
     this.zendia = zendia;
     this.browser = browser;
@@ -804,6 +816,9 @@ export class ZendiaAgentToolbox {
     this.onWork = onWork;
     this.agentColor = agentColor;
     this.claim = claim;
+    this.owner = owner;
+    this.leaving = leaving;
+    this.steering = steering;
     this.window = browser()?.documentGlobal;
   }
 
@@ -823,6 +838,10 @@ export class ZendiaAgentToolbox {
     let result;
     try {
       result = await this.#callTool(name, args);
+      const note = this.steering?.() ?? "";
+      if (note) {
+        result = { ...result, text: `${result.text ?? ""}\n\n${note}` };
+      }
       return result;
     } catch (e) {
       result = { text: String(e?.message ?? e), isError: true };
@@ -987,6 +1006,10 @@ export class ZendiaAgentToolbox {
     }
     if (this.opened.has(tab)) {
       notes.push("you opened it");
+    }
+    const owner = this.owner?.(tab.linkedBrowser);
+    if (owner) {
+      notes.push(owner);
     }
     if (tab.pinned) {
       notes.push("pinned");
@@ -1419,10 +1442,40 @@ export class ZendiaAgentToolbox {
   // commits the browser reports neither the new address nor a load: in dev
   // testing, music.youtube.com → www.youtube.com came back as the old page.
   async #waitForAddressChange(browser, before) {
-    const deadline = Date.now() + LOAD_TIMEOUT_MS;
+    const started = Date.now();
+    let deadline = started + LOAD_TIMEOUT_MS;
     while (browser.currentURI?.spec == before && Date.now() < deadline) {
       await sleep(RETRY_MS);
+      const asked = this.#leaveAsked(browser, started);
+      if (asked?.pending) {
+        deadline = Date.now() + LOAD_TIMEOUT_MS;
+      } else if (asked && !asked.left) {
+        return;
+      }
     }
+  }
+
+  // The page's question whether it may be left, asked since a time: the
+  // user takes their time to answer it in the chat, and the navigation
+  // waits for them.
+  #leaveAsked(browser, since) {
+    const asked = this.leaving?.(browser);
+    return asked && asked.at >= since ? asked : null;
+  }
+
+  async #whileAskedToLeave(browser) {
+    while (this.leaving?.(browser)?.pending && browser.isConnected) {
+      await sleep(RETRY_MS);
+    }
+  }
+
+  // What the agent is told when the user kept a page it tried to leave.
+  #stayedNote(browser, since) {
+    const asked = this.#leaveAsked(browser, since);
+    if (!asked || asked.pending || asked.left) {
+      return "";
+    }
+    return `${this.#nameOf(browser)} asked to confirm before it is left, and the user chose to stay, so it was not left. Do not try to leave it again unless the user asks; open what you need in a new tab (tab_open) instead.`;
   }
 
   // Wait for a navigation an action started, so the agent gets the page it
@@ -1432,12 +1485,19 @@ export class ZendiaAgentToolbox {
   // that, since the load flag the parent sees can come and go before then.
   // A navigation that ends in a download or nothing gives up after a while.
   async #waitForNewDocument(browser, before) {
-    const deadline = Date.now() + NAVIGATION_COMMIT_MS;
+    const started = Date.now();
+    let deadline = started + NAVIGATION_COMMIT_MS;
     while (
       browser.browsingContext.currentWindowGlobal == before &&
       Date.now() < deadline
     ) {
       await sleep(NAVIGATION_POLL_MS);
+      const asked = this.#leaveAsked(browser, started);
+      if (asked?.pending) {
+        deadline = Date.now() + NAVIGATION_COMMIT_MS;
+      } else if (asked && !asked.left) {
+        return;
+      }
     }
   }
 
@@ -1446,6 +1506,9 @@ export class ZendiaAgentToolbox {
     const start = Date.now() + NAVIGATION_START_MS;
     while (!browser.webProgress?.isLoadingDocument && Date.now() < start) {
       await sleep(NAVIGATION_POLL_MS);
+      // A page that asks to confirm being left starts no load until the
+      // user answers.
+      await this.#whileAskedToLeave(browser);
     }
     const deadline = Date.now() + LOAD_TIMEOUT_MS;
     while (browser.webProgress?.isLoadingDocument && Date.now() < deadline) {
@@ -1740,6 +1803,7 @@ export class ZendiaAgentToolbox {
       }
       let result;
       const before = browser.browsingContext.currentWindowGlobal;
+      const started = Date.now();
       const inFrame = parseElementId(element);
       const actor = inFrame && this.#frameActor(browser, inFrame.frame);
       if (inFrame && !actor) {
@@ -1781,6 +1845,10 @@ export class ZendiaAgentToolbox {
       ) {
         await this.#settleNavigation(browser);
       }
+      const stayed = this.#stayedNote(browser, started);
+      if (stayed) {
+        result = { ok: false, error: stayed };
+      }
       const observation = await this.#observeText(browser);
       if (!result.ok) {
         return {
@@ -1816,6 +1884,7 @@ export class ZendiaAgentToolbox {
         return { text: drive.error, isError: true };
       }
       const before = browser.currentURI?.spec;
+      const started = Date.now();
       browser.fixupAndLoadURIString(check.spec, {
         triggeringPrincipal:
           Services.scriptSecurityManager.getSystemPrincipal(),
@@ -1825,6 +1894,14 @@ export class ZendiaAgentToolbox {
         await this.#waitForAddressChange(browser, before);
       }
       await this.#settleNavigation(browser);
+      const stayed = this.#stayedNote(browser, started);
+      if (stayed) {
+        return {
+          title: `Open ${url} (the user stayed on the page)`,
+          text: `${stayed}\n\n${await this.#observeText(browser)}`,
+          isError: true,
+        };
+      }
       return { text: await this.#observeText(browser) };
     });
   }
@@ -1857,7 +1934,17 @@ export class ZendiaAgentToolbox {
           isError: true,
         };
       }
+      const started = Date.now();
       const result = await this.zendia.run(id, args, { browser });
+      await this.#whileAskedToLeave(browser);
+      const stayed = this.#stayedNote(browser, started);
+      if (stayed) {
+        return {
+          title: `${action.desc} (the user stayed)`,
+          text: stayed,
+          isError: true,
+        };
+      }
       return {
         text:
           result === undefined || result === null
@@ -1866,6 +1953,16 @@ export class ZendiaAgentToolbox {
       };
     });
   }
+}
+
+/**
+ * What a tool result tells an agent whose turn is about to end for what the
+ * user said while it worked: the message itself comes as its next turn.
+ *
+ * @returns {string}
+ */
+export function steerNote() {
+  return "---\nThe user has just sent you a new message while you were working. It comes as your next turn, from them. Stop here: do not call another tool and do not answer yet; your turn ends now and their message follows.";
 }
 
 function imageResult(text, bytes) {

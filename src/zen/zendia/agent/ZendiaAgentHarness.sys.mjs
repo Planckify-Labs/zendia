@@ -25,6 +25,8 @@ import {
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
+  clearTimeout: "resource://gre/modules/Timer.sys.mjs",
+  setTimeout: "resource://gre/modules/Timer.sys.mjs",
   Subprocess: "resource://gre/modules/Subprocess.sys.mjs",
 });
 
@@ -154,6 +156,8 @@ const QUIET_TOOLS = new Set([
 ]);
 
 const STDERR_TAIL = 4000;
+// How long a turn's end waits for a steer the agent has not taken yet.
+const STEER_HOLD_MS = 4000;
 
 export const BROWSER_INSTRUCTIONS = `You are working in the user's web browser, zendia, starting on the tab they asked from. Use the "${MCP_SERVER_NAME}" tools to do what they ask:
 - page_observe reads a tab: its address, the visible text and the controls you can use, each with an id like e12. Frames on the page are read too, their controls with ids like f7.e3.
@@ -500,12 +504,26 @@ function claudeOptions() {
  */
 export const ZENDIA_DRIVERS = {
   claude: {
+    // Claude Code steers natively: a user message written to its stdin
+    // while it works is handed to the model at its next tool result, in the
+    // same turn, and echoed back (--replay-user-messages) once it is.
+    steer: "stdin",
+    inputLine(text) {
+      return JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text }] },
+      });
+    },
     launch(turn) {
       const config = PathUtils.join(turn.dir, `claude-mcp-${turn.runId}.json`);
       return {
+        // The prompt goes in on stdin, which stays open for steering.
+        input: turn.prompt,
         args: [
           "--print",
-          turn.prompt,
+          "--input-format",
+          "stream-json",
+          "--replay-user-messages",
           "--output-format",
           "stream-json",
           "--verbose",
@@ -574,6 +592,12 @@ export const ZENDIA_DRIVERS = {
           delta.text
           ? [{ type: "text", text: delta.text, delta: true }]
           : [];
+      }
+      // A user message read from stdin, echoed as the model gets it: the
+      // first is the prompt, any after it a steer.
+      if (event.type == "user" && event.isReplay) {
+        state.replays = (state.replays ?? 0) + 1;
+        return state.replays > 1 ? [{ type: "steered" }] : [];
       }
       // The whole message after its pieces: it settles what they built.
       if (event.type == "assistant") {
@@ -1102,6 +1126,16 @@ export class ZendiaAgentRun {
   #done = Promise.withResolvers();
   // What a driver's parse() keeps between lines of this run.
   #parseState = {};
+  // Whether the agent's stdin is open for steering (a driver with steer
+  // "stdin"), and the steers written there it has not taken yet.
+  #inputOpen = false;
+  #steersInFlight = 0;
+  // Ended on purpose to hand the agent what the user said (interrupt): a
+  // quiet end, and nothing it says after counts.
+  #interrupted = false;
+  // The end the agent reported while a steer was still on its way: held
+  // for the turn that steer starts (#line).
+  #heldEnd = null;
 
   /**
    * @param {object} options
@@ -1128,7 +1162,12 @@ export class ZendiaAgentRun {
   }
 
   async start() {
-    const { args, env = {}, files = [] } = this.driver.launch(this.turn);
+    const {
+      args,
+      env = {},
+      files = [],
+      input = null,
+    } = this.driver.launch(this.turn);
     this.#startedAt = Date.now();
     this.#log?.write("spawn", {
       executable: this.executable,
@@ -1198,9 +1237,70 @@ export class ZendiaAgentRun {
     if (this.#stopped) {
       this.#proc.kill(0).catch(() => {});
     }
-    this.#proc.stdin.close().catch(() => {});
+    if (input != null && !this.#stopped) {
+      this.#inputOpen = true;
+      this.#write(input);
+    } else {
+      this.#proc.stdin.close().catch(() => {});
+    }
     this.#readStderr();
     this.#readStdout();
+  }
+
+  /**
+   * Hand the agent a message while its turn runs, where its CLI takes one
+   * (a driver with steer "stdin"). It reaches the model at its next tool
+   * result; a "steered" event says when it did.
+   *
+   * @param {string} text
+   * @returns {boolean} Whether it was handed over: false where the CLI
+   *   takes none, or the turn is ending.
+   */
+  steer(text) {
+    if (!this.#inputOpen || this.#finished || this.#heldEnd) {
+      return false;
+    }
+    this.#steersInFlight++;
+    this.#log?.write("steer", { text });
+    this.#write(text);
+    return true;
+  }
+
+  /** Whether steer() reaches this run's agent within its turn. */
+  get steersNatively() {
+    return this.#inputOpen && !this.#finished && !this.#heldEnd;
+  }
+
+  /**
+   * End the turn now, for the conversation to resume the agent's session
+   * with what the user said: an end without an error, after which nothing
+   * the agent prints counts.
+   */
+  interrupt() {
+    if (this.#finished || this.#interrupted) {
+      return;
+    }
+    this.#interrupted = true;
+    this.#log?.write("interrupt", {});
+    this.#closeInput();
+    if (this.#exited) {
+      this.#finish(null);
+    } else {
+      this.#proc?.kill(2000).catch(() => {});
+    }
+  }
+
+  #write(text) {
+    this.#proc.stdin
+      .write(`${this.driver.inputLine(text)}\n`)
+      .catch(e => console.error("Zendia: writing to the agent failed", e));
+  }
+
+  #closeInput() {
+    if (this.#inputOpen) {
+      this.#inputOpen = false;
+      this.#proc?.stdin.close().catch(() => {});
+    }
   }
 
   stop() {
@@ -1235,13 +1335,15 @@ export class ZendiaAgentRun {
       stopped: this.#stopped,
       ms: Date.now() - this.#startedAt,
     });
-    if (this.#stopped) {
+    if (this.#interrupted) {
+      this.#finish(null);
+    } else if (this.#stopped) {
       this.#finish("Stopped");
     } else if (exitCode) {
       const tail = this.#stderr.trim().split("\n").slice(-6).join("\n");
       this.#finish(tail || `The agent exited with code ${exitCode}`);
     } else {
-      this.#finish(null);
+      this.#finish(this.#heldEnd?.error ?? null);
     }
   }
 
@@ -1265,6 +1367,9 @@ export class ZendiaAgentRun {
     // Everything the CLI printed, parsed or not: a shape the driver does
     // not know shows up here.
     this.#log?.write("stdout", { line });
+    if (this.#interrupted) {
+      return;
+    }
     if (!line.startsWith("{")) {
       return;
     }
@@ -1279,12 +1384,45 @@ export class ZendiaAgentRun {
       if (parsed.type != "ui-draft") {
         this.#log?.write("event", { event: parsed });
       }
+      if (parsed.type == "steered") {
+        this.#steersInFlight = Math.max(0, this.#steersInFlight - 1);
+        if (this.#heldEnd) {
+          // The steer starts a turn of its own: its end is the run's.
+          lazy.clearTimeout(this.#heldEnd.timer);
+          this.#heldEnd = null;
+        }
+      }
       if (parsed.type == "done") {
-        this.#finish(parsed.error ?? null);
+        this.#ended(parsed.error ?? null);
       } else if (!this.#finished) {
         this.#onEvent(parsed);
       }
     }
+  }
+
+  // The agent says its turn is over. A steer it has not taken yet came too
+  // late for that turn, and the CLI answers it with another: wait a moment
+  // for it to be taken. Otherwise the input is closed, and the CLI exits.
+  #ended(error) {
+    if (this.#steersInFlight && this.#inputOpen && !this.#stopped) {
+      const timer = lazy.setTimeout(() => {
+        if (this.#heldEnd?.timer != timer) {
+          return;
+        }
+        this.#heldEnd = null;
+        this.#closeInput();
+        // Not taken: the conversation sends it as the next turn, and this
+        // run must not answer it as well.
+        this.#finish(error);
+        if (!this.#exited) {
+          this.#proc?.kill(2000).catch(() => {});
+        }
+      }, STEER_HOLD_MS);
+      this.#heldEnd = { error, timer };
+      return;
+    }
+    this.#closeInput();
+    this.#finish(error);
   }
 
   #finish(error) {
@@ -1292,6 +1430,11 @@ export class ZendiaAgentRun {
       return;
     }
     this.#finished = true;
+    this.#closeInput();
+    if (this.#heldEnd) {
+      lazy.clearTimeout(this.#heldEnd.timer);
+      this.#heldEnd = null;
+    }
     for (const path of this.#temporary) {
       IOUtils.remove(path).catch(() => {});
     }

@@ -38,6 +38,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   iconIsMono: "resource:///modules/zendia/agent/ZendiaAgentIcons.sys.mjs",
   iconIsTile: "resource:///modules/zendia/agent/ZendiaAgentIcons.sys.mjs",
   liveTabOf: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
+  isZenEmptyTab: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   recentActivity: "resource:///modules/zendia/agent/ZendiaAgentRoster.sys.mjs",
   shortDuration: "resource:///modules/zendia/agent/ZendiaAgentRoster.sys.mjs",
   showFloat: "resource:///modules/zendia/ui/ZendiaPicker.sys.mjs",
@@ -54,6 +55,18 @@ const STEP_ICONS = { running: "◌", done: "✓", failed: "✕" };
 const RENDER_MS = 120;
 
 let gRowIds = 0;
+
+// Slide in the compact sidebar Zen keeps out on its empty tab, as closing
+// the explorer does: once the tab change has set it, a frame or two later.
+function hideEmptyTabSidebar(window) {
+  const compact = window.gZenCompactModeManager;
+  if (!compact?.preference) {
+    return;
+  }
+  const hide = () => compact.sidebar.removeAttribute("zen-has-empty-tab");
+  hide();
+  window.requestAnimationFrame(() => window.requestAnimationFrame(hide));
+}
 
 export class ZendiaAgentsPanel {
   #window;
@@ -317,8 +330,11 @@ export class ZendiaAgentsPanel {
   }
 
   /**
-   * Start an agent with its chat open: on the tab in front when it has none
-   * yet, else on a new tab beside it, so the agent there goes on as it was.
+   * Start an agent with its chat open on the tab in front, where it works
+   * on the page the user is looking at. A chat the tab had stays on it, a
+   * switch away in the chat's header. Only while another agent is working
+   * that tab does the new one start on a new tab beside it, as it could not
+   * act there until the other is done.
    */
   async newAgent() {
     const agent = await this.#pickAgent();
@@ -331,12 +347,7 @@ export class ZendiaAgentsPanel {
     const { gBrowser } = this.#window;
     let browser = gBrowser.selectedBrowser;
     const own = lazy.ZendiaAgents.conversationFor(browser);
-    if (
-      own &&
-      (own.running ||
-        own.work ||
-        own.messages.some(message => message.type == "user"))
-    ) {
+    if (own?.running && own.browser == browser) {
       // Not opened from the tab in front: an agent driving it would take a
       // tab its page opened as its own.
       const tab = gBrowser.addTrustedTab("about:blank", {
@@ -346,7 +357,7 @@ export class ZendiaAgentsPanel {
       gBrowser.selectedTab = tab;
       browser = tab.linkedBrowser;
     }
-    await lazy.ZendiaAgents.open(browser, { agent });
+    await lazy.ZendiaAgents.open(browser, { agent, fresh: true });
     this.#openChat(browser);
   }
 
@@ -403,19 +414,20 @@ export class ZendiaAgentsPanel {
     }, RENDER_MS);
   }
 
-  // The tab where the conversation's chat shows: the one it works on, else
-  // another of its tabs whose chat it is.
+  // The tab to show the conversation's chat on: the one it works on, else
+  // another of its tabs whose chat it is. Zen's empty tab only when there
+  // is no other: Zen slides the compact sidebar out on it, for an address.
   #homeOf(conversation) {
     const agents = lazy.ZendiaAgents;
-    const tabs = [conversation.browser, ...conversation.tabs];
-    const live = lazy.liveTabOf(conversation);
+    const tabs = [conversation.browser, ...conversation.tabs].filter(
+      browser => browser?.isConnected && !this.#tabOf(browser)?.closing
+    );
+    const real = tabs.filter(browser => !lazy.isZenEmptyTab(browser));
     return (
-      tabs.find(
-        browser =>
-          browser?.isConnected &&
-          agents.conversationFor(browser) === conversation &&
-          !this.#tabOf(browser)?.closing
-      ) ?? live
+      real.find(browser => browser == conversation.browser) ??
+      real.find(browser => agents.conversationFor(browser) === conversation) ??
+      real[0] ??
+      lazy.liveTabOf(conversation)
     );
   }
 
@@ -872,7 +884,14 @@ export class ZendiaAgentsPanel {
     if (window.gBrowser.selectedTab != tab) {
       window.gBrowser.selectedTab = tab;
     }
+    if (lazy.isZenEmptyTab(browser)) {
+      // Zen slides the compact sidebar out on its empty tab, for an address;
+      // the user came for the chat.
+      hideEmptyTabSidebar(window);
+    }
     conversation.unseen = false;
+    // The tab may show another of the chats it holds.
+    lazy.ZendiaAgents.showChat(browser, conversation);
     this.#openChat(browser);
   }
 

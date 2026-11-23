@@ -36,6 +36,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   agentColor: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   inputKindOf: "resource:///modules/zendia/agent/ZendiaAgents.sys.mjs",
   agentIcon: "resource:///modules/zendia/agent/ZendiaAgentIcons.sys.mjs",
+  titleOf: "resource:///modules/zendia/agent/ZendiaAgentRoster.sys.mjs",
   iconIsMono: "resource:///modules/zendia/agent/ZendiaAgentIcons.sys.mjs",
   iconIsTile: "resource:///modules/zendia/agent/ZendiaAgentIcons.sys.mjs",
   iconIsFull: "resource:///modules/zendia/agent/ZendiaAgentIcons.sys.mjs",
@@ -119,6 +120,9 @@ export class ZendiaAgentDock {
   #log;
   #input;
   #agentChip;
+  // The other chats the tab holds, a switch away; hidden while it has one.
+  #othersButton;
+  #othersKey = "";
   #modelChip;
   #modelLogo;
   #modelName;
@@ -273,6 +277,9 @@ export class ZendiaAgentDock {
     this.#agentChip = create("button", "zendia-agent-chip", header);
     this.#agentChip.title = "Pick an agent (Tab cycles)";
     this.#agentChip.addEventListener("click", () => this.pickAgent());
+    this.#othersButton = create("button", "zendia-agent-others", header);
+    this.#othersButton.hidden = true;
+    this.#othersButton.addEventListener("click", () => this.switchChat());
     create("span", "zendia-agent-spacer", header);
     iconButton("agents", header, "All agents (<leader>aA)").addEventListener(
       "click",
@@ -432,7 +439,9 @@ export class ZendiaAgentDock {
     window.addEventListener("blur", () => this.#releaseHold());
     this.#sendButton = roundButton("send", bar, "Send (Enter)");
     this.#sendButton.addEventListener("click", () => {
-      if (this.#conversation?.running) {
+      // While the agent works, an empty box stops it and a written one
+      // steers it.
+      if (this.#conversation?.running && !this.#hasDraft()) {
         this.#conversation.stop();
       } else {
         this.#send();
@@ -955,6 +964,16 @@ export class ZendiaAgentDock {
   }
 
   #onConversation() {
+    // What the user said while a turn they stopped ran: back in the box.
+    const unsent = this.#conversation?.unsent;
+    if (unsent && !this.#conversation.running) {
+      this.#conversation.unsent = "";
+      if (!this.#input.value.trim()) {
+        this.#input.value = unsent;
+        this.#fitInput();
+        this.#syncComposer();
+      }
+    }
     // The tab's chat changed under the panel: an agent working the tab took
     // it over from an empty one.
     const current = lazy.ZendiaAgents.conversationFor(
@@ -1473,10 +1492,14 @@ export class ZendiaAgentDock {
     const ready =
       !!conversation &&
       (dictating || !!this.#input.value.trim() || !!this.#attachments.length);
-    this.#sendButton.toggleAttribute("running", running);
+    // A written box while the agent works steers it: the button sends.
+    const steering = running && this.#hasDraft();
+    this.#sendButton.toggleAttribute("running", running && !steering);
     this.#sendButton.disabled = !running && !ready;
     let title = "Send (Enter)";
-    if (running) {
+    if (steering) {
+      title = "Steer: tell it now, while it works (Enter)";
+    } else if (running) {
       title = "Stop (Ctrl+C)";
     } else if (dictating) {
       title = this.#sendAfterDictation
@@ -1518,7 +1541,11 @@ export class ZendiaAgentDock {
     const conversation = this.#conversation;
     const text = this.#input.value.trim();
     const files = this.#attachments;
-    if (!conversation || (!text && !files.length) || conversation.running) {
+    if (!conversation || (!text && !files.length)) {
+      return;
+    }
+    const steering = conversation.running;
+    if (steering && !conversation.steerable) {
       return;
     }
     // A model that cannot read what is attached: the first Enter shows why
@@ -1537,20 +1564,24 @@ export class ZendiaAgentDock {
     this.#renderAttachments();
     this.#fitInput();
     this.#syncComposer();
-    // The page takes focus while the agent types and presses keys in it;
-    // the dock stays open, and <leader>aa comes back to it.
-    if (this.#window.gBrowser.selectedBrowser == conversation.browser) {
-      conversation.browser.focus();
-    }
+    // The keys stay in the box, to steer or ask again: the agent works the
+    // page quietly, without its focus (ZendiaAgentToolbox.#drive).
     this.#glideNext = true;
-    conversation
-      .send(
-        text,
-        files.map(({ name, path, bytes }) => ({ name, path, bytes }))
-      )
-      .catch(e => {
-        console.error("Zendia: the agent turn failed", e);
+    const given = files.map(({ name, path, bytes }) => ({ name, path, bytes }));
+    if (steering) {
+      // The agent goes on with it from its next step.
+      conversation.steer(text, given).catch(e => {
+        console.error("Zendia: steering the agent failed", e);
       });
+      return;
+    }
+    conversation.send(text, given).catch(e => {
+      console.error("Zendia: the agent turn failed", e);
+    });
+  }
+
+  #hasDraft() {
+    return !!this.#input.value.trim() || !!this.#attachments.length;
   }
 
   /**
@@ -1872,6 +1903,104 @@ export class ZendiaAgentDock {
     this.#modelLogo.replaceChildren(this.#logo(agent?.id));
   }
 
+  // The tab's other chats, as their agents' logos beside the agent chip:
+  // the agents that worked the tab before the one it shows.
+  #renderOthers() {
+    const browser = this.#window.gBrowser.selectedBrowser;
+    const others = this.#conversation
+      ? lazy.ZendiaAgents.chatsOn(browser).filter(
+          chat => chat !== this.#conversation
+        )
+      : [];
+    const key = others
+      .map(chat => `${chat.agent?.id}:${chat.running}:${lazy.titleOf(chat)}`)
+      .join("\u0000");
+    if (key == this.#othersKey) {
+      return;
+    }
+    this.#othersKey = key;
+    const button = this.#othersButton;
+    button.hidden = !others.length;
+    if (!others.length) {
+      button.replaceChildren();
+      return;
+    }
+    const describe = chat =>
+      `${chat.agent?.name ?? "Agent"}${chat.running ? " (working)" : ""}: ${lazy.titleOf(chat) || "New conversation"}`;
+    const title =
+      others.length == 1
+        ? `Switch to ${describe(others[0])}`
+        : `Also on this tab:\n${others.map(describe).join("\n")}`;
+    button.title = title;
+    button.setAttribute("aria-label", title);
+    const logos = others.slice(0, 2).map(chat => {
+      const logo = this.#logo(chat.agent?.id);
+      logo.style.setProperty(
+        "--zendia-agent-color",
+        lazy.agentColor(chat.agent?.id)
+      );
+      logo.toggleAttribute("working", !!chat.running);
+      return logo;
+    });
+    button.replaceChildren(
+      ...logos,
+      ...(others.length > 2
+        ? [
+            this.#create(
+              "span",
+              "zendia-agent-others-more",
+              `+${others.length - 2}`
+            ),
+          ]
+        : [])
+    );
+  }
+
+  /**
+   * Show another chat the tab in front holds: the other one when it holds
+   * two, else the one picked from a list.
+   */
+  async switchChat() {
+    const browser = this.#window.gBrowser.selectedBrowser;
+    const chats = lazy.ZendiaAgents.chatsOn(browser);
+    const others = chats.filter(chat => chat !== this.#conversation);
+    let chat = others.length == 1 ? others[0] : null;
+    if (others.length > 1) {
+      this.#picking = true;
+      let index;
+      try {
+        index = await lazy.ZendiaPicker.open(this.#window, {
+          title: "Chats on this tab",
+          items: chats.map(other => ({
+            icon: lazy.agentIcon(other.agent?.id) ?? undefined,
+            iconFill: lazy.iconIsTile(other.agent?.id),
+            color: lazy.agentColor(other.agent?.id),
+            label: lazy.titleOf(other) || "New conversation",
+            detail: [
+              other.agent?.name,
+              other.running && "working",
+              other === this.#conversation && "shown",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          })),
+        });
+      } finally {
+        this.#picking = false;
+      }
+      chat = chats[index] ?? null;
+    }
+    if (chat && chat !== this.#conversation) {
+      lazy.ZendiaAgents.showChat(browser, chat);
+      this.#bind(chat);
+      chat.unseen = false;
+      this.#render();
+    }
+    if (this.#open) {
+      this.#input.focus();
+    }
+  }
+
   #installName(agent) {
     const name = this.#create("span", "zendia-agent-install-name");
     name.append(this.#logo(agent.id), agent.name);
@@ -2049,6 +2178,7 @@ export class ZendiaAgentDock {
 
     const agent = conversation?.agent;
     this.#renderChip(agent);
+    this.#renderOthers();
     this.#agentChip.style.setProperty(
       "--zendia-agent-color",
       lazy.agentColor(agent?.id)
@@ -2065,8 +2195,8 @@ export class ZendiaAgentDock {
     if (conversation?.pendingConfirm) {
       hint = "y allow · n deny · Esc hide";
     } else if (conversation?.running) {
-      placeholder = `${agent.name} is working on this tab…`;
-      hint = "Ctrl+C stop · Esc hide, it keeps working";
+      placeholder = `${agent.name} is working… type to steer it`;
+      hint = "Enter steer · Ctrl+C stop · Esc hide, it keeps working";
     } else if (agent) {
       placeholder = `Ask ${agent.name} to do something on this tab`;
     }
@@ -2192,6 +2322,11 @@ export class ZendiaAgentDock {
             files.append(this.#create("span", "zendia-agent-attachment", name));
           }
           row.append(files);
+        }
+        // Said while the agent worked: dimmed until the agent has it, as
+        // Claude Code shows a queued message.
+        if (message.status) {
+          row.setAttribute("steer", message.status);
         }
         break;
       case "confirm":
