@@ -55,6 +55,10 @@ const WAIT_POLL_MS = 100;
 const USER_QUIET_MS = 1500;
 const USER_WAIT_MAX_MS = 8000;
 const WAIT_SETTLE_MAX_MS = 2000;
+// The longest page_act waits for a route change to settle.
+const ROUTE_SETTLE_MAX_MS = 4000;
+// How long a route change is given to start its requests.
+const ROUTE_REQUEST_GRACE_MS = 300;
 // Requests listed at most, the newest; and how long a reload may keep
 // requesting after it has loaded before it is listed.
 const EXTRACT_DEFAULT_ROWS = 100;
@@ -301,6 +305,43 @@ function elementLines(page, prefix = "") {
   return lines;
 }
 
+const CUT_NOTE =
+  "(Cut here to fit. Ask for less to read the rest: page_observe with outline true and then scope, or offset and limit for page_extract and network_read.)";
+
+/**
+ * A result cut to an agent's limit, at a line's end, saying so. agy keeps a
+ * result of about 10,000 characters or more out of the model's view, in a
+ * file the model then reads with read_file: a model round trip on most
+ * pages, for what is a few characters too many.
+ *
+ * @param {string} text
+ * @param {number} limit
+ * @returns {string}
+ */
+export function fitResult(text, limit) {
+  if (text.length <= limit) {
+    return text;
+  }
+  const room = Math.max(0, limit - CUT_NOTE.length - 2);
+  const end = text.lastIndexOf("\n", room);
+  return `${text.slice(0, end > room / 2 ? end : room)}\n\n${CUT_NOTE}`;
+}
+
+// page_act's arguments, for one action and for each of a batch.
+const ACT_ACTION = {
+  type: "string",
+  enum: ["click", "fill", "select", "press", "scroll"],
+};
+const ACT_ELEMENT = {
+  type: "string",
+  description: "An id such as e12, or f7.e3 inside a frame",
+};
+const ACT_TEXT = {
+  type: "string",
+  description:
+    "fill: the text. select: the option. press: the key. scroll: up or down.",
+};
+
 /**
  * The MCP tool descriptions.
  *
@@ -475,33 +516,37 @@ export function toolDefinitions(registry) {
     {
       name: "page_act",
       description:
-        "Act on a tab and return it afterwards. click, fill (replace a field's text), select (an option of a native list), press (a key such as Enter, Escape, Tab, ArrowDown) or scroll (up or down, or an element into view). element is an id from the tab's latest observation. tab acts on any tab without switching to it, so several tabs can be worked side by side. A tab another agent is working on, or one the user is typing in this moment, says so instead of acting.",
+        "Act on a tab and return it afterwards, once the page has settled: a page it opened has loaded and a page that changed in place has finished changing, so there is no need to page_wait after it. click, fill (replace a field's text), select (an option of a native list), press (a key such as Enter, Escape, Tab, ArrowDown) or scroll (up or down, or an element into view). element is an id from the tab's latest observation. actions does several in one call, in order, such as filling every field of a form and then clicking its button: they stop at the first that fails or that opens another page, and say which ran. tab acts on any tab without switching to it, so several tabs can be worked side by side. A tab another agent is working on, or one the user is typing in this moment, says so instead of acting.",
       inputSchema: {
         type: "object",
         properties: {
-          action: {
-            type: "string",
-            enum: ["click", "fill", "select", "press", "scroll"],
-          },
-          element: {
-            type: "string",
-            description: "An id such as e12, or f7.e3 inside a frame",
-          },
-          text: {
-            type: "string",
+          action: ACT_ACTION,
+          element: ACT_ELEMENT,
+          text: ACT_TEXT,
+          actions: {
+            type: "array",
             description:
-              "fill: the text. select: the option. press: the key. scroll: up or down.",
+              "Several actions to do in order, each {action, element, text}, instead of action, element and text.",
+            items: {
+              type: "object",
+              properties: {
+                action: ACT_ACTION,
+                element: ACT_ELEMENT,
+                text: ACT_TEXT,
+              },
+              required: ["action"],
+              additionalProperties: false,
+            },
           },
           tab,
         },
-        required: ["action"],
         additionalProperties: false,
       },
     },
     {
       name: "page_navigate",
       description:
-        "Open an http(s) address in a tab, or in a new tab that becomes the one you work on, and return the loaded page.",
+        "Open an http(s) address in a tab, or in a new tab that becomes the one you work on, and return the page once it has loaded, so there is no need to page_wait after it.",
       inputSchema: {
         type: "object",
         properties: {
@@ -611,6 +656,37 @@ function firstOf(args, names) {
   return name && args[name];
 }
 
+// One page_act action under the names the tools understand.
+function normalizeAct(params) {
+  const alias = Object.hasOwn(ACT_ALIASES, params.action)
+    ? ACT_ALIASES[params.action]
+    : null;
+  return {
+    ...params,
+    ...alias,
+    element: firstOf(params, [
+      "element",
+      "id",
+      "target",
+      "ref",
+      "element_id",
+      "elementId",
+    ]),
+    text:
+      alias?.text ??
+      firstOf(params, [
+        "text",
+        "value",
+        "key",
+        "keys",
+        "direction",
+        "scroll",
+        "option",
+        "query",
+      ]),
+  };
+}
+
 /**
  * Take a call as an agent made it to the one the tools understand. Agents
  * name arguments from memory and agy wraps every MCP call: in dev logs,
@@ -643,33 +719,18 @@ export function normalizeCall(name, args, names) {
   }
   switch (tool) {
     case "page_act": {
-      const alias = Object.hasOwn(ACT_ALIASES, params.action)
-        ? ACT_ALIASES[params.action]
-        : null;
-      params = {
-        ...params,
-        ...alias,
-        element: firstOf(params, [
-          "element",
-          "id",
-          "target",
-          "ref",
-          "element_id",
-          "elementId",
-        ]),
-        text:
-          alias?.text ??
-          firstOf(params, [
-            "text",
-            "value",
-            "key",
-            "keys",
-            "direction",
-            "scroll",
-            "option",
-            "query",
-          ]),
-      };
+      const batch = firstOf(params, ["actions", "steps", "batch"]);
+      if (Array.isArray(batch)) {
+        const { tab } = params;
+        params = {
+          actions: batch.map(step =>
+            normalizeAct(step && typeof step == "object" ? step : {})
+          ),
+          ...(tab === undefined ? {} : { tab }),
+        };
+      } else {
+        params = normalizeAct(params);
+      }
       break;
     }
     case "page_navigate":
@@ -786,6 +847,8 @@ export class ZendiaAgentToolbox {
    * @param {(browser: Element) => {pending: boolean, left: boolean, at: number}|null} [options.leaving]
    *   The tab's last page that asked to confirm being left while the agent
    *   acted, and the user's answer: navigations wait for it.
+   * @param {number|null} [options.resultLimit] The most characters a result
+   *   may have for this agent; longer ones are cut (see fitResult).
    */
   constructor({
     zendia,
@@ -803,6 +866,7 @@ export class ZendiaAgentToolbox {
     owner = null,
     leaving = null,
     steering = null,
+    resultLimit = null,
   }) {
     this.zendia = zendia;
     this.browser = browser;
@@ -819,6 +883,7 @@ export class ZendiaAgentToolbox {
     this.owner = owner;
     this.leaving = leaving;
     this.steering = steering;
+    this.resultLimit = resultLimit;
     this.window = browser()?.documentGlobal;
   }
 
@@ -838,6 +903,9 @@ export class ZendiaAgentToolbox {
     let result;
     try {
       result = await this.#callTool(name, args);
+      if (this.resultLimit && typeof result?.text == "string") {
+        result = { ...result, text: fitResult(result.text, this.resultLimit) };
+      }
       const note = this.steering?.() ?? "";
       if (note) {
         result = { ...result, text: `${result.text ?? ""}\n\n${note}` };
@@ -1792,82 +1860,171 @@ export class ZendiaAgentToolbox {
   }
 
   #act(args) {
-    const { action, element, text, tab } = args;
-    const title = [action, element, tab && `on ${tab}`]
-      .filter(Boolean)
-      .join(" ");
+    const { tab } = args;
+    const steps = Array.isArray(args.actions)
+      ? args.actions
+      : [{ action: args.action, element: args.element, text: args.text }];
+    const named = steps
+      .map(({ action, element }) => [action, element].filter(Boolean).join(" "))
+      .join(", ");
+    const title = [named, tab && `on ${tab}`].filter(Boolean).join(" ");
     return this.#onTab(tab, title, async browser => {
+      if (!steps.length || steps.some(step => !step.action)) {
+        return {
+          title,
+          text: "Give action (with element and text), or actions: a list of them.",
+          isError: true,
+        };
+      }
       const drive = await this.#drive(browser);
       if (drive.error) {
         return { title, text: drive.error, isError: true };
       }
-      let result;
-      const before = browser.browsingContext.currentWindowGlobal;
-      const started = Date.now();
-      const inFrame = parseElementId(element);
-      const actor = inFrame && this.#frameActor(browser, inFrame.frame);
-      if (inFrame && !actor) {
-        result = {
-          ok: false,
-          error: `${element} is no longer on the page. Observe again.`,
-        };
-      } else {
-        const local = {
-          action,
-          element: inFrame?.local ?? element,
-          text,
-          agentColor: this.agentColor,
-          quiet: drive.quiet,
-        };
-        try {
-          result = await (actor
-            ? this.#queryFrame(actor, "agent.act", local)
-            : this.#runContent(browser, "agent.act", local));
-        } catch {
-          // The page went away mid-action: a click that navigated.
+      const done = [];
+      let result = null;
+      for (const [index, step] of steps.entries()) {
+        result = await this.#actOnce(browser, drive, step);
+        if (!result.ok) {
+          break;
+        }
+        done.push(result);
+        // The ids of the actions after it belong to the page it left.
+        if (result.navigated == "document" && index < steps.length - 1) {
           result = {
-            ok: true,
-            done: `Did ${action}; the page navigated`,
-            navigated: "document",
-            changed: true,
+            ...result,
+            stopped: `${done.length} of ${steps.length} done: it opened another page, so the rest were not done. Observe what it shows and go on from there.`,
           };
+          break;
         }
       }
-      // Wait for a new page only when the action started one. Waiting after
-      // every click cost each a quarter second; jev waits two frames.
-      if (result.ok && result.navigated == "document" && !inFrame) {
-        await this.#waitForNewDocument(browser, before);
-      }
-      if (
-        result.ok &&
-        (result.navigated == "document" ||
-          browser.webProgress?.isLoadingDocument)
-      ) {
-        await this.#settleNavigation(browser);
-      }
-      const stayed = this.#stayedNote(browser, started);
-      if (stayed) {
-        result = { ok: false, error: stayed };
-      }
       const observation = await this.#observeText(browser);
+      const ran = done.map(item => `${item.done}.`).join(" ");
       if (!result.ok) {
+        const before = done.length
+          ? `${ran} Then, action ${done.length + 1} of ${steps.length}: `
+          : "";
         return {
           title,
-          text: `${result.error}\n\n${observation}`,
+          text: `${before}${result.error}\n\n${observation}`,
           isError: true,
         };
       }
       // jev stops a run after three actions that change nothing; the agent
       // here is told, so it does not repeat one.
+      const last = done.at(-1);
       const unchanged =
-        result.changed === false && action != "scroll"
+        done.every(item => item.changed === false) &&
+        steps.at(-1).action != "scroll"
           ? " Nothing on the page changed. If it is still working, page_wait; otherwise do something else rather than repeat this."
           : "";
+      const stopped = result.stopped ? ` ${result.stopped}` : "";
+      const summary =
+        steps.length == 1
+          ? last.done
+          : `${done.length} actions: ${done.map(item => item.done).join(", ")}`;
       return {
-        title: tab ? `${result.done} on ${tab}` : result.done,
-        text: `${result.done}.${unchanged}\n\n${observation}`,
+        title: tab ? `${summary} on ${tab}` : summary,
+        text: `${ran}${unchanged}${stopped}\n\n${observation}`,
       };
     });
+  }
+
+  // One action, waited out: a page it opened has loaded, and a page it
+  // changed in place (a route of the page's own script) has finished
+  // changing. Without the second, YouTube's result links came back with the
+  // new address over the old page, and the agent spent a turn on page_wait.
+  async #actOnce(browser, drive, { action, element, text }) {
+    let result;
+    const before = browser.browsingContext.currentWindowGlobal;
+    const started = Date.now();
+    const requests = this.#requestsNow(browser);
+    const inFrame = parseElementId(element);
+    const actor = inFrame && this.#frameActor(browser, inFrame.frame);
+    if (inFrame && !actor) {
+      return {
+        ok: false,
+        error: `${element} is no longer on the page. Observe again.`,
+      };
+    }
+    const local = {
+      action,
+      element: inFrame?.local ?? element,
+      text,
+      agentColor: this.agentColor,
+      quiet: drive.quiet,
+    };
+    try {
+      result = await (actor
+        ? this.#queryFrame(actor, "agent.act", local)
+        : this.#runContent(browser, "agent.act", local));
+    } catch {
+      // The page went away mid-action: a click that navigated.
+      result = {
+        ok: true,
+        done: `Did ${action}; the page navigated`,
+        navigated: "document",
+        changed: true,
+      };
+    }
+    // Wait for a new page only when the action started one. Waiting after
+    // every click cost each a quarter second; jev waits two frames.
+    if (result.ok && result.navigated == "document" && !inFrame) {
+      await this.#waitForNewDocument(browser, before);
+    }
+    if (
+      result.ok &&
+      (result.navigated == "document" || browser.webProgress?.isLoadingDocument)
+    ) {
+      await this.#settleNavigation(browser);
+    } else if (result.ok && result.navigated == "same-document" && !inFrame) {
+      await this.#settleRoute(browser, requests);
+    }
+    const stayed = this.#stayedNote(browser, started);
+    return stayed ? { ok: false, error: stayed } : result;
+  }
+
+  // The tab's requests so far, to tell the ones an action starts.
+  #requestsNow(browser) {
+    return this.network?.listening
+      ? new Set(this.network.entries(browser, { type: "all" }))
+      : null;
+  }
+
+  // After a route change in the page's own script: the data requests it
+  // started answer, then the page stops changing. Requests that were going
+  // on before (a video's stream, a long poll) are not waited for.
+  async #settleRoute(browser, before) {
+    const started = Date.now();
+    const deadline = started + ROUTE_SETTLE_MAX_MS;
+    if (before) {
+      // A request the page's script starts reaches the recorder a moment
+      // later: in testing, a fetch started in the click's own handler was
+      // not there yet when the click returned, and the agent got
+      // "Loading…" and spent a turn on page_wait.
+      const data = new Set(["xhr", "fetch", "document", "other"]);
+      let seen = false;
+      while (Date.now() < deadline) {
+        const fresh = this.network
+          .entries(browser, { type: "all" })
+          .filter(entry => !before.has(entry) && data.has(entry.type));
+        seen ||= !!fresh.length;
+        if (
+          fresh.every(entry => entry.done) &&
+          (seen || Date.now() - started >= ROUTE_REQUEST_GRACE_MS)
+        ) {
+          break;
+        }
+        await sleep(NAVIGATION_POLL_MS * 4);
+      }
+    }
+    let current = await this.#versionOf(browser).catch(() => "error");
+    let quiet = 0;
+    while (quiet < 2 && Date.now() < deadline) {
+      await sleep(WAIT_POLL_MS);
+      const next = await this.#versionOf(browser).catch(() => "error");
+      quiet = next == current ? quiet + 1 : 0;
+      current = next;
+    }
   }
 
   #navigate({ url, newTab = false, tab }) {

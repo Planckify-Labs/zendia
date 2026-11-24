@@ -48,6 +48,8 @@ export function showFloat(element) {
  * @property {boolean} [dim] Shown faded, for an item that cannot be used yet.
  * @property {string} [tooltip] Shown when the mouse rests on it.
  * @property {string} [key] The key that picks it; one is assigned otherwise.
+ * @property {string} [section] A heading shown above the first item of a run
+ *   of items that share it.
  */
 
 /**
@@ -69,13 +71,14 @@ export class ZendiaPicker {
    * @param {ZendiaPickerItem[]} options.items
    * @param {"list"|"grid"} [options.layout] "grid" shows large icons in
    *   tiles, for a few items known by their icon.
+   * @param {number} [options.selected] The item selected when it opens.
    * @returns {Promise<number|null>} The index of the picked item, or null
    *   when the picker was dismissed.
    */
-  static open(window, { title, items, layout = "list" }) {
+  static open(window, { title, items, layout = "list", selected = 0 }) {
     ZendiaPicker.#open.get(window.document)?.close(null);
     ZendiaPicker.#leaving.get(window.document)?.remove();
-    const picker = new ZendiaPicker(window, title, items, layout);
+    const picker = new ZendiaPicker(window, title, items, layout, selected);
     ZendiaPicker.#open.set(window.document, picker);
     return picker.#result.promise;
   }
@@ -97,7 +100,7 @@ export class ZendiaPicker {
   #result = Promise.withResolvers();
   #previousFocus;
 
-  constructor(window, title, items, layout) {
+  constructor(window, title, items, layout, selected) {
     this.#window = window;
     const document = window.document;
     const create = (tag, className) => {
@@ -126,6 +129,12 @@ export class ZendiaPicker {
     const reserved = new Set(items.map(item => item.key).filter(Boolean));
     const free = [...LABELS].filter(label => !reserved.has(label));
     items.forEach((item, index) => {
+      if (item.section && item.section != items[index - 1]?.section) {
+        const section = create("div", "zendia-picker-section");
+        section.setAttribute("role", "presentation");
+        section.textContent = item.section;
+        list.append(section);
+      }
       const key = item.key ?? free.shift() ?? "";
       this.#keys.push(key);
       const row = create("div", "zendia-picker-item");
@@ -172,7 +181,7 @@ export class ZendiaPicker {
     (document.getElementById("browser") ?? document.documentElement).append(
       this.#root
     );
-    this.#select(0);
+    this.#select(selected >= 0 && selected < items.length ? selected : 0);
     this.#previousFocus = Services.focus.focusedElement;
     this.#root.focus();
   }

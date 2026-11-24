@@ -484,6 +484,14 @@ export class ZendiaAgentDock {
     );
     lazy.ZendiaAgentInstructions.load();
     window.addEventListener("unload", offInstructions, { once: true });
+    // A list renewed in the background can rename the model in use, or
+    // change its levels.
+    const offModels = lazy.ZendiaAgents.onModelsChange(id => {
+      if (this.#conversation?.agent?.id == id) {
+        this.#renderModel();
+      }
+    });
+    window.addEventListener("unload", offModels, { once: true });
 
     this.#pill.addEventListener("click", () =>
       this.open(this.#window.gBrowser.selectedBrowser)
@@ -746,7 +754,12 @@ export class ZendiaAgentDock {
           detail: [model.id, this.#inputNote(model, needs), model.detail]
             .filter(Boolean)
             .join(" · "),
+          section: model.section,
         })),
+        selected: Math.max(
+          0,
+          items.findIndex(model => model.id == current)
+        ),
       });
     } finally {
       this.#picking = false;
@@ -789,7 +802,12 @@ export class ZendiaAgentDock {
           .map(({ model }) => model)
       : models;
     const items = [
-      { id: "", name: "Default", detail: `what ${agent.name}'s settings pick` },
+      {
+        id: "",
+        name: "Default",
+        detail: `what ${agent.name}'s settings pick`,
+        section: ordered[0]?.section,
+      },
       ...ordered,
     ];
     // A model picked before that the list no longer has stays pickable.

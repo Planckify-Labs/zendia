@@ -355,12 +355,13 @@ function timeout(ms) {
  * @param {number} [options.ms]
  * @param {Record<string, string>} [options.environment]
  * @param {string} [options.until] Stop reading once stdout holds this.
+ * @param {string} [options.input] Written to stdin before it is closed.
  * @returns {Promise<{stdout: string, exitCode: number|null}>}
  */
 export async function runForOutput(
   command,
   args,
-  { ms = VERSION_TIMEOUT_MS, environment = {}, until = null } = {}
+  { ms = VERSION_TIMEOUT_MS, environment = {}, until = null, input = null } = {}
 ) {
   let proc;
   try {
@@ -387,7 +388,10 @@ export async function runForOutput(
   } catch {
     return { stdout: "", exitCode: null };
   }
-  proc.stdin.close().catch(() => {});
+  (input ? proc.stdin.write(input) : Promise.resolve())
+    .catch(() => {})
+    .then(() => proc.stdin.close())
+    .catch(() => {});
   let stdout = "";
   const read = (async () => {
     let chunk;

@@ -27,6 +27,7 @@ const {
   guessInputs,
   holdsJSON,
   orderEfforts,
+  parseClaudeModels,
   STDIO_PROXY,
   TOKEN_ENV,
   URL_ENV,
@@ -41,7 +42,7 @@ const { ZendiaAgents, PREF_CONTEXT, PREF_EFFORT } = ChromeUtils.importESModule(
 const { ZendiaAgentServer, handleMcpMessage } = ChromeUtils.importESModule(
   "resource:///modules/zendia/agent/ZendiaAgentServer.sys.mjs"
 );
-const { ZendiaPictureToolbox, formatObservation, normalizeCall } =
+const { ZendiaPictureToolbox, fitResult, formatObservation, normalizeCall } =
   ChromeUtils.importESModule(
     "resource:///modules/zendia/agent/ZendiaAgentTools.sys.mjs"
   );
@@ -474,6 +475,93 @@ add_task(async function test_drivers_list_models() {
     "a model's options are its own"
   );
 
+  // Claude Code's answer to initialize, cut down from 2.1.330 on
+  // 2026-11-23.
+  const initialize = [
+    '{"type":"system","subtype":"hook_started"}',
+    JSON.stringify({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: "zendia-models",
+        response: {
+          models: [
+            {
+              value: "default",
+              resolvedModel: "claude-opus-5-5",
+              displayName: "Default (recommended)",
+              supportsEffort: true,
+              supportedEffortLevels: ["low", "medium", "high"],
+            },
+            {
+              value: "opus",
+              resolvedModel: "claude-opus-5-5",
+              displayName: "Opus 5.5",
+              description: "For complex work and everyday tasks",
+              supportsEffort: true,
+              supportedEffortLevels: ["max", "low", "medium", "high", "xhigh"],
+              supportsAdaptiveThinking: true,
+            },
+            {
+              value: "claude-haiku-4-5-20251001",
+              resolvedModel: "claude-haiku-4-5-20251001",
+              displayName: "Haiku 4.5",
+              description: "Fastest for quick answers",
+            },
+          ],
+        },
+      },
+    }),
+  ].join("\n");
+  let asked = null;
+  const listed = await ZENDIA_DRIVERS.claude.models(async (args, options) => {
+    asked = { args, options };
+    return { stdout: initialize, exitCode: 0 };
+  });
+  Assert.deepEqual(listed, parseClaudeModels(initialize));
+  Assert.deepEqual(
+    listed,
+    [
+      {
+        id: "opus",
+        name: "Opus 5.5",
+        detail: "claude-opus-5-5 · For complex work and everyday tasks",
+        section: "Latest",
+        input: ["text", "image", "pdf"],
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+        defaultEffort: "medium",
+        contexts: [
+          { id: "", label: "1M", default: true },
+          { id: "200k", label: "200K" },
+        ],
+      },
+      {
+        id: "claude-haiku-4-5-20251001",
+        name: "Haiku 4.5",
+        detail: "Fastest for quick answers",
+        section: "Earlier versions",
+        input: ["text", "image", "pdf"],
+        context: 200000,
+      },
+    ],
+    "every model but the default, aliases as Latest, pinned ids after"
+  );
+  ok(
+    asked.options.input.includes('"subtype":"initialize"'),
+    "asks with the initialize control request on stdin"
+  );
+  ok(
+    asked.args.includes("--no-session-persistence"),
+    "and leaves no session behind"
+  );
+  Assert.deepEqual(
+    (await ZENDIA_DRIVERS.claude.models(run("Not logged in\n"))).map(
+      model => model.id
+    ),
+    ["opus", "sonnet", "haiku"],
+    "a CLI that lists nothing leaves the aliases"
+  );
+
   Assert.deepEqual(
     await ZENDIA_DRIVERS.kiro.models(
       run(
@@ -818,9 +906,53 @@ add_task(function test_antigravity_hides_schema_reads_and_wrappers() {
   );
 });
 
+add_task(function test_results_fit_an_agents_limit() {
+  Assert.equal(fitResult("short", 100), "short", "a short result is kept");
+  const lines = Array.from({ length: 400 }, (_, i) => `line ${i}`).join("\n");
+  const cut = fitResult(lines, 1000);
+  ok(cut.length <= 1000, `cut to the limit (${cut.length})`);
+  ok(/line \d+\n\n\(Cut here to fit/.test(cut), "at a line's end, saying so");
+  ok(cut.startsWith("line 0\nline 1\n"), "from the start");
+});
+
 add_task(function test_calls_are_taken_as_the_agent_meant_them() {
   const names = ["page_observe", "page_act", "browser_action", "tab_close"];
   const norm = (name, args) => normalizeCall(name, args, names);
+
+  // A batch of actions, each under the names the tools understand.
+  Assert.deepEqual(
+    norm("page_act", {
+      steps: [
+        { action: "type", id: "e3", value: "Ada" },
+        { action: "click", target: "e9" },
+        "junk",
+      ],
+      tab: "t2",
+    }),
+    {
+      name: "page_act",
+      args: {
+        actions: [
+          {
+            action: "fill",
+            id: "e3",
+            value: "Ada",
+            element: "e3",
+            text: "Ada",
+          },
+          {
+            action: "click",
+            target: "e9",
+            element: "e9",
+            text: undefined,
+          },
+          { element: undefined, text: undefined },
+        ],
+        tab: "t2",
+      },
+    },
+    "steps is taken for actions, and each is normalized"
+  );
 
   // agy's wrapper, plain and nested again, and with the arguments beside it.
   Assert.deepEqual(
@@ -2135,7 +2267,11 @@ add_task(async function test_picture_toolbox_acts_when_it_may() {
   );
   const typed = await box.callTool("type_keys", { keys: ["ac", "Enter"] });
   Assert.ok(!typed.isError);
-  Assert.deepEqual(pressed, [["ac", "Enter"]], "The keys reach the act handler");
+  Assert.deepEqual(
+    pressed,
+    [["ac", "Enter"]],
+    "The keys reach the act handler"
+  );
   const text = await box.callTool("type_text", { text: "55PSJ8" });
   Assert.ok(!text.isError);
   Assert.deepEqual(typedText, ["55PSJ8"], "The text reaches the act handler");
@@ -2146,7 +2282,9 @@ add_task(async function test_picture_toolbox_acts_when_it_may() {
     looked.text.includes("pick the trucks"),
     "look_again carries what the task asks now"
   );
-  const again = await box.callTool("picture_view", { name: "challenge-area.jpg" });
+  const again = await box.callTool("picture_view", {
+    name: "challenge-area.jpg",
+  });
   Assert.equal(
     again.image.data,
     "CQk=",
@@ -2154,7 +2292,11 @@ add_task(async function test_picture_toolbox_acts_when_it_may() {
   );
   // A wrong name still returns the only picture rather than an error.
   const guessed = await box.callTool("picture_view", { name: "wrong.jpg" });
-  Assert.equal(guessed.image.data, "CQk=", "the sole picture is returned anyway");
+  Assert.equal(
+    guessed.image.data,
+    "CQk=",
+    "the sole picture is returned anyway"
+  );
 });
 
 // What kiro leaves behind after it has migrated the agent it was given:

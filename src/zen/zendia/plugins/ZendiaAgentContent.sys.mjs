@@ -515,9 +515,7 @@ function fieldValue(element, role) {
 // the same role, name, state and surroundings. Geometry is left out; it is
 // measured again right before any input.
 function guardOf(element) {
-  const scope =
-    element.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') ??
-    element.parentElement;
+  const scope = guardScopeOf(element);
   return JSON.stringify([
     roleOf(element),
     accessibleName(element),
@@ -531,6 +529,14 @@ function guardOf(element) {
     element.getAttribute("href"),
     stableText(scope?.innerText?.slice(0, 2000) ?? ""),
   ]);
+}
+
+// The part of the page whose words are part of an element's guard.
+function guardScopeOf(element) {
+  return (
+    element.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') ??
+    element.parentElement
+  );
 }
 
 // The words around a control, without the numbers: a ticking table (prices,
@@ -1737,6 +1743,36 @@ function settle(window, element, autocomplete) {
 }
 
 /**
+ * Take the element an action changed, and the controls beside it in its form
+ * (or dialog, row, item), as they are now, so the next action of the same
+ * page_act can use them: filling YouTube's search box opens its suggestions
+ * in the form, and the Enter or the Search click after it was refused as
+ * "changed since it was observed". Controls elsewhere are not taken, so a
+ * list the action reordered under its ids is still caught.
+ *
+ * @param {Window} window
+ * @param {string} [elementId]
+ */
+function regard(window, elementId) {
+  const id = Number(/^e(\d+)$/.exec(String(elementId ?? ""))?.[1]);
+  const page = window.document.body ? pageOf(window.document) : null;
+  const acted = id && page?.nodes.get(id)?.deref();
+  if (!acted?.isConnected || !page.guards.has(id)) {
+    return;
+  }
+  const scope = guardScopeOf(acted);
+  for (const known of page.guards.keys()) {
+    const element = page.nodes.get(known)?.deref();
+    if (
+      element?.isConnected &&
+      (element == acted || (scope && scope.contains(element)))
+    ) {
+      page.guards.set(known, guardOf(element));
+    }
+  }
+}
+
+/**
  * Do one thing on the page.
  *
  * @param {Window} window
@@ -1767,6 +1803,7 @@ export async function act(window, args) {
   navigation?.addEventListener("navigate", onNavigate);
   try {
     const done = await perform(window, args);
+    regard(window, args.element);
     return {
       done,
       navigated,

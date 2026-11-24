@@ -35,7 +35,11 @@ import {
 } from "resource:///modules/zendia/agent/ZendiaAgentTools.sys.mjs";
 import { PREF_STEAL_FOCUS } from "resource:///modules/zendia/core/ZendiaShared.sys.mjs";
 import { ZendiaTheme } from "resource:///modules/zendia/ui/ZendiaTheme.sys.mjs";
-import { clearTimeout, setTimeout } from "resource://gre/modules/Timer.sys.mjs";
+import {
+  clearTimeout,
+  setInterval,
+  setTimeout,
+} from "resource://gre/modules/Timer.sys.mjs";
 
 export const PREF_DEFAULT_AGENT = "zendia.agent.default";
 export const PREF_NETWORK = "zendia.agent.network";
@@ -48,12 +52,24 @@ export const PREF_CONTEXT = "zendia.agent.context.";
 
 const PROMPT_COLLECTION = "@mozilla.org/embedcomp/prompt-collection;1";
 
+// A tab an agent is working on, whose page may not take the user's view
+// (zendia.agent.stealFocus lets it).
+function driven(browser) {
+  return (
+    !!browser?.hasAttribute?.("zendia-agent-driving") &&
+    !Services.prefs.getBoolPref(PREF_STEAL_FOCUS, false)
+  );
+}
+
 // What one request may carry, and how long the copies of its files stay.
 export const ATTACH_MAX_FILES = 10;
 export const ATTACH_MAX_BYTES = 25 * 1024 * 1024;
 const ATTACH_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
-// How long a remembered model list answers without asking the CLI again.
-const MODELS_FRESH_MS = 60 * 60 * 1000;
+// A remembered list answers at once, and the CLI is asked again behind it
+// when it was last asked longer ago than this.
+const MODELS_SYNC_MS = 2 * 60 * 1000;
+// How often every installed agent's list is renewed while the browser runs.
+const MODELS_SYNC_EVERY_MS = 30 * 60 * 1000;
 // What the remembered lists look like: v1 lists lack efforts and contexts, so
 // they count as missing.
 const MODELS_CACHE_VERSION = 2;
@@ -164,6 +180,8 @@ export class ZendiaAgentConversation {
   // in #nativeSteers until it echoes them.
   #steers = [];
   #nativeSteers = [];
+  // What the browser has to tell the agent, at its next tool result.
+  #agentNotes = [];
   // Taken at a tool boundary by an agent whose CLI cannot be steered: its
   // turn ends there, and the next resumes its session with them.
   #yielding = [];
@@ -274,6 +292,11 @@ export class ZendiaAgentConversation {
     }
   }
 
+  // The most characters a tool result may have for this agent (agy's).
+  get #resultLimit() {
+    return ZENDIA_DRIVERS[this.agent.id]?.resultLimit ?? null;
+  }
+
   /**
    * Ask the agent something about this tab.
    *
@@ -378,11 +401,12 @@ export class ZendiaAgentConversation {
           onUi: ui => this.#onUi(ui),
           network: this.#service.recordNetwork(),
           onWork: (name, args) => this.#onWork(name, args, text),
-          steering: () => this.#takeSteers(),
+          steering: () => this.#takeNotes(),
           agentColor: agentColor(this.agent.id),
           claim: browser => this.#service.claim(this, browser),
           owner: browser => this.#service.ownerNote(this, browser),
           leaving: browser => this.#service.leaving(browser),
+          resultLimit: this.#resultLimit,
         });
     const token = ZendiaAgentServer.open(toolbox);
     // The effort and window depend on the model's entry in the list, which
@@ -621,6 +645,22 @@ export class ZendiaAgentConversation {
   // the next turn resumes its session with them as the user's own message,
   // which it follows as it does any request. Words in a tool result only it
   // reads as data: Codex, told to change course there, went on as before.
+  /**
+   * Tell the agent something with the result of its next tool call, such as
+   * a tab a page opened for it.
+   *
+   * @param {string} text
+   */
+  tellAgent(text) {
+    this.#agentNotes.push(text);
+  }
+
+  // The browser's notes for the agent, then the user's steers.
+  #takeNotes() {
+    const notes = this.#agentNotes.splice(0);
+    return [...notes, this.#takeSteers()].filter(Boolean).join("\n\n");
+  }
+
   #takeSteers() {
     if (this.#isolatedTurn || !this.#steers.length || !this.run) {
       return "";
@@ -649,6 +689,8 @@ export class ZendiaAgentConversation {
   // starts the next turn at once, unless the user stopped this one: then it
   // goes back to the box (unsent), as Claude Code does with its queue.
   #afterTurn({ resend }) {
+    // About this turn's steps only.
+    this.#agentNotes.length = 0;
     clearTimeout(this.#yieldTimer);
     this.#yieldTimer = null;
     const yielded = this.#yielding;
@@ -982,6 +1024,7 @@ class ZendiaAgentService {
   // The windows whose pages an agent drives may not take the user's view
   // (#guardWindow).
   #guarded = new WeakSet();
+  #watchingPopups = false;
   #connected = new Map();
   // Who hears that a tab got a conversation: the CAPTCHA subagent.
   #listeners = new Set();
@@ -1216,6 +1259,10 @@ class ZendiaAgentService {
 
   #models = new Map();
   #modelCache = null;
+  // When each agent's CLI was last asked for its models, this session.
+  #modelsAsked = new Map();
+  #modelListeners = new Set();
+  #modelSync = null;
 
   // The model lists of the last session, kept on disk: `opencode models`
   // and the like take seconds, and the picker should not wait for them.
@@ -1255,9 +1302,10 @@ class ZendiaAgentService {
   }
 
   /**
-   * The models an agent offers, as its CLI lists them. The list of the last
-   * run answers at once and is renewed behind it, at most once an hour; with
-   * nothing remembered the CLI is asked and awaited. Each model is
+   * The models an agent offers, as its CLI lists them. The remembered list
+   * answers at once and is renewed behind it (at most every two minutes);
+   * with nothing remembered the CLI is asked and awaited. A renewed list
+   * that differs reaches `onModelsChange` listeners. Each model is
    * `{id, name, detail?, input?, efforts?, defaultEffort?, effortInId?,
    * contexts?, context?}`, see ZendiaAgentModel in the harness: `input`
    * lists what it reads (text, image, pdf, audio, video) where that is known,
@@ -1276,13 +1324,15 @@ class ZendiaAgentService {
     const remembered = await this.#remembered(agent.id);
     const stale =
       !remembered?.models?.length ||
-      Date.now() - remembered.at > MODELS_FRESH_MS;
+      !(Date.now() - (this.#modelsAsked.get(agent.id) ?? 0) < MODELS_SYNC_MS);
     if (!this.#models.has(agent.id) && (refresh || stale)) {
+      this.#modelsAsked.set(agent.id, Date.now());
       const promise = driver
-        .models(async args =>
+        .models(async (args, options = {}) =>
           runForOutput(agent.path, args, {
             ms: 30000,
             environment: { PATH: await ZendiaAgentDetect.childPath() },
+            ...options,
           })
         )
         .catch(e => {
@@ -1293,8 +1343,12 @@ class ZendiaAgentService {
           // Settled: the next ask may renew it again once it is stale.
           this.#models.delete(agent.id);
           if (models.length) {
+            const before = JSON.stringify(this.#current.get(agent.id) ?? []);
             this.#saveModels(agent, models);
             this.#adopt(agent.id, models);
+            if (JSON.stringify(models) != before) {
+              this.#modelsChanged(agent.id);
+            }
           }
           return models;
         });
@@ -1308,6 +1362,26 @@ class ZendiaAgentService {
       return remembered.models;
     }
     return this.#models.get(agent.id) ?? [];
+  }
+
+  /**
+   * @param {(id: string) => void} listener Called with an agent's id when
+   *   its model list has changed.
+   * @returns {() => void} Unsubscribes.
+   */
+  onModelsChange(listener) {
+    this.#modelListeners.add(listener);
+    return () => this.#modelListeners.delete(listener);
+  }
+
+  #modelsChanged(id) {
+    for (const listener of this.#modelListeners) {
+      try {
+        listener(id);
+      } catch (e) {
+        console.error("Zendia: model listener failed", e);
+      }
+    }
   }
 
   // The newest list of each agent that is already at hand.
@@ -1377,16 +1451,36 @@ class ZendiaAgentService {
 
   /**
    * Have what the first picker of the session needs ready: the agents, their
-   * versions and the default agent's models. Cheap enough for idle time.
+   * versions and their models, the default agent's first. From then on every
+   * installed agent's list is renewed every half hour, one CLI at a time.
+   * Cheap enough for idle time.
    */
   async warm() {
     try {
-      const agent = await this.defaultAgent();
-      if (agent) {
-        await this.models(agent);
-      }
+      await this.#syncModels();
     } catch (e) {
       console.error("Zendia: warming the agents failed", e);
+    }
+    if (!this.#modelSync) {
+      this.#modelSync = setInterval(
+        () =>
+          this.#syncModels().catch(e =>
+            console.error("Zendia: renewing the model lists failed", e)
+          ),
+        MODELS_SYNC_EVERY_MS
+      );
+    }
+  }
+
+  async #syncModels() {
+    const first = await this.defaultAgent();
+    const installed = (await this.agents()).filter(agent => agent.path);
+    for (const agent of [
+      ...(first ? [first] : []),
+      ...installed.filter(other => other.id != first?.id),
+    ]) {
+      await this.models(agent);
+      await this.#models.get(agent.id);
     }
   }
 
@@ -1937,13 +2031,17 @@ class ZendiaAgentService {
   // where the agent goes on with them (#watchTabs). The user's own tabs, and
   // zendia.agent.stealFocus, keep the browser's usual ways.
   #guardWindow(window) {
+    if (!this.#watchingPopups) {
+      this.#watchingPopups = true;
+      Services.obs.addObserver(
+        popup => this.#adoptPopup(popup),
+        "browser-delayed-startup-finished"
+      );
+    }
     if (this.#guarded.has(window)) {
       return;
     }
     this.#guarded.add(window);
-    const driven = browser =>
-      !!browser?.hasAttribute?.("zendia-agent-driving") &&
-      !Services.prefs.getBoolPref(PREF_STEAL_FOCUS, false);
     window.addEventListener(
       "framefocusrequested",
       event => {
@@ -1976,6 +2074,46 @@ class ZendiaAgentService {
     } catch (e) {
       // Pop-ups then open as the browser would; the agent works on.
       console.error("Zendia: could not keep agents' pop-ups behind", e);
+    }
+  }
+
+  // A page an agent drives that opens a window of its own (Gmail's "In a new
+  // window", a window.open with a size) put it in front of the user, and the
+  // agent was never told: it clicked Gmail's button by mistake and left the
+  // window there. The page comes back as a tab behind, in the window the
+  // agent works in, the agent's like any tab it opens, and the agent hears
+  // of it at its next step.
+  #adoptPopup(popup) {
+    try {
+      const opened = popup.gBrowser?.selectedBrowser;
+      const opener = opened?.browsingContext?.opener?.top?.embedderElement;
+      const conversation = opener && this.#glowOwner.get(opener);
+      const window = opener?.documentGlobal;
+      if (
+        !driven(opener) ||
+        !conversation?.running ||
+        conversation.discarded ||
+        !window?.gBrowser ||
+        window == popup ||
+        popup.gBrowser.tabs.length != 1
+      ) {
+        return;
+      }
+      const tab = window.gBrowser.adoptTab(popup.gBrowser.selectedTab, {
+        selectTab: false,
+      });
+      if (!tab) {
+        return;
+      }
+      this.#takeTab(conversation, tab.linkedBrowser);
+      this.#glow(conversation, tab.linkedBrowser);
+      const id = tabIdOf(tab);
+      conversation.tellAgent(
+        `That opened ${tab.linkedBrowser.currentURI?.spec ?? "a page"} in a window of its own. It is the tab ${id} now, behind the user's view: work on it with tab ${id} if you need it, or close it with tab_close.`
+      );
+    } catch (e) {
+      // The window stays as the page opened it.
+      console.error("Zendia: could not bring an agent's pop-up back", e);
     }
   }
 

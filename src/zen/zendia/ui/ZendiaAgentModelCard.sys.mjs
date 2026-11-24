@@ -636,8 +636,16 @@ export class ZendiaAgentModelCard {
     this.#shown = searchModels(this.#rows, this.#search.value);
     const selected = this.#shown.findIndex(row => row.id == current);
     this.#active = Math.max(0, selected);
+    // Headings group the list as it comes; a search ranks it instead.
+    const grouped = !this.#search.value.trim();
     this.#listBox.replaceChildren(
-      ...this.#shown.map((row, index) => {
+      ...this.#shown.flatMap((row, index) => {
+        const heading =
+          grouped &&
+          row.section &&
+          row.section != this.#shown[index - 1]?.section
+            ? [this.#create("div", "zendia-model-section", row.section)]
+            : [];
         const item = this.#create("div", "zendia-model-row");
         item.setAttribute("role", "option");
         item.toggleAttribute("selected", row.id == current);
@@ -656,7 +664,7 @@ export class ZendiaAgentModelCard {
           }
         });
         item.addEventListener("click", () => this.#pickRow(index));
-        return item;
+        return [...heading, item];
       })
     );
     if (!this.#shown.length) {
