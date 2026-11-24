@@ -2,16 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// Stands in for the browser on the dev page: a host with made up answers,
-// Fluent's part, and what a headless screenshot needs.
+// Stands in for the browser on the dev page: a host with sample answers,
+// Fluent's part, and deterministic clock freezing for screenshots.
 //
 //   ?step=1        open on that page (0 is the first after the start page)
 //   ?theme=light   the light theme
 //   ?choice=0      answer the yes or no pages with no
-//   ?t=9.4         hold the preview at that second of its loop
-//   ?strike=0.02   hold a thunder strike at that age, in seconds
+//   ?t=8.4         hold the preview at that second of its loop
 //   ?apps=3        pick that many Essentials
-//   ?wait=3500     hold the load event (for `firefox --screenshot`)
+//   ?wait=1200     hold the load event (for headless screenshots)
 
 const params = new URLSearchParams(location.search);
 
@@ -36,12 +35,22 @@ console.error = (...args) => {
 };
 
 const log = name => (...args) => console.log(`host.${name}`, ...args);
-const later = (value, ms = 300) => new Promise(resolve => setTimeout(() => resolve(value), ms));
-const apps = ["obsidian", "discord", "trello", "slack", "github", "tuta", "notion", "calendar", "figma"].map(name => ({
-  url: `https://${name}.example`,
-  name,
-  icon: `/favicons/${name}.svg`,
-  color: "#5865f2",
+const later = (value, ms = 240) => new Promise(resolve => setTimeout(() => resolve(value), ms));
+const apps = [
+  { name: "Obsidian", icon: "obsidian", color: "#7c3aed" },
+  { name: "Discord", icon: "discord", color: "#5865f2" },
+  { name: "Trello", icon: "trello", color: "#0052cc" },
+  { name: "Slack", icon: "slack", color: "#e01e5a" },
+  { name: "GitHub", icon: "github", color: "#57606a" },
+  { name: "Tuta", icon: "tuta", color: "#c00002" },
+  { name: "Notion", icon: "notion", color: "#37352f" },
+  { name: "Google Calendar", icon: "calendar", color: "#4285f4" },
+  { name: "Figma", icon: "figma", color: "#f24e1e" },
+].map(app => ({
+  url: `https://${app.icon}.example`,
+  name: app.name,
+  icon: `/favicons/${app.icon}.svg`,
+  color: app.color,
 }));
 
 window.zendiaWelcomeHost = {
@@ -54,12 +63,19 @@ window.zendiaWelcomeHost = {
     step: params.has("step") ? Number(params.get("step")) : undefined,
     choice: params.has("choice") ? params.get("choice") != "0" : undefined,
     frozenAt: params.has("t") ? Number(params.get("t")) : undefined,
-    frozenStrike: params.has("strike") ? Number(params.get("strike")) : undefined,
     essentials: apps.slice(0, Number(params.get("apps") ?? 0)).map(app => app.url),
   },
   getImportSources: () =>
     later([
-      { key: "firefox", name: "Firefox", image: "/favicons/github.svg", profiles: [{ id: "a", name: "Work" }, { id: "b", name: "Home" }] },
+      {
+        key: "firefox",
+        name: "Firefox",
+        image: "/favicons/github.svg",
+        profiles: [
+          { id: "a", name: "Work" },
+          { id: "b", name: "Home" },
+        ],
+      },
       { key: "chrome", name: "Chrome", image: "/favicons/figma.svg", profiles: [null] },
     ]),
   startImport: log("startImport"),
@@ -70,7 +86,14 @@ window.zendiaWelcomeHost = {
         { id: "claude", name: "Claude Code", version: "2.1.0", color: "#d97757", icon: "/favicons/obsidian.svg" },
         { id: "codex", name: "Codex", version: "0.50.0", color: "#10a37f", icon: "/favicons/figma.svg" },
       ],
-      missing: [{ id: "cursor", name: "Cursor", install: "curl https://cursor.com/install -fsS | bash", icon: "/favicons/github.svg" }],
+      missing: [
+        {
+          id: "cursor",
+          name: "Cursor",
+          install: "curl https://cursor.com/install -fsS | bash",
+          icon: "/favicons/github.svg",
+        },
+      ],
       preferredId: "claude",
     }),
   chooseAgent: log("chooseAgent"),
@@ -78,7 +101,7 @@ window.zendiaWelcomeHost = {
     later({
       engines: ["Google", "Bing", "DuckDuckGo", "Perplexity", "Ecosia", "Qwant"].map((name, index) => ({
         name,
-        iconURL: `/favicons/${apps[index].name}.svg`,
+        iconURL: `/favicons/${apps[index].icon.split("/").pop()}`,
       })),
       defaultName: "Google",
     }),
@@ -86,8 +109,6 @@ window.zendiaWelcomeHost = {
   setAdBlocking: log("setAdBlocking"),
   setEssentials: log("setEssentials"),
   setDefaultBrowser: log("setDefaultBrowser"),
-  showThemePicker: log("showThemePicker"),
-  hideThemePicker: log("hideThemePicker"),
   finish: log("finish"),
 };
 
@@ -107,7 +128,6 @@ fetch("/zen-welcome.ftl")
       const html = (messages.get(element.dataset.l10nId) ?? element.dataset.l10nId)
         .replaceAll("{ -zendia-name }", "Zendia")
         .replace(/\{ \$(\w+) \}/g, (_, name) => args[name]);
-      // Writing it again would wake the observer below for ever.
       if (element.l10nShown != html) {
         element.l10nShown = html;
         element.innerHTML = html;
@@ -124,32 +144,5 @@ fetch("/zen-welcome.ftl")
   });
 
 if (params.has("wait")) {
-  // Headless Firefox leaves WebGL out of its screenshots, so the preview is
-  // copied every frame to a 2D canvas laid over it.
-  const getContext = HTMLCanvasElement.prototype.getContext;
-  HTMLCanvasElement.prototype.getContext = function (type, options) {
-    return getContext.call(this, type, type.startsWith("webgl") ? { ...options, preserveDrawingBuffer: true } : options);
-  };
-  const copies = new Map();
-  const copy = () => {
-    for (const source of document.querySelectorAll("canvas[data-engine]")) {
-      let target = copies.get(source);
-      if (!target?.isConnected) {
-        target = document.createElement("canvas");
-        target.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none";
-        source.after(target);
-        copies.set(source, target);
-      }
-      if (target.width != source.width || target.height != source.height) {
-        target.width = source.width;
-        target.height = source.height;
-      }
-      const ctx = target.getContext("2d");
-      ctx.clearRect(0, 0, target.width, target.height);
-      ctx.drawImage(source, 0, 0);
-    }
-    requestAnimationFrame(copy);
-  };
-  requestAnimationFrame(copy);
   document.write(`<img hidden src="/wait?ms=${Number(params.get("wait"))}">`);
 }

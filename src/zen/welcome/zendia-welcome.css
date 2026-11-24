@@ -4,45 +4,85 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-/* The onboarding's pages (zendia-welcome.html).
-
-   The preview fills the window. Over its lower edge lies the deck, a panel
-   cut on a slant where the mascot tells the chapter and the choices are
-   made; along the top runs the row of chapters.
-
-   It is drawn like a cel: an ink line around every surface and shadows
-   that are a hard offset of the shape, never a blur. Headings lean forward
-   and are set heavy, as the wordmark painted in the start scene does. The
-   colors are Zendia's own (ZendiaTheme.sys.mjs): its night and its light
-   base for the surfaces, its text colors, and its pink, the color of NORMAL
-   mode, as the one accent, kept for what moves on and what is selected. */
+/* Zendia onboarding — pure 2D design built directly from the logo's six
+   organic Voronoi cells, hairline ink seams, morphing mascot, and Tokyo Night
+   palette (ZendiaTheme.sys.mjs). */
 
 :root {
   --ink: #1a1b26;
-  --paper: #e4e9ff;
-  --accent: #fca7ea;
-  /* Pink as text or as a focus ring needs the darker of the theme's two. */
-  --accent-strong: #b0307f;
-  --panel: #f5f6fa;
+  --bg: #f5f6fa;
+  --surface: #ffffff;
+  --raised: #e8ebf4;
+  --border: #cfd4e4;
+  --border-subtle: #dde1ee;
   --text: #1f2335;
-  --muted: #545c8a;
-  --line: var(--ink);
-  --tile: #ffffff;
-  --drop: 4px 4px 0 var(--line);
-  --ease: cubic-bezier(0.2, 0.9, 0.25, 1);
-  /* How far the deck's upper edge climbs from left to right. */
-  --slant: 30px;
+  --muted: #525a82;
+  --accent: #b0307f;
+  --accent-pastel: #fca7ea;
+  --mode-accent: #b0307f;
+  --mode-pastel: #fca7ea;
+  --primary-bg: #1a1b26;
+  --primary-fg: #f5f6fa;
+  --primary-key-bg: rgb(255 255 255 / 12%);
+  --stage-bg: #ebeff9;
+  --shadow-soft: 0 12px 32px rgb(26 27 38 / 8%);
+  --shadow-card: 0 2px 8px rgb(26 27 38 / 5%);
+
+  /* Smooth compositor curves with physics-based spring easing (linear() in
+     Firefox 112+ / Baseline Widely Available). */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --spring: linear(
+    0,
+    0.009,
+    0.035 2.1%,
+    0.141 4.4%,
+    0.723 12.9%,
+    0.938 16.7%,
+    1.017,
+    1.077,
+    1.121,
+    1.149 24.3%,
+    1.159,
+    1.163,
+    1.161,
+    1.154 29.9%,
+    1.129 32.8%,
+    1.051 39.6%,
+    1.017 43.1%,
+    0.991,
+    0.977 51%,
+    0.974 53.8%,
+    0.975 57.1%,
+    0.997 69.8%,
+    1.003 76.9%,
+    1
+  );
   color-scheme: light;
 }
 
 :root[data-theme="dark"] {
-  --accent-strong: #fca7ea;
-  --panel: var(--ink);
+  --bg: #161722;
+  --surface: #1e2030;
+  --raised: #272a40;
+  --border: #3b4261;
+  --border-subtle: #2c3048;
   --text: #c8d3f5;
   --muted: #8f98c4;
-  --line: #c8d3f5;
-  --tile: #2a2d45;
+  --accent: #fca7ea;
+  --mode-accent: #fca7ea;
+  --primary-bg: var(--mode-pastel);
+  --primary-fg: #1a1b26;
+  --primary-key-bg: rgb(26 27 38 / 14%);
+  --stage-bg: #1a1c2b;
+  --shadow-soft: 0 18px 44px rgb(0 0 0 / 36%);
+  --shadow-card: 0 2px 10px rgb(0 0 0 / 24%);
   color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 html,
@@ -54,10 +94,10 @@ body,
 
 body {
   overflow: hidden;
-  background: transparent;
+  background: var(--bg);
   color: var(--text);
-  /* The browser's own interface font: this is one of its windows. */
-  font: 15px/1.5 system-ui, sans-serif;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
   -moz-window-dragging: drag;
   user-select: none;
 }
@@ -65,12 +105,13 @@ body {
 button,
 input,
 label,
-fieldset {
+fieldset,
+code {
   -moz-window-dragging: no-drag;
 }
 
 :focus-visible {
-  outline: 3px solid var(--accent-strong);
+  outline: 2.5px solid var(--mode-accent);
   outline-offset: 3px;
 }
 
@@ -80,348 +121,463 @@ p {
   margin: 0;
 }
 
+/* Root application shell */
+
 #zen-welcome-app {
   position: relative;
   height: 100%;
   overflow: hidden;
-  transition: opacity 0.3s ease-out;
+  background: var(--bg);
+  transition: opacity 0.28s ease-out;
 
   &[data-finished] {
     opacity: 0;
   }
 }
 
-/* The preview. Under the deck it stops a little below the deck's highest
-   corner, so the slant cuts across the picture and not across nothing. */
-#zen-welcome-stage {
+/* Soft radial ambient field gently tinted by the active mode cell */
+.z2d-ambient-field {
   position: absolute;
   inset: 0;
-  transition: bottom 0.5s var(--ease);
-
-  [data-started] > & {
-    bottom: calc(var(--deck, 0px) - var(--slant));
-  }
-
-  & canvas {
-    display: block;
-  }
+  pointer-events: none;
+  background:
+    radial-gradient(
+      620px circle at 82% 24%,
+      color-mix(in srgb, var(--mode-accent) 13%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      520px circle at 16% 86%,
+      color-mix(in srgb, var(--mode-pastel) 9%, transparent),
+      transparent 68%
+    );
+  transition: background 0.55s var(--ease-out);
 }
 
-/* Headings: heavy and leaning, the voice of the wordmark. */
-#zen-welcome-start h1,
-.zen-welcome-text h1 {
-  font-weight: 900;
-  font-style: italic;
-  line-height: 1.02;
-  letter-spacing: -0.03em;
-  text-wrap: balance;
-}
-
-/* The mascot inside its ring, in the page as it is in the browser's mode
-   indicator. A new pose morphs in (ui.jsx). */
 .zen-welcome-mascot {
+  display: block;
   flex-shrink: 0;
   overflow: visible;
 }
 
-/* Start page: what Zendia is in one line, and the way in. Its name and its
-   mascot are in the scene behind, painted on a wall. */
+.zen-welcome-mascot.is-interactive .z2d-mascot-cell {
+  cursor: pointer;
+}
+
+/* Brand lockup */
+
+.z2d-brand-lockup,
+.z2d-rail-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.z2d-brand-mini-mascot {
+  width: 30px;
+  height: 30px;
+}
+
+.z2d-rail-mini-mascot {
+  width: 26px;
+  height: 26px;
+}
+
+.zen-welcome-brand {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+/* =========================================================================
+   Start Page — Living Emblem
+   ========================================================================= */
+
+.z2d-start-layout {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(320px, 1.05fr);
+  align-items: center;
+  gap: clamp(28px, 5vw, 72px);
+  height: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(28px, 5vh, 56px) clamp(28px, 5vw, 64px);
+}
 
 #zen-welcome-start {
-  position: absolute;
-  left: clamp(24px, 5vw, 80px);
-  bottom: clamp(28px, 8vh, 90px);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  max-width: min(560px, 46vw);
-  animation: zen-welcome-rise 0.6s var(--ease) 0.2s backwards;
+  gap: 20px;
 
   & h1 {
-    padding: 12px 22px 16px;
-    rotate: -2deg;
-    background: var(--ink);
-    box-shadow: 8px 8px 0 var(--accent);
-    color: var(--paper);
-    font-size: clamp(38px, 5vw, 68px);
+    font-size: clamp(38px, 4.8vw, 60px);
+    font-weight: 800;
+    line-height: 1.04;
+    letter-spacing: -0.035em;
+    text-wrap: balance;
+    color: var(--text);
   }
 
   & p {
-    margin: 26px 0 24px;
-    padding: 12px 16px;
-    border: 2.5px solid var(--ink);
-    background: var(--paper);
-    box-shadow: 5px 5px 0 var(--ink);
-    color: var(--ink);
-    font-size: 17px;
-    font-weight: 500;
-    line-height: 1.45;
+    max-width: 42ch;
+    font-size: clamp(16px, 1.3vw, 18px);
+    line-height: 1.58;
+    color: var(--muted);
   }
 }
 
-/* Buttons, and the key that presses each. */
+.z2d-start-actions {
+  margin-top: 8px;
+}
 
-.zen-welcome-button {
+#zen-welcome-stage.is-start {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+.z2d-start-emblem {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  max-width: 520px;
+}
+
+.z2d-emblem-rings {
+  position: absolute;
+  inset: -16px 0 auto;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: var(--emblem-accent);
+  transition: color 0.35s var(--ease-out);
+}
+
+.z2d-emblem-ring-svg {
+  width: min(390px, 78vw);
+  height: auto;
+}
+
+.z2d-emblem-creature {
+  position: relative;
+  z-index: 1;
+  width: clamp(230px, 32vw, 330px);
+  aspect-ratio: 1;
+  filter: drop-shadow(0 18px 34px rgb(0 0 0 / 18%));
+}
+
+.z2d-emblem-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.z2d-mode-pills {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, auto));
+  justify-content: center;
+  gap: 8px;
+}
+
+.z2d-mode-pill {
   appearance: none;
   display: inline-flex;
   align-items: center;
-  gap: 12px;
-  padding: 11px 18px;
-  border: 2.5px solid var(--line);
-  border-radius: 11px;
-  background: var(--panel);
-  box-shadow: var(--drop);
-  color: var(--text);
-  font: inherit;
-  font-size: 16px;
-  font-weight: 800;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: 700 11px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.04em;
   cursor: pointer;
   transition:
-    translate 0.12s var(--ease),
-    box-shadow 0.12s var(--ease);
+    border-color 0.2s var(--ease-out),
+    background-color 0.2s var(--ease-out),
+    color 0.2s var(--ease-out),
+    translate 0.3s var(--spring);
 
   &:hover {
-    translate: -1px -1px;
-    box-shadow: 6px 6px 0 var(--line);
+    border-color: var(--pill-color);
+    color: var(--text);
+    translate: 0 -2px;
   }
 
-  &:active {
-    translate: 3px 3px;
-    box-shadow: 1px 1px 0 var(--line);
-  }
-
-  &[disabled] {
-    opacity: 0.45;
-    pointer-events: none;
-  }
-
-  &.primary {
-    background: var(--accent);
-    color: var(--ink);
+  &[data-active] {
+    border-color: var(--pill-color);
+    background: color-mix(in srgb, var(--pill-color) 16%, var(--surface));
+    color: var(--text);
   }
 }
 
-#zen-welcome-start-button {
-  padding: 15px 24px;
-  border-color: var(--ink);
-  box-shadow: 6px 6px 0 var(--ink);
-  font-size: 19px;
+.z2d-mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pill-color);
 }
 
-.zen-welcome-key {
-  padding: 0 7px;
-  border: 1.5px solid currentColor;
-  border-radius: 6px;
-  font: 700 12px/20px ui-monospace, monospace;
+/* =========================================================================
+   Chapter Flow Shell — Top Rail + 2-Column Workspace
+   ========================================================================= */
+
+.z2d-flow-layout {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 18px clamp(18px, 3vw, 40px) 22px;
+  gap: 18px;
 }
 
-/* The chapters, along the top. */
+/* Top rail: Brand + 6-cell Voronoi Stepper */
 
 #zen-welcome-rail {
-  position: absolute;
-  inset: 16px 18px auto;
+  flex: none;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
-  pointer-events: none;
-  animation: zen-welcome-drop 0.5s var(--ease) backwards;
-
-  & > * {
-    pointer-events: auto;
-  }
+  padding: 6px 8px;
 
   & ol {
     display: flex;
     flex-wrap: wrap;
-    gap: 7px;
+    align-items: center;
+    gap: 6px;
     margin: 0;
     padding: 0;
     list-style: none;
   }
 }
 
-.zen-welcome-brand {
-  padding: 3px 12px 4px;
-  rotate: -3deg;
-  background: var(--ink);
-  box-shadow: 4px 4px 0 var(--accent);
-  color: var(--accent);
-  font-size: 19px;
-  font-weight: 900;
-  font-style: italic;
-  letter-spacing: -0.01em;
-  text-transform: uppercase;
-}
-
 .zen-welcome-chapter {
   appearance: none;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 4px 11px;
-  border: 2px solid var(--ink);
-  border-radius: 9px;
-  background: var(--paper);
-  color: var(--ink);
-  font: inherit;
-  font-size: 13.5px;
-  font-weight: 700;
+  min-height: 36px;
+  padding: 5px 12px;
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: 600 13px/1.2 system-ui, -apple-system, sans-serif;
   cursor: pointer;
+  transition:
+    background-color 0.22s var(--ease-out),
+    border-color 0.22s var(--ease-out),
+    color 0.22s var(--ease-out),
+    translate 0.35s var(--spring);
 
-  & > span:first-child {
-    font: 800 12px ui-monospace, monospace;
+  &:hover:not([disabled]) {
+    border-color: var(--chapter-color);
+    translate: 0 -1px;
   }
 
-  /* Chapters still ahead. */
   &[disabled] {
+    opacity: 0.45;
     border-style: dashed;
-    background: color-mix(in srgb, var(--paper) 55%, transparent);
+    background: transparent;
+    color: var(--muted);
     cursor: default;
   }
 
-  &[aria-current] {
-    translate: 0 -2px;
-    background: var(--accent);
-    box-shadow: 3px 3px 0 var(--ink);
+  &[data-done] {
+    border-color: color-mix(in srgb, var(--chapter-color) 42%, var(--border-subtle));
+    color: var(--muted);
+  }
+
+  &[aria-current="step"] {
+    border-color: var(--chapter-color);
+    background: color-mix(in srgb, var(--chapter-color) 16%, var(--surface));
+    color: var(--text);
+    font-weight: 700;
+    box-shadow: var(--shadow-card);
   }
 }
 
-/* The keys the vim preview is playing: all of them as chips over the
-   preview, the one being played opened to say what it does. */
-.zen-welcome-zendia-keys {
-  position: absolute;
-  inset: 68px 18px auto;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  pointer-events: none;
+.zen-welcome-chapter-cell {
+  width: 9px;
+  height: 9px;
+  border-radius: 3.5px;
+  background: var(--chapter-pastel);
+  border: 1.5px solid var(--ink);
+  transition: scale 0.35s var(--spring);
+
+  .zen-welcome-chapter[aria-current="step"] & {
+    scale: 1.25;
+  }
+
+  .zen-welcome-chapter[disabled] & {
+    background: var(--border);
+    border-color: transparent;
+  }
 }
 
-.zen-welcome-zendia-key {
+.zen-welcome-chapter-num {
+  font: 700 11px/1 ui-monospace, monospace;
+  color: var(--muted);
+}
+
+.z2d-rail-right {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 5px 10px;
-  border: 2.5px solid var(--ink);
-  border-radius: 10px;
-  background: var(--paper);
-  color: var(--ink);
-  font-size: 14px;
-  font-weight: 600;
+}
 
-  & kbd {
-    font: 800 13.5px ui-monospace, monospace;
-    white-space: pre;
+.z2d-sound-toggle {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    color 0.18s var(--ease-out),
+    border-color 0.18s var(--ease-out),
+    background-color 0.18s var(--ease-out),
+    scale 0.25s var(--spring);
+
+  &:hover {
+    color: var(--text);
+    border-color: var(--mode-accent);
+    scale: 1.05;
   }
 
-  & span {
-    display: none;
-  }
-
-  &[data-active] {
-    background: var(--accent);
-    box-shadow: 4px 4px 0 var(--ink);
-
-    & span {
-      display: inline;
-    }
+  &.is-floating {
+    position: absolute;
+    top: 20px;
+    right: 24px;
+    z-index: 4;
   }
 }
 
-/* The deck. Its panel and the ink line along its slanted edge are drawn
-   behind it, so that what is on the deck is not cut by the slant. */
+/* Main 2-column workspace */
+
+.z2d-workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(380px, 0.94fr) minmax(380px, 1.06fr);
+  gap: clamp(20px, 3vw, 40px);
+  align-items: stretch;
+}
+
+/* Left decision column */
 
 #zen-welcome-deck {
-  position: absolute;
-  inset: auto 0 0;
-  isolation: isolate;
-  display: grid;
-  grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.5fr);
-  grid-template-areas:
-    "guide page"
-    "guide nav";
-  gap: 16px 40px;
-  align-items: start;
-  padding: calc(var(--slant) + 22px) max(28px, (100% - 1560px) / 2) 24px;
-  animation: zen-welcome-rise 0.5s var(--ease) backwards;
-
-  &::before,
-  &::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    clip-path: polygon(0 var(--slant), 100% 0, 100% 100%, 0 100%);
-    background: var(--panel);
-  }
-
-  &::after {
-    inset: -4px 0 0;
-    z-index: -2;
-    background: var(--line);
-  }
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: clamp(20px, 2.6vh, 30px) clamp(20px, 2.4vw, 32px);
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 26px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  gap: 20px;
 }
 
 .zen-welcome-guide {
-  grid-area: guide;
+  flex: none;
   display: flex;
   align-items: flex-start;
-  gap: 16px;
+  gap: 18px;
+}
+
+.z2d-companion-slot {
+  flex-shrink: 0;
+  width: 82px;
+  height: 82px;
 
   & .zen-welcome-mascot {
-    width: 104px;
-    margin-top: -6px;
+    width: 100%;
+    height: 100%;
   }
 }
 
 .zen-welcome-text {
-  & > * {
-    animation: zen-welcome-slide 0.4s var(--ease) backwards;
-  }
-
-  & > :nth-child(2) {
-    animation-delay: 0.05s;
-  }
+  min-width: 0;
+  flex: 1;
 
   & h1 {
-    margin-bottom: 10px;
-    font-size: clamp(26px, 2.7vw, 40px);
+    margin-top: 6px;
+    margin-bottom: 8px;
+    font-size: clamp(24px, 2.2vw, 32px);
+    font-weight: 800;
+    line-height: 1.12;
+    letter-spacing: -0.03em;
+    text-wrap: balance;
+    color: var(--text);
   }
 
   & p {
     max-width: 48ch;
+    font-size: 14.5px;
+    line-height: 1.55;
     color: var(--muted);
-    font-size: 15.5px;
-    line-height: 1.5;
   }
 }
 
-[data-direction="-1"] .zen-welcome-text > * {
-  animation-name: zen-welcome-slide-back;
+.z2d-mode-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 700 11px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.08em;
+  color: var(--mode-accent);
 }
 
+.z2d-mode-tag-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mode-accent);
+}
+
+/* Choices scroll area */
+
 #zen-welcome-page-content {
-  grid-area: page;
-  min-width: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .zen-welcome-page {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-height: min(38vh, 300px);
-  /* Room for the rows' hard shadows inside the scrolling box. */
-  padding: 4px 6px 6px 4px;
+  gap: 12px;
+  padding: 2px 6px 6px 2px;
   overflow-y: auto;
   scrollbar-width: thin;
-  animation: zen-welcome-rise 0.4s var(--ease) backwards;
+  scrollbar-color: var(--border) transparent;
 
-  /* Moving in: three small decisions side by side. */
   &[page="move-in"] {
-    display: grid;
-    grid-template-columns: 1.1fr 1.3fr 0.9fr;
-    gap: 20px;
-    align-items: start;
+    gap: 10px;
 
     & fieldset {
       display: flex;
@@ -429,68 +585,93 @@ p {
       gap: 7px;
       min-width: 0;
       margin: 0;
-      padding: 0;
-      border: none;
-    }
+      padding: 10px 12px;
+      border: 1.5px solid var(--border-subtle);
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--raised) 42%, transparent);
+      transition: border-color 0.2s var(--ease-out);
 
-    & fieldset:nth-of-type(2) {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+      &[data-active] {
+        border-color: color-mix(in srgb, var(--mode-accent) 55%, var(--border-subtle));
+      }
     }
 
     & legend {
-      margin-bottom: 7px;
+      float: left;
+      margin-bottom: 3px;
       padding: 0;
-      font-size: 13px;
-      font-weight: 800;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--muted);
     }
 
     & .zen-welcome-option {
       min-height: 40px;
-      padding: 6px 10px;
-      gap: 8px;
-      font-size: 14px;
+      padding: 6px 11px;
+      gap: 9px;
+      font-size: 13.5px;
+      border-radius: 11px;
     }
   }
 }
 
+.zen-welcome-fieldset-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.zen-welcome-fieldset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
 .zen-welcome-pair {
   display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.zen-welcome-page[page="move-in"] .zen-welcome-pair {
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  gap: 8px;
 }
 
 .zen-welcome-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
 }
+
+/* Tactile option cards */
 
 .zen-welcome-option {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 11px;
-  box-sizing: border-box;
-  min-height: 50px;
-  padding: 9px 14px;
-  border: 2.5px solid var(--line);
-  border-radius: 11px;
-  background: var(--tile);
-  font-size: 15.5px;
-  line-height: 1.3;
+  gap: 12px;
+  min-height: 54px;
+  padding: 12px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 15px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.35;
   cursor: pointer;
   transition:
-    translate 0.12s var(--ease),
-    box-shadow 0.12s var(--ease);
+    border-color 0.18s var(--ease-out),
+    background-color 0.18s var(--ease-out),
+    box-shadow 0.2s var(--ease-out),
+    translate 0.35s var(--spring);
 
   &:hover {
-    translate: -1px -1px;
-    box-shadow: 3px 3px 0 var(--line);
+    border-color: color-mix(in srgb, var(--mode-accent) 65%, var(--border));
+    translate: 0 -1px;
   }
 
-  /* The radio button itself stays in the page, for the keyboard and for
-     screen readers; the row draws it. */
   & input {
     position: absolute;
     opacity: 0;
@@ -498,17 +679,20 @@ p {
   }
 
   & strong {
-    font-weight: 800;
+    font-weight: 700;
   }
 
   .zen-welcome-option-radio {
     flex-shrink: 0;
-    box-sizing: border-box;
-    width: 18px;
-    height: 18px;
-    border: 2.5px solid var(--line);
+    width: 19px;
+    height: 19px;
+    border: 2px solid var(--border);
     border-radius: 50%;
-    background: var(--panel);
+    background: var(--surface);
+    transition:
+      border-color 0.18s var(--ease-out),
+      background-color 0.18s var(--ease-out),
+      box-shadow 0.22s var(--spring);
   }
 
   .zen-welcome-option-label {
@@ -520,34 +704,34 @@ p {
 
   /* stylelint-disable-next-line stylelint-plugin-mozilla/no-has-selector */
   &:has(:checked) {
-    translate: -2px -2px;
-    background: var(--accent);
-    box-shadow: var(--drop);
-    color: var(--ink);
+    border-color: var(--mode-accent);
+    background: color-mix(in srgb, var(--mode-accent) 13%, var(--surface));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--mode-accent) 32%, transparent);
 
     .zen-welcome-option-radio {
-      border-color: var(--ink);
-      background: var(--ink);
-      box-shadow: inset 0 0 0 3px var(--accent);
+      border-color: var(--mode-accent);
+      background: var(--mode-accent);
+      box-shadow: inset 0 0 0 3.5px var(--surface);
     }
   }
 
   /* stylelint-disable-next-line stylelint-plugin-mozilla/no-has-selector */
   &:has(:focus-visible) {
-    outline: 3px solid var(--text);
-    outline-offset: 3px;
+    outline: 2.5px solid var(--mode-accent);
+    outline-offset: 2px;
   }
 }
 
-/* A logo's plate: white in both themes, as logos are drawn for. */
+/* White logo plate for third-party favicons & agent icons */
+
 .zen-welcome-plate {
   flex-shrink: 0;
   display: grid;
   place-items: center;
   width: 28px;
   height: 28px;
-  border: 1.5px solid var(--ink);
-  border-radius: 8px;
+  border: 1px solid rgb(26 27 38 / 14%);
+  border-radius: 9px;
   background: #ffffff;
 
   & img {
@@ -561,18 +745,19 @@ p {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 7px 0 2px 28px;
+  padding: 8px 0 2px 30px;
 }
 
 .zen-welcome-import-profile {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 3px 10px;
-  border: 2px solid var(--line);
-  border-radius: 8px;
-  background: var(--tile);
-  font-size: 13.5px;
+  min-height: 32px;
+  padding: 4px 11px;
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 
@@ -585,45 +770,69 @@ p {
   .zen-welcome-import-profile-check {
     width: 9px;
     height: 9px;
-    border: 2px solid var(--line);
+    border: 1.8px solid var(--border);
     border-radius: 50%;
   }
 
   /* stylelint-disable-next-line stylelint-plugin-mozilla/no-has-selector */
-  &:has(:checked) .zen-welcome-import-profile-check {
-    background: var(--accent);
+  &:has(:checked) {
+    border-color: var(--mode-accent);
+    background: color-mix(in srgb, var(--mode-accent) 14%, var(--surface));
+
+    .zen-welcome-import-profile-check {
+      border-color: var(--mode-accent);
+      background: var(--mode-accent);
+    }
   }
 
   /* stylelint-disable-next-line stylelint-plugin-mozilla/no-has-selector */
   &:has(:focus-visible) {
-    outline: 3px solid var(--accent-strong);
+    outline: 2px solid var(--mode-accent);
     outline-offset: 2px;
   }
 }
 
 .zen-welcome-version {
-  font-size: 13px;
+  font: 600 12px/1 ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 .zen-welcome-status {
-  font-weight: 600;
+  padding: 12px 14px;
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
 }
 
-/* Agents that are not installed, each with the command that installs it. */
+.zen-welcome-go-hint {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--mode-accent) 40%, var(--border-subtle));
+  background: color-mix(in srgb, var(--mode-accent) 10%, var(--bg));
+}
+
 .zen-welcome-missing {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 12px 14px;
+  border: 1.5px dashed var(--border-subtle);
+  border-radius: 14px;
   color: var(--muted);
-  font-size: 13.5px;
+  font-size: 13px;
 
   & h2 {
-    font-size: 13px;
-    font-weight: 800;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--muted);
   }
 
-  & > div {
+  & .zen-welcome-missing-row {
     display: flex;
     align-items: center;
     gap: 9px;
@@ -633,7 +842,7 @@ p {
   & .zen-welcome-plate {
     width: 22px;
     height: 22px;
-    border-radius: 6px;
+    border-radius: 7px;
 
     & img {
       width: 14px;
@@ -645,127 +854,805 @@ p {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: var(--raised);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
     user-select: text;
   }
 }
 
+/* Essentials app picker grid */
+
 #zen-welcome-essentials {
   display: grid;
-  /* Tiles keep a size a finger can hit and stop growing in a wide window. */
-  grid-template-columns: repeat(9, minmax(44px, 68px));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
 .zen-welcome-essential {
   appearance: none;
-  display: grid;
-  place-items: center;
-  aspect-ratio: 1;
-  min-width: 44px;
-  padding: 0;
-  border: 2.5px solid var(--line);
-  border-radius: 12px;
-  /* White in both themes: the apps' icons are drawn for a white plate. */
-  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 82px;
+  padding: 12px 8px;
+  border: 1.5px solid var(--border);
+  border-radius: 17px;
+  background: var(--bg);
+  color: var(--text);
+  font: 600 12.5px/1.2 system-ui, sans-serif;
   cursor: pointer;
   transition:
-    translate 0.12s var(--ease),
-    box-shadow 0.12s var(--ease);
-
-  & img {
-    width: 42%;
-    height: 42%;
-    /* Icons that follow the color scheme are drawn for the white plate. */
-    color-scheme: light;
-  }
+    border-color 0.18s var(--ease-out),
+    background-color 0.18s var(--ease-out),
+    box-shadow 0.2s var(--ease-out),
+    translate 0.35s var(--spring);
 
   &:hover {
-    translate: -1px -1px;
-    box-shadow: 3px 3px 0 var(--line);
+    border-color: color-mix(in srgb, var(--zen-welcome-app-color) 70%, var(--border));
+    translate: 0 -2px;
   }
 
   &[selected] {
-    translate: -2px -2px;
-    background: color-mix(in srgb, var(--zen-welcome-app-color) 30%, #ffffff);
-    box-shadow: var(--drop);
+    border-color: var(--zen-welcome-app-color);
+    background: color-mix(in srgb, var(--zen-welcome-app-color) 16%, var(--surface));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--zen-welcome-app-color) 35%, transparent);
   }
 }
+
+.zen-welcome-essential-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: #ffffff;
+  border: 1px solid rgb(26 27 38 / 12%);
+
+  & img {
+    width: 20px;
+    height: 20px;
+    color-scheme: light;
+  }
+}
+
+.zen-welcome-essential-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Buttons & keycaps */
 
 #zen-welcome-nav {
-  grid-area: nav;
+  flex: none;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.z2d-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.zen-welcome-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg);
+  color: var(--text);
+  font: 700 14.5px/1 system-ui, sans-serif;
+  cursor: pointer;
+  transition:
+    background-color 0.18s var(--ease-out),
+    border-color 0.18s var(--ease-out),
+    translate 0.35s var(--spring),
+    scale 0.22s var(--spring);
+
+  &:hover:not([disabled]) {
+    border-color: color-mix(in srgb, var(--mode-accent) 60%, var(--border));
+    translate: 0 -1px;
+  }
+
+  &:active:not([disabled]) {
+    scale: 0.97;
+    translate: 0 1px;
+  }
+
+  &[disabled] {
+    opacity: 0.38;
+    cursor: default;
+  }
+
+  &.ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--muted);
+
+    &:hover:not([disabled]) {
+      background: var(--raised);
+      color: var(--text);
+    }
+  }
+
+  &.primary {
+    border-color: transparent;
+    background: var(--primary-bg);
+    color: var(--primary-fg);
+    box-shadow: 0 4px 14px rgb(0 0 0 / 22%);
+
+    &:hover:not([disabled]) {
+      filter: brightness(1.05);
+      translate: 0 -1.5px;
+    }
+
+    & .zen-welcome-key {
+      border-color: transparent;
+      background: var(--primary-key-bg);
+    }
+  }
+}
+
+#zen-welcome-start-button {
+  min-height: 52px;
+  padding: 13px 24px;
+  border-radius: 16px;
+  font-size: 16.5px;
+}
+
+.zen-welcome-key {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--raised);
+  font: 700 11px/1.1 ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* =========================================================================
+   Right Column — Framed 2D Living Stage
+   ========================================================================= */
+
+#zen-welcome-stage.is-chapter {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.z2d-stage-shell {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 20px;
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 26px;
+  background: var(--stage-bg);
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
+}
+
+.z2d-stage-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: var(--stage-accent);
+  background: radial-gradient(
+    480px circle at 50% 42%,
+    color-mix(in srgb, var(--stage-accent) 14%, transparent),
+    transparent 72%
+  );
+  transition: color 0.45s var(--ease-out);
+}
+
+.z2d-stage-ornament {
+  width: 100%;
+  height: 100%;
+}
+
+.z2d-stage-viewport {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.z2d-scene-swap {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.z2d-scene-svg {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+}
+
+/* Accessible Pause/Play control for looping 2D previews */
+
+.z2d-motion-toggle {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 0.18s var(--ease-out),
+    border-color 0.18s var(--ease-out),
+    scale 0.25s var(--spring);
+
+  &:hover {
+    color: var(--text);
+    border-color: var(--stage-accent);
+    scale: 1.05;
+  }
+}
+
+/* Vim key beats bar integrated below the 2D Vim preview */
+
+.z2d-stage-caption {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  padding-top: 12px;
+}
+
+.zen-welcome-zendia-keys {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+}
+
+.zen-welcome-zendia-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 11px;
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition:
+    border-color 0.2s var(--ease-out),
+    background-color 0.2s var(--ease-out),
+    color 0.2s var(--ease-out),
+    translate 0.3s var(--spring);
+
+  & kbd {
+    font: 700 12px/1 ui-monospace, "SF Mono", Menlo, monospace;
+    white-space: pre;
+    color: var(--text);
+  }
+
+  & span {
+    display: none;
+  }
+
+  &[data-active] {
+    border-color: var(--mode-accent);
+    background: color-mix(in srgb, var(--mode-accent) 16%, var(--surface));
+    color: var(--text);
+    translate: 0 -2px;
+
+    & span {
+      display: inline;
+    }
+  }
+}
+
+/* =========================================================================
+   Chapter 5 (Apps) — 2D Sidebar Preview
+   ========================================================================= */
+
+.z2d-apps-preview {
+  width: 100%;
+  max-width: 560px;
+  padding: 8px;
+}
+
+.z2d-apps-window {
+  display: grid;
+  grid-template-columns: 224px 1fr;
+  min-height: 368px;
+  border: 1.5px solid color-mix(in srgb, var(--win-accent) 55%, var(--border));
+  border-radius: 20px;
+  background: var(--surface);
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
+}
+
+.z2d-apps-sidebar {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  padding: 0 6px 4px 0;
+  padding: 14px;
+  background: var(--raised);
+  border-right: 1px solid var(--border-subtle);
 }
 
-@keyframes zen-welcome-rise {
-  from {
-    opacity: 0;
-    translate: 0 22px;
+.z2d-apps-chrome-bar {
+  display: flex;
+  gap: 6px;
+}
+
+.z2d-win-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  opacity: 0.78;
+
+  &.is-red {
+    background: #ff757f;
+  }
+
+  &.is-yellow {
+    background: #ffc777;
+  }
+
+  &.is-green {
+    background: #c3e88d;
   }
 }
 
-@keyframes zen-welcome-drop {
-  from {
-    opacity: 0;
-    translate: 0 -18px;
+.z2d-apps-urlbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.z2d-url-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--win-accent);
+}
+
+.z2d-url-line {
+  width: 72px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--muted);
+  opacity: 0.45;
+}
+
+.z2d-apps-essentials-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.z2d-apps-slot-empty {
+  height: 48px;
+  border: 1.5px dashed var(--border);
+  border-radius: 13px;
+  opacity: 0.6;
+}
+
+.z2d-apps-tile {
+  display: grid;
+  place-items: center;
+  height: 48px;
+  border-radius: 13px;
+  border: 1.5px solid color-mix(in srgb, var(--tile-color) 65%, transparent);
+  background: color-mix(in srgb, var(--tile-color) 18%, #ffffff);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 8%);
+
+  & img {
+    width: 22px;
+    height: 22px;
+    color-scheme: light;
   }
 }
 
-@keyframes zen-welcome-slide {
-  from {
-    opacity: 0;
-    translate: 36px 0;
+.z2d-apps-divider {
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.z2d-apps-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.z2d-apps-tab {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+
+  &.is-active {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-card);
   }
 }
 
-@keyframes zen-welcome-slide-back {
+.z2d-apps-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.z2d-apps-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.z2d-apps-page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px 22px;
+  background: var(--surface);
+}
+
+.z2d-apps-page-pill {
+  width: 68px;
+  height: 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--win-accent) 26%, transparent);
+}
+
+.z2d-apps-page-h1 {
+  width: 82%;
+  height: 16px;
+  border-radius: 6px;
+  background: var(--text);
+  opacity: 0.8;
+}
+
+.z2d-apps-page-h2 {
+  width: 58%;
+  height: 12px;
+  border-radius: 5px;
+  background: var(--muted);
+  opacity: 0.45;
+}
+
+.z2d-apps-page-card {
+  margin-top: 8px;
+  padding: 18px;
+  border-radius: 16px;
+  background: var(--raised);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.z2d-apps-page-card-line {
+  height: 8px;
+  width: 86%;
+  border-radius: 4px;
+  background: var(--muted);
+  opacity: 0.4;
+
+  &.is-short {
+    width: 52%;
+  }
+}
+
+.z2d-apps-page-mascot {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  width: 48px;
+  height: 48px;
+}
+
+/* =========================================================================
+   Chapter 6 (Go) — Finale Preview
+   ========================================================================= */
+
+.z2d-go-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  max-width: 620px;
+}
+
+.z2d-go-hero {
+  position: relative;
+  width: 100%;
+}
+
+.z2d-go-browser-svg {
+  width: 100%;
+  height: auto;
+}
+
+.z2d-go-mascot-badge {
+  position: absolute;
+  left: -8px;
+  bottom: -14px;
+  width: clamp(92px, 12vw, 126px);
+  aspect-ratio: 1;
+  filter: drop-shadow(0 12px 22px rgb(0 0 0 / 26%));
+
+  & .zen-welcome-mascot {
+    width: 100%;
+    height: 100%;
+  }
+}
+
+.z2d-go-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.z2d-go-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border: 1.5px solid color-mix(in srgb, var(--chip-color) 42%, var(--border-subtle));
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.z2d-go-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--chip-color);
+}
+
+/* =========================================================================
+   2D Entry & Directional Chapter Motion (Compositor-Only)
+   ========================================================================= */
+
+@media (prefers-reduced-motion: no-preference) {
+  #zen-welcome-start > * {
+    animation: z2d-fade-up 0.55s var(--ease-out) backwards;
+  }
+
+  #zen-welcome-start > :nth-child(2) {
+    animation-delay: 0.06s;
+  }
+
+  #zen-welcome-start > :nth-child(3) {
+    animation-delay: 0.12s;
+  }
+
+  #zen-welcome-start > :nth-child(4) {
+    animation-delay: 0.18s;
+  }
+
+  #zen-welcome-rail {
+    animation: z2d-fade-down 0.42s var(--ease-out) backwards;
+  }
+
+  #zen-welcome-deck {
+    animation: z2d-fade-up 0.45s var(--ease-out) backwards;
+  }
+
+  .zen-welcome-text > * {
+    animation: z2d-step-forward 0.36s var(--ease-out) backwards;
+  }
+
+  .zen-welcome-text > :nth-child(2) {
+    animation-delay: 0.04s;
+  }
+
+  .zen-welcome-text > :nth-child(3) {
+    animation-delay: 0.08s;
+  }
+
+  .zen-welcome-page {
+    animation: z2d-step-forward 0.38s var(--ease-out) backwards;
+  }
+
+  .z2d-scene-swap {
+    animation: z2d-scene-enter 0.44s var(--ease-out) backwards;
+  }
+
+  [data-direction="-1"] .zen-welcome-text > *,
+  [data-direction="-1"] .zen-welcome-page {
+    animation-name: z2d-step-back;
+  }
+
+  .z2d-apps-tile {
+    animation: z2d-tile-pop 0.45s var(--spring) backwards;
+  }
+}
+
+@keyframes z2d-fade-up {
   from {
     opacity: 0;
-    translate: -36px 0;
+    translate: 0 18px;
+  }
+}
+
+@keyframes z2d-fade-down {
+  from {
+    opacity: 0;
+    translate: 0 -14px;
+  }
+}
+
+@keyframes z2d-step-forward {
+  from {
+    opacity: 0;
+    translate: 22px 0;
+  }
+}
+
+@keyframes z2d-step-back {
+  from {
+    opacity: 0;
+    translate: -22px 0;
+  }
+}
+
+@keyframes z2d-scene-enter {
+  from {
+    opacity: 0;
+    scale: 0.965;
+  }
+}
+
+@keyframes z2d-tile-pop {
+  from {
+    opacity: 0;
+    scale: 0.6;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation: none !important;
-    transition: none !important;
+  .zen-welcome-button,
+  .zen-welcome-option,
+  .zen-welcome-chapter,
+  .zen-welcome-essential,
+  .z2d-mode-pill,
+  .z2d-motion-toggle {
+    transition-property: background-color, border-color, color;
+    transition-duration: 0.15s;
   }
 }
 
-/* A narrow window: the deck's parts stack and the chapters keep only their
-   numbers. */
-@media (max-width: 980px) {
-  #zen-welcome-deck {
+/* =========================================================================
+   Responsive Reflow — Narrow & Compact Browser Windows
+   ========================================================================= */
+
+@media (max-width: 1020px) {
+  .z2d-start-layout {
     grid-template-columns: 1fr;
-    grid-template-areas:
-      "guide"
-      "page"
-      "nav";
-    gap: 12px;
-  }
-
-  .zen-welcome-guide .zen-welcome-mascot {
-    width: 72px;
-  }
-
-  .zen-welcome-page[page="move-in"],
-  .zen-welcome-pair {
-    grid-template-columns: 1fr;
-  }
-
-  .zen-welcome-chapter > span:last-child {
-    display: none;
-  }
-
-  #zen-welcome-essentials {
-    grid-template-columns: repeat(5, minmax(44px, 68px));
+    justify-items: center;
+    text-align: center;
+    gap: 24px;
+    overflow-y: auto;
   }
 
   #zen-welcome-start {
-    max-width: calc(100vw - 48px);
+    align-items: center;
+    order: 2;
+  }
+
+  #zen-welcome-stage.is-start {
+    order: 1;
+  }
+
+  .z2d-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 0.78fr) minmax(0, 1.22fr);
+    gap: 14px;
+  }
+
+  #zen-welcome-stage.is-chapter {
+    order: 1;
+  }
+
+  .z2d-stage-shell {
+    padding: 14px;
+  }
+
+  #zen-welcome-deck {
+    order: 2;
+    padding: 16px 18px;
+    gap: 14px;
+  }
+
+  .z2d-companion-slot {
+    width: 62px;
+    height: 62px;
+  }
+
+  .zen-welcome-chapter-label {
+    display: none;
+  }
+
+  .z2d-apps-window {
+    grid-template-columns: 190px 1fr;
+    min-height: 220px;
+  }
+}
+
+@media (max-width: 640px) {
+  .z2d-flow-layout {
+    padding: 12px 12px 16px;
+    gap: 10px;
+  }
+
+  .zen-welcome-page[page="move-in"] .zen-welcome-pair {
+    grid-template-columns: 1fr;
+  }
+
+  #zen-welcome-essentials {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .zen-welcome-essential {
+    min-height: 68px;
+    padding: 8px 6px;
+  }
+
+  .zen-welcome-key {
+    display: none;
   }
 }

@@ -23,10 +23,9 @@ function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// The page's preview, once WebGL has drawn it. A machine without WebGL
-// shows the onboarding without previews, so this only reports.
-function previewCanvas() {
-  return welcomeDocument().querySelector("#zen-welcome-stage canvas");
+// The page's 2D SVG preview on the stage.
+function previewSvg() {
+  return welcomeDocument().querySelector("#zen-welcome-stage svg");
 }
 
 // The chapters along the top, by their state.
@@ -82,16 +81,10 @@ add_task(async function test_Welcome_Steps() {
       .textContent.includes("Zendia"),
     "The start page names Zendia, whatever the build's brand is"
   );
-  const webgl = !!welcomeDocument()
-    .createElement("canvas")
-    .getContext("webgl2");
-  info(`WebGL is ${webgl ? "available" : "not available"} here`);
-  if (webgl) {
-    await TestUtils.waitForCondition(
-      () => previewCanvas()?.width > 0,
-      "the start page's preview to be drawn"
-    );
-  }
+  await TestUtils.waitForCondition(
+    () => previewSvg()?.getBoundingClientRect().width > 0,
+    "the start page's 2D mascot preview to be drawn"
+  );
   await clickInWelcome(
     welcomeDocument().getElementById("zen-welcome-start-button")
   );
@@ -124,34 +117,30 @@ add_task(async function test_Welcome_Steps() {
     currentPageContent().querySelector("#zen-welcome-zendia-keys-yes").checked,
     "Vim mode is on by default"
   );
-  if (webgl) {
-    // The preview names the key it is playing: within a loop one of the
-    // keys is opened to say what it does.
-    await TestUtils.waitForCondition(
-      () =>
-        welcomeDocument().querySelector(".zen-welcome-zendia-key[data-active]"),
-      "the vim mode preview to play a key",
-      100,
-      100
-    );
-    await clickInWelcome(
-      currentPageContent().querySelector(
-        "label[for='zen-welcome-zendia-keys-no']"
-      )
-    );
-    await TestUtils.waitForCondition(
-      () =>
-        !welcomeDocument().querySelector(
-          ".zen-welcome-zendia-key[data-active]"
-        ),
-      "turning vim mode down stops the keys"
-    );
-    await clickInWelcome(
-      currentPageContent().querySelector(
-        "label[for='zen-welcome-zendia-keys-yes']"
-      )
-    );
-  }
+  // The 2D preview names the key it is playing: within a loop one of the
+  // keys is opened to say what it does.
+  await TestUtils.waitForCondition(
+    () =>
+      welcomeDocument().querySelector(".zen-welcome-zendia-key[data-active]"),
+    "the vim mode preview to play a key",
+    100,
+    100
+  );
+  await clickInWelcome(
+    currentPageContent().querySelector(
+      "label[for='zen-welcome-zendia-keys-no']"
+    )
+  );
+  await TestUtils.waitForCondition(
+    () =>
+      !welcomeDocument().querySelector(".zen-welcome-zendia-key[data-active]"),
+    "turning vim mode down stops the keys"
+  );
+  await clickInWelcome(
+    currentPageContent().querySelector(
+      "label[for='zen-welcome-zendia-keys-yes']"
+    )
+  );
   await goNextWelcomePage("agent");
   ok(
     Services.prefs.getBoolPref("zendia.enabled"),

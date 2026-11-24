@@ -4,11 +4,10 @@
 
 // The onboarding, from the browser window's side. Its pages are a document
 // of their own (zendia-welcome.html, built from tools/zendia-welcome with
-// React and React Three Fiber) shown in a frame that fills the window. This
-// file answers what the pages ask of the browser through
-// the `host` object below, and puts the browser back when they are done.
-// Removing the frame then frees the pages' libraries and their WebGL
-// context; nothing of them stays in the window.
+// React and pure 2D SVG/CSS motion) shown in a frame that fills the window.
+// This file answers what the pages ask of the browser through the `host`
+// object below, and puts the browser back when they are done. Removing the
+// frame then frees the pages' libraries; nothing of them stays in the window.
 
 {
   let lazy = {};
